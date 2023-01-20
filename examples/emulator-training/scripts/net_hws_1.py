@@ -42,7 +42,6 @@ class AtmTransmission(Layer):
         for layer in self.internal_layers:
             x = layer(x)
 
-
         flux = x
         output = x
         for layer in self.flux_layers:
@@ -55,6 +54,8 @@ class AtmTransmission(Layer):
             output = layer(output)
 
         output = self.final_output_layer(output)
+
+        return flux, output
 
 class AtmTransmissionOld(Layer):
     def __init__(self, n_inputs, n_flux, n_internal_variables, n_internal_layers, units=32):
