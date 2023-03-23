@@ -1,8 +1,7 @@
 import sympy as sy
 import pprint
 
-#def symbolic_verfication():
-if True:
+def symbolic_verfication():
     t_hat, r_hat, a_hat = sy.symbols('h_hat r_hat a_hat')
     e1 = sy.Eq(1, t_hat + r_hat + a_hat)
 
@@ -29,7 +28,8 @@ if True:
     equations = (e1, e2, e3, e4, e5, e6, e7, e8, e9, e10)
     solutions = sy.solve(equations, dict=True, manual=True)
     print(solutions)
-    #pprint.pprint(solutions)
+    pp = pprint.PrettyPrinter(indent=4, sort_dicts=False)
+    pp.pprint(solutions)
 
     a_1td, a_0td, r_1td = sy.symbols('a_1td a_0td r_1td')
     e11 = sy.Eq(a_0td, t_1d*a_0d + t_1d*r_0d*ct_1d*r_hat*a_0d*d + ct_1d*t_hat*a_0d*d)
