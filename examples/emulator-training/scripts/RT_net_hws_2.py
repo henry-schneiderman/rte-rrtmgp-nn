@@ -1,6 +1,7 @@
 import os
 
 import numpy as np
+from math import isclose
 
 
 import tensorflow as tf
@@ -33,17 +34,15 @@ class DenseFFN(Model):
         for hidden in self.hidden:
             X = hidden(X)
         return self.out(X)
-
-
 class AtmLayer(Model):
     def __init__(self, n_hidden_gas, n_hidden_ext):
         super().__init__()
 
-        self._n_nets=27
+        self._n_nets=29
 
         n_gas = {}
-        n_gas['h2o']=21
-        n_gas['h2o_squared']=27
+        n_gas['h2o']=23
+        n_gas['h2o_squared']=29
         n_gas['o3'] =13
         n_gas['co2']=9
         n_gas['n2o']=3
@@ -71,26 +70,26 @@ class AtmLayer(Model):
         self.ext_net = [DenseFFN(n_hidden_ext,3) for _ in np.arange(self._n_nets)]
 
     # Note Ukkonen does not include nitrogen dioxide (no2) in simulation that generated data
-    def call(self, temp, pressure, composition, lwp, iwp, mu):
+    def call(self, temp, pressure, composition, lwp, iwp, mu, mu_bar):
         X = tf.concat([temp,pressure],axis=-1)
 
-        k = {}
-        for gas, net in self.ke_gas.items():
-            k[gas] = [n(X) for n in net]
-            k[gas] = tf.mult(k[gas],composition[gas])
+        tau_gas = {}
+        for gas, ke_gas in self.ke_gas.items():
+            tau_gas[gas] = [net(X) for net in ke_gas]
+            tau_gas[gas] = tf.mult(tau_gas[gas],composition[gas])
 
         tau_lw = [net() for net in self.ke_lw]
         tau_lw = tf.mult(tau_lw,lwp)
         tau_iw = [net() for net in self.ke_iw]
         tau_iw = tf.mult(tau_iw,iwp)
 
-        h2o = k['h2o']
-        h2o_sq = k['h2o_sq']
-        o3 = k['o3']
-        co2 = k['co2']
-        n2o = k['n2o']
-        ch4 = k['ch4']
-        u = k['uniform']
+        h2o = tau_gas['h2o']
+        h2o_sq = tau_gas['h2o_sq']
+        o3 = tau_gas['o3']
+        co2 = tau_gas['co2']
+        n2o = tau_gas['n2o']
+        ch4 = tau_gas['ch4']
+        u = tau_gas['uniform']
 
         tau_gases = tf.zeros((self._n_nets,1))
  
@@ -119,23 +118,23 @@ class AtmLayer(Model):
         tau_gases[15,0] = h2o[15] + u[3] + h2o_sq[15]
         tau_gases[16,0] = h2o[16] + u[4] + h2o_sq[16]
 
-        tau_gases[15,0] = h2o[15] + o3[3] + u[5] + h2o_sq[15]
-        tau_gases[16,0] = h2o[16] + o3[4] + u[6] + h2o_sq[16]
+        tau_gases[17,0] = h2o[17] + o3[3] + u[5] + h2o_sq[17]
+        tau_gases[18,0] = h2o[18] + o3[4] + u[6] + h2o_sq[18]
 
-        tau_gases[17,0] = h2o[17] + o3[5] + u[7] + h2o_sq[17]
-        tau_gases[18,0] = h2o[18] + o3[6] + u[8] + h2o_sq[18]
+        tau_gases[19,0] = h2o[19] + o3[5] + u[7] + h2o_sq[19]
+        tau_gases[20,0] = h2o[20] + o3[6] + u[8] + h2o_sq[20]
 
-        tau_gases[19,0] = h2o[19] + o3[7] + u[9] + h2o_sq[19]
-        tau_gases[20,0] = h2o[20] + o3[8] + u[10] + h2o_sq[20]
+        tau_gases[21,0] = h2o[21] + o3[7] + u[9] + h2o_sq[21]
+        tau_gases[22,0] = h2o[22] + o3[8] + u[10] + h2o_sq[22]
 
-        tau_gases[21,0] = h2o_sq[21]
-        tau_gases[22,0] = h2o_sq[22]
+        tau_gases[23,0] = h2o_sq[23]
+        tau_gases[24,0] = h2o_sq[24]
 
-        tau_gases[23,0] = o3[9] + h2o_sq[23]
-        tau_gases[24,0] = o3[10] + h2o_sq[24]
+        tau_gases[25,0] = o3[9] + h2o_sq[25]
+        tau_gases[26,0] = o3[10] + h2o_sq[26]
 
-        tau_gases[25,0] = o3[11] + u[11] + h2o_sq[25]
-        tau_gases[26,0] = o3[12] + u[12] + h2o_sq[26]
+        tau_gases[27,0] = o3[11] + u[11] + h2o_sq[27]
+        tau_gases[28,0] = o3[12] + u[12] + h2o_sq[28]
 
         tau_total = tau_gases + tau_lw + tau_iw
         input_1 = tau_lw / tau_total
@@ -144,16 +143,122 @@ class AtmLayer(Model):
         input_3_direct = tau_total / mu
         input_3_diffuse = tau_total / mu_bar
 
-        direct_ext = [net(input_1[k],input_2[k],input_3_direct[k], mu) for k, net in self.ext_net.items()]
-        diffuse_ext = [net(input_1[k],input_2[k],input_3_diffuse[k], mu_bar) for k, net in self.ext_net.items()]
+        e_direct_split = [net(input_1[k],input_2[k],input_3_direct[k], mu) for k, net in self.ext_net.items()]
+        e_diffuse_split = [net(input_1[k],input_2[k],input_3_diffuse[k], mu_bar) for k, net in self.ext_net.items()]
 
-        direct_ext = tf.nn.softmax(direct_ext)
-        diffuse_ext = tf.nn.softmax(diffuse_ext)
+        e_direct_split = tf.nn.softmax(e_direct_split)
+        e_diffuse_split = tf.nn.softmax(e_diffuse_split)
 
-        direct_trans = tf.exp(-input_3_direct)
-        diffuse_trans = tf.exp(-input_3_diffuse)
+        t_direct = tf.exp(-input_3_direct)
+        t_diffuse = tf.exp(-input_3_diffuse)
 
-        return direct_ext, diffuse_ext, direct_trans, diffuse_trans
+        return t_direct, t_diffuse, e_direct_split, e_diffuse_split
+    
+def propagate_layer (t_direct, t_diffuse, e_direct_split, e_diffuse_split, r_bottom_direct, a_bottom_direct, r_bottom_diffuse, a_bottom_diffuse):
+    """
+    Computes the downward total absorption and reflection for the column of the atmosphere
+    between and including the given layer and the surface layer. 
+
+    Uses the atmospheric properties of the given "top layer" and the total absorption and reflection 
+    of the "bottom layer" spanning all the layers beneath the top layer and the surface. 
+    Computes the impact of multi-reflection between these top and bottom layers.
+
+    Assumes arguments are passed in as batches. If not passing a batch, add a first axes with length=1
+
+    Args:
+        t_direct (n_batches,n_channels) - Direct transmission coefficient for direct radiation 
+            passing through the top layer
+        t_diffuse (n_batches,n_channels) - Direct transmission coefficient for diffuse radiation 
+            passing through the top layer
+        e_direct_split (n_batches,n_channels, 3) - The split of extinguished direct radiation 
+            (direct radiation that is not directly transmitted) into diffusely transmitted,
+            reflected and absorbed components
+        e_diffuse_split (n_batches,n_channels, 3) - The split of extinguished diffuse radiation 
+            (diffuse radiation that is not directly transmitted) into diffusely transmitted,
+            reflected and absorbed components
+        r_bottom_direct - The total reflection coefficient for direct downward radiation for 
+            the bottom layer.
+        a_bottom_direct - The total absorption coefficient for direct downward radiation for 
+            the bottom layer.
+        r_bottom_diffuse - The total reflection coefficient for diffuse downward radiation for 
+            the bottom layer.
+        a_bottom_diffuse - The total absorption coefficient for diffuse downward radiation for 
+            the bottom layer.
+
+    Returns:
+        a_multi_direct - The absorption coefficient of the top layer after 
+            multi-reflection between the layers
+        a_multi_bottom_direct - The absorption coefficient of the lower layer after
+            multi-reflection between the layers
+        r_multi_direct - The effective reflection at the top layer
+        a_multi_diffuse - The absorption coefficient of the top layer after 
+            multi-reflection between the layers
+        a_multi_diffuse_bottom - The absorption coefficient of the lower layer after
+            multi-reflection between the layers
+        r_multi_diffuse - The total reflection coefficient for the combined
+            top and bottom layer including the surface
+    """
+    # The top layer splits the direct beam into transmitted and extinguished components
+    e_direct = 1 - t_direct
+    
+    # The top layer also splits the downward diffuse flux into transmitted and extinguished components
+    e_diffuse = 1 - t_diffuse
+
+    # The top layer further splits each extinguished component into transmitted, reflected,
+    # and absorbed components
+    e_t_direct, e_r_direct, e_a_direct = tf.transpose(e_direct_split, perm=[2,0,1])
+    e_t_diffuse, e_r_diffuse, e_a_diffuse = tf.transpose(e_diffuse_split, perm=[2,0,1])
+
+    # Multi-reflection between the top layer and lower layer resolves 
+    # a direct beam into:
+    #   r_multi_direct - total effective reflection at the top layer
+    #   a_multi_direct - absorption at the top layer
+    #   a_multi_bottom_direct - absorption for the entire bottom layer
+
+    # The adding-doubling method computes these
+    # See p.418-424 of "A First Course in Atmospheric Radiation (2nd edition)"
+    # by Grant W. Petty
+
+    d = 1.0 / (1.0 - e_diffuse * e_r_diffuse * r_bottom_diffuse)
+
+    a_multi_bottom_direct = t_direct * a_bottom_direct + \
+        t_direct * r_bottom_direct * e_diffuse * e_r_diffuse * a_bottom_diffuse * d + \
+        e_direct * e_t_direct * a_bottom_diffuse * d
+
+    a_multi_direct = e_direct * e_a_direct + \
+        t_direct * r_bottom_direct * e_diffuse * e_a_diffuse * d + \
+        e_direct * e_t_direct * r_bottom_diffuse * e_diffuse * e_a_diffuse * d
+
+    r_multi_direct = e_direct * e_r_direct + \
+        t_direct * r_bottom_direct * t_diffuse * d + \
+        t_direct * r_bottom_direct * e_diffuse * e_t_diffuse * d + \
+        e_direct * e_t_direct * r_bottom_diffuse * t_diffuse * d + \
+        e_direct * e_t_direct * r_bottom_diffuse * e_diffuse * e_t_diffuse * d
+
+    # These should sum to 1.0
+    total_direct = a_multi_bottom_direct + a_multi_direct + r_multi_direct
+    assert isclose(total_direct, 1.0, abs_tol=1e-5)
+
+    # Multi-reflection for diffuse flux
+    a_multi_bottom_diffuse = t_diffuse * a_bottom_diffuse + \
+        t_diffuse * r_bottom_diffuse * e_diffuse * e_r_diffuse * a_bottom_diffuse * d + \
+        e_diffuse * e_t_diffuse * a_bottom_diffuse * d
+
+    a_multi_diffuse = e_diffuse * e_a_diffuse + \
+        t_diffuse * r_bottom_diffuse * e_diffuse * e_a_diffuse * d + \
+        e_diffuse * e_t_diffuse * r_bottom_diffuse * e_diffuse * e_a_diffuse * d
+
+    r_multi_diffuse = e_diffuse * e_r_diffuse + \
+        t_diffuse * r_bottom_diffuse * t_diffuse * d + \
+        t_diffuse * r_bottom_diffuse * e_diffuse * e_t_diffuse * d + \
+        e_diffuse * e_t_diffuse * r_bottom_diffuse * t_diffuse * d + \
+        e_diffuse * e_t_diffuse * r_bottom_diffuse * e_diffuse * e_t_diffuse * d
+
+    total_diffuse = a_multi_bottom_diffuse + a_multi_diffuse + r_multi_diffuse
+    assert isclose(total_diffuse, 1.0, abs_tol=1e-5)
+
+    return r_multi_direct, a_multi_direct, a_multi_bottom_direct, \
+            r_multi_diffuse, a_multi_diffuse, a_multi_bottom_diffuse
     
 class WaterIceTransmissivityReflection_V1(Model):
     """
