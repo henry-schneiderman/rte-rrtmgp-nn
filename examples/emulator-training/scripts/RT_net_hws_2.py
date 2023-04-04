@@ -224,44 +224,46 @@ def propagate_layer (t_direct, t_diffuse, e_direct_split, e_diffuse_split, r_bot
 
     d = 1.0 / (1.0 - e_diffuse * e_r_diffuse * r_bottom_diffuse)
 
-    a_bottom_multi_direct = t_direct * a_bottom_direct + \
-        t_direct * r_bottom_direct * e_diffuse * e_r_diffuse * a_bottom_diffuse * d + \
-        e_direct * e_t_direct * a_bottom_diffuse * d
+    t_multi_direct = t_direct * r_bottom_direct * e_diffuse * e_r_diffuse * d + \
+        e_direct * e_t_direct * d
+    
+    a_bottom_multi_direct = t_direct * a_bottom_direct + t_multi_direct * a_bottom_diffuse
 
-    a_multi_direct = e_direct * e_a_direct + \
-        t_direct * r_bottom_direct * e_diffuse * e_a_diffuse * d + \
-        e_direct * e_t_direct * r_bottom_diffuse * e_diffuse * e_a_diffuse * d
+    r_bottom_multi_direct = t_direct * r_bottom_direct * d + e_direct * e_t_direct * r_bottom_diffuse * d
 
-    r_multi_direct = e_direct * e_r_direct + \
-        t_direct * r_bottom_direct * t_diffuse * d + \
-        t_direct * r_bottom_direct * e_diffuse * e_t_diffuse * d + \
-        e_direct * e_t_direct * r_bottom_diffuse * t_diffuse * d + \
-        e_direct * e_t_direct * r_bottom_diffuse * e_diffuse * e_t_diffuse * d
+    a_multi_direct = e_direct * e_a_direct + r_bottom_multi_direct * e_diffuse*e_a_diffuse
+
+    r_multi_direct = e_direct * e_r_direct + r_bottom_multi_direct * (t_diffuse + e_diffuse*e_t_diffuse)
 
     # These should sum to 1.0
     total_direct = a_bottom_multi_direct + a_multi_direct + r_multi_direct
     assert isclose(total_direct, 1.0, abs_tol=1e-5)
+    # These should sum to zero
+    diff_flux_minus_absorption = 1 - t_direct - t_multi_direct + r_bottom_multi_direct - r_multi_direct - a_multi_direct
+    assert isclose(diff_flux_minus_absorption, 0.0, abs_tol=1e-5)
 
     # Multi-reflection for diffuse flux
-    a_bottom_multi_diffuse = t_diffuse * a_bottom_diffuse + \
-        t_diffuse * r_bottom_diffuse * e_diffuse * e_r_diffuse * a_bottom_diffuse * d + \
-        e_diffuse * e_t_diffuse * a_bottom_diffuse * d
 
-    a_multi_diffuse = e_diffuse * e_a_diffuse + \
-        t_diffuse * r_bottom_diffuse * e_diffuse * e_a_diffuse * d + \
-        e_diffuse * e_t_diffuse * r_bottom_diffuse * e_diffuse * e_a_diffuse * d
+    t_multi_diffuse = t_diffuse * r_bottom_diffuse * e_diffuse * e_r_diffuse * d + \
+        e_diffuse * e_t_diffuse * d
+    
+    a_bottom_multi_diffuse = t_diffuse * a_bottom_diffuse + t_multi_diffuse * a_bottom_diffuse
 
-    r_multi_diffuse = e_diffuse * e_r_diffuse + \
-        t_diffuse * r_bottom_diffuse * t_diffuse * d + \
-        t_diffuse * r_bottom_diffuse * e_diffuse * e_t_diffuse * d + \
-        e_diffuse * e_t_diffuse * r_bottom_diffuse * t_diffuse * d + \
-        e_diffuse * e_t_diffuse * r_bottom_diffuse * e_diffuse * e_t_diffuse * d
+    r_bottom_multi_diffuse = t_diffuse * r_bottom_diffuse * d + e_diffuse * e_t_diffuse * r_bottom_diffuse * d
+    
+    a_multi_diffuse = e_diffuse * e_a_diffuse + r_bottom_multi_diffuse * e_diffuse*e_a_diffuse
+
+    r_multi_diffuse = e_diffuse * e_r_diffuse + r_bottom_multi_diffuse * (t_diffuse + e_diffuse*e_t_diffuse)
 
     total_diffuse = a_bottom_multi_diffuse + a_multi_diffuse + r_multi_diffuse
     assert isclose(total_diffuse, 1.0, abs_tol=1e-5)
+    diff_flux_minus_absorption = 1 - t_diffuse - t_multi_diffuse + r_bottom_multi_diffuse - r_multi_diffuse - a_multi_diffuse
+    assert isclose(diff_flux_minus_absorption, 0.0, abs_tol=1e-5)
 
     return r_multi_direct, a_multi_direct, a_bottom_multi_direct, \
-            r_multi_diffuse, a_multi_diffuse, a_bottom_multi_diffuse
+            r_multi_diffuse, a_multi_diffuse, a_bottom_multi_diffuse, \
+            t_direct, t_multi_direct, t_diffuse + t_multi_diffuse, \
+            r_bottom_multi_direct, r_bottom_multi_diffuse
 
 class RT_Net(Layer):
     def __init__(self, n_hidden_gas, n_hidden_ext):
@@ -278,11 +280,15 @@ class RT_Net(Layer):
         input_shape = layer_input.shape
         composite_coefficients = tf.zeros((input_shape[0],input_shape[1],6))
         for i in np.arange(input_shape[0]):
+
+            # Obtain coeffs of current atmospheric layer
             layer_coefficients=self.layer(layer_input[i])
             t_direct, t_diffuse, e_direct_split, e_diffuse_split = layer_coefficients
+            # Multi reflection between current layer and bottom layer (composite of lower layers)
             composite_coefficients[i]= propagate_layer(t_direct, t_diffuse, e_direct_split, e_diffuse_split, r_bottom_direct, a_bottom_direct, r_bottom_diffuse, a_bottom_diffuse)
             r_multi_direct, a_multi_direct, a_bottom_multi_direct, \
             r_multi_diffuse, a_multi_diffuse, a_bottom_multi_diffuse = composite_coefficients[i]
+            # Combine layer and bottom layer after multi-reflection
             r_bottom_direct = r_multi_direct
             r_bottom_diffuse = r_multi_diffuse
             a_bottom_direct = a_multi_direct + a_bottom_multi_direct

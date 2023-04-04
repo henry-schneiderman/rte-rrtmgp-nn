@@ -5,7 +5,7 @@ import pprint
 
 def symbolic_verification():
 
-    # Downwelling radiation flux consists of direct beam (solar) and a diffuse (scattered)
+    # Downwelling radiation flux consists of     e9 = sy.Eq(r_multi_direct, e_direct*e_r_direct + r_bottom_multi_direct*(t_diffuse + e_diffuse*e_t_diffuse)) beam (solar) and a diffuse (scattered)
     # flux
 
     # The top layer splits direct beam into transmitted and extinguished components
@@ -50,10 +50,12 @@ def symbolic_verification():
     e7a = sy.Eq(t_multi_direct, t_direct*r_bottom_direct*e_diffuse*e_r_diffuse*d + e_direct*e_t_direct*d)
     e7b = sy.Eq(a_bottom_multi_direct, t_direct*a_bottom_direct + t_multi_direct*a_bottom_diffuse)
 
-    e8a = sy.Eq(r_bottom_multi_direct, t_direct*r_bottom_direct*e_diffuse*d + e_direct*e_t_direct*r_bottom_diffuse*e_diffuse*d)
-    e8b = sy.Eq(a_multi_direct, e_direct*e_a_direct + r_bottom_multi_direct*e_a_diffuse)
+    e8a = sy.Eq(r_bottom_multi_direct, t_direct*r_bottom_direct*d + e_direct*e_t_direct*r_bottom_diffuse*d)
+    e8b = sy.Eq(a_multi_direct, e_direct*e_a_direct + r_bottom_multi_direct*e_diffuse*e_a_diffuse)
 
-    e9 = sy.Eq(r_multi_direct, e_direct*e_r_direct + t_direct*r_bottom_direct*t_diffuse*d + t_direct*r_bottom_direct*e_diffuse*e_t_diffuse*d + e_direct*e_t_direct*r_bottom_diffuse*t_diffuse*d + e_direct*e_t_direct*r_bottom_diffuse*e_diffuse*e_t_diffuse*d)
+    e9 = sy.Eq(r_multi_direct, e_direct*e_r_direct + r_bottom_multi_direct*(t_diffuse + e_diffuse*e_t_diffuse))
+
+    #e9 = sy.Eq(r_multi_direct, e_direct*e_r_direct + t_direct*r_bottom_direct*t_diffuse*d + t_direct*r_bottom_direct*e_diffuse*e_t_diffuse*d + e_direct*e_t_direct*r_bottom_diffuse*t_diffuse*d + e_direct*e_t_direct*r_bottom_diffuse*e_diffuse*e_t_diffuse*d)
 
     # These must sum to 1 to insure conservation of energy
     total = sy.symbols('total')
@@ -72,15 +74,26 @@ def symbolic_verification():
     #   r_multi_diffuse - reflection at the top layer
     #   a_multi_diffuse - absorption at the top layer
     #   a_bottom_multi_diffuse - absorption for the entire bottom layer
-    a_multi_diffuse, a_bottom_multi_diffuse, r_multi_diffuse = sy.symbols('a_multi_diffuse a_bottom_multi_diffuse r_multi_diffuse')
-    e11 = sy.Eq(a_bottom_multi_diffuse, t_diffuse*a_bottom_diffuse + t_diffuse*r_bottom_diffuse*e_diffuse*e_r_diffuse*a_bottom_diffuse*d + e_diffuse*e_t_diffuse*a_bottom_diffuse*d)
-    e12 = sy.Eq(a_multi_diffuse, e_diffuse*e_a_diffuse + t_diffuse*r_bottom_diffuse*e_diffuse*e_a_diffuse*d + e_diffuse*e_t_diffuse*r_bottom_diffuse*e_diffuse*e_a_diffuse*d)
-    e13 = sy.Eq(r_multi_diffuse, e_diffuse*e_r_diffuse + t_diffuse*r_bottom_diffuse*t_diffuse*d + t_diffuse*r_bottom_diffuse*e_diffuse*e_t_diffuse*d + e_diffuse*e_t_diffuse*r_bottom_diffuse*t_diffuse*d + e_diffuse*e_t_diffuse*r_bottom_diffuse*e_diffuse*e_t_diffuse*d)
+    t_multi_diffuse, r_bottom_multi_diffuse, a_multi_diffuse, a_bottom_multi_diffuse, r_multi_diffuse = sy.symbols('t_multi_diffuse r_bottom_multi_diffuse a_multi_diffuse a_bottom_multi_diffuse r_multi_diffuse')
+    #e11 = sy.Eq(a_bottom_multi_diffuse, t_diffuse*a_bottom_diffuse + t_diffuse*r_bottom_diffuse*e_diffuse*e_r_diffuse*a_bottom_diffuse*d + e_diffuse*e_t_diffuse*a_bottom_diffuse*d)
+
+    e11a = sy.Eq(t_multi_diffuse, t_diffuse*r_bottom_diffuse*e_diffuse*e_r_diffuse*d + e_diffuse*e_t_diffuse*d)
+    e11b = sy.Eq(a_bottom_multi_diffuse, t_diffuse*a_bottom_diffuse + t_multi_diffuse*a_bottom_diffuse)
+
+    #e12 = sy.Eq(a_multi_diffuse, e_diffuse*e_a_diffuse + t_diffuse*r_bottom_diffuse*e_diffuse*e_a_diffuse*d + e_diffuse*e_t_diffuse*r_bottom_diffuse*e_diffuse*e_a_diffuse*d)
+
+    e12a = sy.Eq(r_bottom_multi_diffuse, t_diffuse*r_bottom_diffuse*d + e_diffuse*e_t_diffuse*r_bottom_diffuse*d)
+    e12b = sy.Eq(a_multi_diffuse, e_diffuse*e_a_diffuse + r_bottom_multi_diffuse*e_diffuse*e_a_diffuse)
+
+    e13 = sy.Eq(r_multi_diffuse, e_diffuse*e_r_diffuse + r_bottom_multi_diffuse*(t_diffuse + e_diffuse*e_t_diffuse))
+    #e13 = sy.Eq(r_multi_diffuse, e_diffuse*e_r_diffuse + t_diffuse*r_bottom_diffuse*t_diffuse*d + t_diffuse*r_bottom_diffuse*e_diffuse*e_t_diffuse*d + e_diffuse*e_t_diffuse*r_bottom_diffuse*t_diffuse*d + e_diffuse*e_t_diffuse*r_bottom_diffuse*e_diffuse*e_t_diffuse*d)
 
     # Verify that these sum to 1
     total_diffuse = sy.symbols('total_diffuse')
-    e14 = sy.Eq(total_diffuse, a_bottom_multi_diffuse + a_multi_diffuse + r_multi_diffuse)
-    equations_diffuse = (e1, e2, e3a, e3b, e4, e5, e6, e11, e12, e13, e14)
+    e14a = sy.Eq(total_diffuse, a_bottom_multi_diffuse + a_multi_diffuse + r_multi_diffuse)
+    total_diffuse_2 = sy.symbols('total_diffuse_2')
+    e14b = sy.Eq(total_diffuse_2, 1 - t_diffuse - t_multi_diffuse + r_bottom_multi_diffuse - r_multi_diffuse - a_multi_diffuse)
+    equations_diffuse = (e1, e2, e3a, e3b, e4, e5, e6, e11a, e11b, e12a, e12b, e13, e14a, e14b)
     solutions_diffuse = sy.solve(equations_diffuse, dict=True, manual=True)
     #pp.pprint(solutions_diffuse)
     print(solutions_diffuse)
