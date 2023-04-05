@@ -144,18 +144,18 @@ class AtmLayer(Layer):
         input_3_direct = tau_total / mu
         input_3_diffuse = tau_total / mu_bar
 
-        e_direct_split = [net(input_1[k],input_2[k],input_3_direct[k], mu) for k, net in self.ext_net.items()]
-        e_diffuse_split = [net(input_1[k],input_2[k],input_3_diffuse[k], mu_bar) for k, net in self.ext_net.items()]
+        e_split_direct = [net(input_1[k],input_2[k],input_3_direct[k], mu) for k, net in self.ext_net.items()]
+        e_split_diffuse = [net(input_1[k],input_2[k],input_3_diffuse[k], mu_bar) for k, net in self.ext_net.items()]
 
-        e_direct_split = tf.nn.softmax(e_direct_split)
-        e_diffuse_split = tf.nn.softmax(e_diffuse_split)
+        e_split_direct = tf.nn.softmax(e_split_direct)
+        e_split_diffuse = tf.nn.softmax(e_split_diffuse)
 
         t_direct = tf.exp(-input_3_direct)
         t_diffuse = tf.exp(-input_3_diffuse)
 
-        return t_direct, t_diffuse, e_direct_split, e_diffuse_split
+        return t_direct, t_diffuse, e_split_direct, e_split_diffuse
     
-def propagate_layer (t_direct, t_diffuse, e_direct_split, e_diffuse_split, r_bottom_direct, a_bottom_direct, r_bottom_diffuse, a_bottom_diffuse):
+def propagate_layer_up (t_direct, t_diffuse, e_split_direct, e_split_diffuse, r_bottom_direct, r_bottom_diffuse, a_bottom_direct, a_bottom_diffuse):
     """
     Computes the downward total absorption and reflection coefficients for a column of the atmosphere
     from the given layer to the surface. 
@@ -164,41 +164,73 @@ def propagate_layer (t_direct, t_diffuse, e_direct_split, e_diffuse_split, r_bot
     of the "bottom layer" spanning all the layers beneath the top layer including the surface. 
     Computes the impact of multi-reflection between these top and bottom layers.
 
+    Naming convention: The suffixes "_direct" and "_diffuse" for the various interactions
+    (absorption, reflection, etc) specify the type of input radiation. 
+    However, the output of some interactions involving direct inputs, e.g.,
+    t_multi_direct (transmission of direct radiation through multi-reflection), 
+    may produce diffuse output
+
     Input and Output Shape:
         Tensor with shape (n_batches, n_channels)
 
     Arguments:
-        t_direct (n_batches,n_channels) - Direct transmission coefficient for direct radiation 
-            passing through the top layer
-        t_diffuse (n_batches,n_channels) - Direct transmission coefficient for diffuse radiation 
-            passing through the top layer
-        e_direct_split - The split of the extinguished direct radiation 
-            (direct radiation that is not directly transmitted) into diffusely transmitted,
-            reflected and absorbed components. Has additional axis of length=3.
-        e_diffuse_split - The split of the extinguished diffuse radiation 
-            (diffuse radiation that is not directly transmitted) into diffusely transmitted,
-            reflected and absorbed components.  Has additional axis of length=3.
-        r_bottom_direct - The total reflection coefficient for the bottom layer of 
-            direct downward radiation.
-        a_bottom_direct - The total absorption coefficient for the bottom layer of 
-            direct downward radiation.
-        r_bottom_diffuse - The total reflection coefficient for the bottom layer of 
-            diffuse downward radiation.
-        a_bottom_diffuse - The total absorption coefficient for the bottom layer of 
-            diffuse downward radiation.
+
+        t_direct, t_diffuse - Direct transmission coefficient for direct 
+            and diffuse radiation passing through the top layer. (Note
+            that diffuse radiation can be directly transmitted)
+
+        e_split_direct, e_split_diffuse - The split of extinguised direct 
+            and diffuse radiation into diffusely transmitted, reflected,
+            and absorbed components. Has additional axis of length=3.
+            
+        r_bottom_direct, r_bottom_diffuse - The total reflection coefficient for bottom 
+            layer for direct and diffuse downward radiation.
+
+        a_bottom_direct, a_bottom_diffuse - The total absorption coefficient for the   
+            bottom layer for direct and diffuse downward radiation.
+            
 
     Returns:
+
+        t_multi_direct - The transmission coefficient for direct radiation that
+            becomes diffuse radiation through multi-reflection
+
+        t_multi_diffuse - The transmission coefficient for diffuse radiation that
+            is multi-reflected (as opposed to directly transmitted, e.g., t_diffuse)
+
         r_multi_direct, r_multi_diffuse - The total effective reflection coefficient 
             for the combined top and bottom layer including the surface
-        a_multi_direct, a_multi_diffuse - The absorption coefficients of the top layer after 
+
+        r_bottom_multi_direct, r_bottom_multi_diffuse - The reflection coefficients for
+            the bottom layer for direct and diffuse radiation
+
+        a_top_multi_direct, a_top_multi_diffuse - The absorption coefficients of the top layer after 
             multi-reflection between the layers
+
         a_bottom_multi_direct, a_bottom_multi_diffuse - The absorption coefficients 
-            of the lower layer after multi-reflection between the layers
+            of the bottom layer after multi-reflection between the layers
 
     Notes:
+        Consider two downward fluxes entering top layer: flux_direct, flux_diffuse
+
+        Direct Flux Transmitted = flux_direct * t_direct
+        Diffuse Flux Transmitted = flux_direct * t_multi_direct + 
+                                    flux_diffuse * (t_diffuse + t_multi_diffuse)
+
+        Reflected Flux at Top Layer = flux_direct * r_multi_direct +
+                                     flux_diffuse * r_multi_diffuse
+
+        Reflected Flux at Bottom Layer = flux_direct * r_bottom_multi_direct +
+                                        flux_diffuse * r_bottom_multi_diffuse
+
         Conservation of energy:
-            a_bottom_multi_direct + a_multi_direct + r_multi_direct = 1.0
-            a_bottom_multi_diffuse + a_multi_diffuse + r_multi_diffuse = 1.0
+            a_bottom_multi_direct + a_top_multi_direct + r_multi_direct = 1.0
+            a_bottom_multi_diffuse + a_top_multi_diffuse + r_multi_diffuse = 1.0
+
+        The combined loss of flux for the downward and upward paths must equal
+        the absorption at the top layer
+            1 - t_direct - t_multi_direct + r_bottom_multi_direct - r_multi_direct = a_top_multi_direct
+            1 - t_diffuse - t_multi_diffuse + r_bottom_multi_diffuse - r_multi_diffuse = a_top_multi_diffuse
 
     """
     # The top layer splits the direct beam into transmitted and extinguished components
@@ -209,13 +241,13 @@ def propagate_layer (t_direct, t_diffuse, e_direct_split, e_diffuse_split, r_bot
 
     # The top layer further splits each extinguished component into transmitted, reflected,
     # and absorbed components
-    e_t_direct, e_r_direct, e_a_direct = tf.transpose(e_direct_split, perm=[2,0,1])
-    e_t_diffuse, e_r_diffuse, e_a_diffuse = tf.transpose(e_diffuse_split, perm=[2,0,1])
+    e_t_direct, e_r_direct, e_a_direct = tf.transpose(e_split_direct, perm=[2,0,1])
+    e_t_diffuse, e_r_diffuse, e_a_diffuse = tf.transpose(e_split_diffuse, perm=[2,0,1])
 
     # Multi-reflection between the top layer and lower layer resolves 
     # a direct beam into:
     #   r_multi_direct - total effective reflection at the top layer
-    #   a_multi_direct - absorption at the top layer
+    #   a_top_multi_direct - absorption at the top layer
     #   a_bottom_multi_direct - absorption for the entire bottom layer
 
     # The adding-doubling method computes these
@@ -231,15 +263,15 @@ def propagate_layer (t_direct, t_diffuse, e_direct_split, e_diffuse_split, r_bot
 
     r_bottom_multi_direct = t_direct * r_bottom_direct * d + e_direct * e_t_direct * r_bottom_diffuse * d
 
-    a_multi_direct = e_direct * e_a_direct + r_bottom_multi_direct * e_diffuse*e_a_diffuse
+    a_top_multi_direct = e_direct * e_a_direct + r_bottom_multi_direct * e_diffuse*e_a_diffuse
 
     r_multi_direct = e_direct * e_r_direct + r_bottom_multi_direct * (t_diffuse + e_diffuse*e_t_diffuse)
 
     # These should sum to 1.0
-    total_direct = a_bottom_multi_direct + a_multi_direct + r_multi_direct
+    total_direct = a_bottom_multi_direct + a_top_multi_direct + r_multi_direct
     assert isclose(total_direct, 1.0, abs_tol=1e-5)
     # These should sum to zero
-    diff_flux_minus_absorption = 1 - t_direct - t_multi_direct + r_bottom_multi_direct - r_multi_direct - a_multi_direct
+    diff_flux_minus_absorption = 1 - t_direct - t_multi_direct + r_bottom_multi_direct - r_multi_direct - a_top_multi_direct
     assert isclose(diff_flux_minus_absorption, 0.0, abs_tol=1e-5)
 
     # Multi-reflection for diffuse flux
@@ -251,26 +283,28 @@ def propagate_layer (t_direct, t_diffuse, e_direct_split, e_diffuse_split, r_bot
 
     r_bottom_multi_diffuse = t_diffuse * r_bottom_diffuse * d + e_diffuse * e_t_diffuse * r_bottom_diffuse * d
     
-    a_multi_diffuse = e_diffuse * e_a_diffuse + r_bottom_multi_diffuse * e_diffuse*e_a_diffuse
+    a_top_multi_diffuse = e_diffuse * e_a_diffuse + r_bottom_multi_diffuse * e_diffuse*e_a_diffuse
 
     r_multi_diffuse = e_diffuse * e_r_diffuse + r_bottom_multi_diffuse * (t_diffuse + e_diffuse*e_t_diffuse)
 
-    total_diffuse = a_bottom_multi_diffuse + a_multi_diffuse + r_multi_diffuse
+    total_diffuse = a_bottom_multi_diffuse + a_top_multi_diffuse + r_multi_diffuse
     assert isclose(total_diffuse, 1.0, abs_tol=1e-5)
-    diff_flux_minus_absorption = 1 - t_diffuse - t_multi_diffuse + r_bottom_multi_diffuse - r_multi_diffuse - a_multi_diffuse
+    diff_flux_minus_absorption = 1 - t_diffuse - t_multi_diffuse + r_bottom_multi_diffuse - r_multi_diffuse - a_top_multi_diffuse
     assert isclose(diff_flux_minus_absorption, 0.0, abs_tol=1e-5)
 
-    return r_multi_direct, a_multi_direct, a_bottom_multi_direct, \
-            r_multi_diffuse, a_multi_diffuse, a_bottom_multi_diffuse, \
-            t_direct, t_multi_direct, t_diffuse + t_multi_diffuse, \
-            r_bottom_multi_direct, r_bottom_multi_diffuse
-
+    return t_multi_direct, t_multi_diffuse, \
+            r_multi_direct, r_multi_diffuse, \
+            r_bottom_multi_direct, r_bottom_multi_diffuse, \
+            a_top_multi_direct, a_top_multi_diffuse, \
+            a_bottom_multi_direct, a_bottom_multi_diffuse
 class RT_Net(Layer):
     def __init__(self, n_hidden_gas, n_hidden_ext):
         super().__init__()
         self.layer=AtmLayer(n_hidden_gas=n_hidden_gas, n_hidden_ext=n_hidden_ext)
         self.mu_bar=NoInputLayer(1)
     def call(self, input):
+        # Progress up the column to compute the impact of multi-reflection and transmission
+        # on the coefficients
         layer_input, mu, surface_albedo = input
         mu_bar = self.mu_bar()
         r_bottom_direct = surface_albedo
@@ -278,22 +312,60 @@ class RT_Net(Layer):
         a_bottom_direct = 1.0 - surface_albedo
         a_bottom_diffuse = 1.0 - surface_albedo
         input_shape = layer_input.shape
-        composite_coefficients = tf.zeros((input_shape[0],input_shape[1],6))
+        column_coefficients = tf.zeros((input_shape[0],input_shape[1],6))
         for i in np.arange(input_shape[0]):
 
             # Obtain coeffs of current atmospheric layer
             layer_coefficients=self.layer(layer_input[i])
-            t_direct, t_diffuse, e_direct_split, e_diffuse_split = layer_coefficients
+            t_direct, t_diffuse, e_split_direct, e_split_diffuse = layer_coefficients
             # Multi reflection between current layer and bottom layer (composite of lower layers)
-            composite_coefficients[i]= propagate_layer(t_direct, t_diffuse, e_direct_split, e_diffuse_split, r_bottom_direct, a_bottom_direct, r_bottom_diffuse, a_bottom_diffuse)
-            r_multi_direct, a_multi_direct, a_bottom_multi_direct, \
-            r_multi_diffuse, a_multi_diffuse, a_bottom_multi_diffuse = composite_coefficients[i]
-            # Combine layer and bottom layer after multi-reflection
+            column_coefficients[i]= propagate_layer_up(
+                t_direct, t_diffuse, 
+                e_split_direct, e_split_diffuse, 
+                r_bottom_direct, r_bottom_diffuse,
+                a_bottom_direct,  a_bottom_diffuse)
+            
+            t_multi_direct, t_multi_diffuse, \
+            r_multi_direct, r_multi_diffuse, \
+            r_bottom_multi_direct, r_bottom_multi_diffuse, \
+            a_top_multi_direct, a_top_multi_diffuse, \
+            a_bottom_multi_direct, a_bottom_multi_diffuse = column_coefficients[i]
+            # Combine top and bottom layer after multi-reflection
             r_bottom_direct = r_multi_direct
             r_bottom_diffuse = r_multi_diffuse
-            a_bottom_direct = a_multi_direct + a_bottom_multi_direct
-            a_bottom_diffuse = a_multi_diffuse + a_bottom_multi_diffuse
+            a_bottom_direct = a_top_multi_direct + a_bottom_multi_direct
+            a_bottom_diffuse = a_top_multi_diffuse + a_bottom_multi_diffuse
 
+
+        # Progress down the column to propagate the direct and diffuse flux
+        # and compute its absorption at each level
+        direct_flux_down = tf.zeros((input_shape[0],))
+        diffuse_flux_down = tf.zeros((input_shape[0],))
+        diffuse_flux_up = tf.zeros((input_shape[0],))
+        absorbed_flux = tf.zeros((input_shape[0],))
+
+        direct_down = 1.0
+        diffuse_down = 1.0
+
+        for i in np.arange(input_shape[0] - 1, 0, -1):
+            t_multi_direct, t_multi_diffuse, \
+            r_multi_direct, r_multi_diffuse, \
+            r_bottom_multi_direct, r_bottom_multi_diffuse, \
+            a_top_multi_direct, a_top_multi_diffuse, \
+            a_bottom_multi_direct, a_bottom_multi_diffuse = column_coefficients[i]
+
+            absorbed_flux[i] = direct_down * a_top_multi_direct + \
+                            diffuse_down * a_top_multi_diffuse
+
+            direct_flux_down[i] = direct_down * t_direct
+            diffuse_flux_down[i] = direct_down * t_multi_direct + \
+                                    diffuse_down * (t_diffuse + t_multi_diffuse)
+            diffuse_flux_up[i] = direct_down * r_bottom_multi_direct + \
+                                diffuse_down * r_bottom_multi_diffuse
+            
+            direct_down = direct_flux_down[i]
+            diffuse_down = diffuse_flux_down[i]
+            
 def train():
     epochs      = 100000
     patience    = 1000 #25
