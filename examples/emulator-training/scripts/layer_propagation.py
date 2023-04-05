@@ -98,6 +98,22 @@ def symbolic_verification():
     #pp.pprint(solutions_diffuse)
     print(solutions_diffuse)
 
+    # input fluxes
+    f_direct, f_diffuse = sy.symbols('f_direct f_diffuse')
+    flux_error, total_a, total_b = sy.symbols('flux_error total_a total_b')
+    e15 = sy.Eq(total_a, f_direct * a_bottom_multi_direct + f_diffuse * a_bottom_multi_diffuse)
+
+    e16 = sy.Eq(total_b, f_direct * t_direct * a_bottom_direct + 
+                f_direct * t_multi_direct * a_bottom_diffuse +
+                f_diffuse * (t_diffuse + t_multi_diffuse) * a_bottom_diffuse)
+    
+    e17 = sy.eq(flux_error, total_a - total_b)
+
+    equations_flux = (e1, e2, e3a, e3b, e4, e5, e6, e7a, e7b, e8a, e8b, e9, e11a, e11b, e12a, e12b, e13, e15, e16, e17)
+    solutions_flux = sy.solve(equations_flux, dict=True, manual=True)
+    #pp.pprint(solutions_diffuse)
+    print("solutions flux: ")
+    print(solutions_flux)
 
  
 
