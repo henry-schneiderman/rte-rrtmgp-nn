@@ -157,80 +157,88 @@ class AtmLayer(Layer):
     
 def propagate_layer_up (t_direct, t_diffuse, e_split_direct, e_split_diffuse, r_bottom_direct, r_bottom_diffuse, a_bottom_direct, a_bottom_diffuse):
     """
-    Computes the downward total absorption and reflection coefficients for a column of the atmosphere
-    from the given layer to the surface. 
+    Combines the properties of two atmospheric layers within a column: 
+    a shallow "top layer" and a thicker "bottom layer" spanning all the 
+    layers beneath the top layer including the surface. Computes the impact of multi-reflection between these layers.
 
-    Uses the atmospheric properties of the given "top layer" and the total absorption and reflection 
-    of the "bottom layer" spanning all the layers beneath the top layer including the surface. 
-    Computes the impact of multi-reflection between these top and bottom layers.
+    Naming conventions:
+     
+    The prefixes -- t, e, r, a -- correspond respectively to absorption,
+    extinction, reflection, absorption.
 
-    Naming convention: The suffixes "_direct" and "_diffuse" for the various interactions
-    (absorption, reflection, etc) specify the type of input radiation. 
-    However, the output of some interactions involving direct inputs, e.g.,
-    t_multi_direct (transmission of direct radiation through multi-reflection), 
-    may produce diffuse output
-
+    The suffixes "_direct" and "_diffuse" specify the type of input radiation. 
+    Note, however, that an input of direct radiation may produce diffuse output,
+    e.g., t_multi_direct (transmission of direct radiation through multi-reflection) 
+    
     Input and Output Shape:
         Tensor with shape (n_batches, n_channels)
 
     Arguments:
 
-        t_direct, t_diffuse - Direct transmission coefficient for direct 
-            and diffuse radiation passing through the top layer. (Note
-            that diffuse radiation can be directly transmitted)
+        t_direct, t_diffuse - Direct transmission coefficient for 
+            the top layer. (Note that diffuse radiation can be directly 
+            transmitted)
 
-        e_split_direct, e_split_diffuse - The split of extinguised direct 
-            and diffuse radiation into diffusely transmitted, reflected,
-            and absorbed components. Has additional axis of length=3.
+        e_split_direct, e_split_diffuse - The split of extinguised  
+            radiation into diffusely transmitted, reflected,
+            and absorbed components. These components sum to 1.0.
+            Has additional axis of length=3.
             
-        r_bottom_direct, r_bottom_diffuse - The total reflection coefficient for bottom 
-            layer for direct and diffuse downward radiation.
+        r_bottom_direct, r_bottom_diffuse - The reflection 
+            coefficients for bottom layer.
 
-        a_bottom_direct, a_bottom_diffuse - The total absorption coefficient for the   
-            bottom layer for direct and diffuse downward radiation.
+        a_bottom_direct, a_bottom_diffuse - The absorption coefficients
+            for the bottom layer. 
             
-
     Returns:
 
-        t_multi_direct - The transmission coefficient for direct radiation that
-            becomes diffuse radiation through multi-reflection
+        t_multi_direct, t_multi_diffuse - The transmission coefficients for 
+            radiation that is multi-reflected (as opposed to directly transmitted, 
+            e.g., t_direct, t_diffuse)
 
-        t_multi_diffuse - The transmission coefficient for diffuse radiation that
-            is multi-reflected (as opposed to directly transmitted, e.g., t_diffuse)
-
-        r_multi_direct, r_multi_diffuse - The total effective reflection coefficient 
-            for the combined top and bottom layer including the surface
+        r_multi_direct, r_multi_diffuse - The reflection coefficients 
+            for the combined top and bottom layers including the surface
 
         r_bottom_multi_direct, r_bottom_multi_diffuse - The reflection coefficients for
-            the bottom layer for direct and diffuse radiation
+            the bottom layer after accounting for multi-reflection with top layer
 
-        a_top_multi_direct, a_top_multi_diffuse - The absorption coefficients of the top layer after 
-            multi-reflection between the layers
+        a_top_multi_direct, a_top_multi_diffuse - The absorption coefficients of 
+            the top layer after multi-reflection between the layers
 
         a_bottom_multi_direct, a_bottom_multi_diffuse - The absorption coefficients 
             of the bottom layer after multi-reflection between the layers
 
     Notes:
+        Since the bottom layer includes the surface:
+                a_bottom_direct + r_bottom_direct = 1.0
+                a_bottom_diffuse + r_bottom_diffuse = 1.0
+
         Consider two downward fluxes entering top layer: flux_direct, flux_diffuse
 
-        Direct Flux Transmitted = flux_direct * t_direct
-        Diffuse Flux Transmitted = flux_direct * t_multi_direct + 
-                                    flux_diffuse * (t_diffuse + t_multi_diffuse)
+            Downward Direct Flux Transmitted = flux_direct * t_direct
+            Downward Diffuse Flux Transmitted = flux_direct * t_multi_direct + 
+                                            flux_diffuse * (t_diffuse + t_multi_diffuse)
 
-        Reflected Flux at Top Layer = flux_direct * r_multi_direct +
+            Upward Flux from Top Layer = flux_direct * r_multi_direct +
                                      flux_diffuse * r_multi_diffuse
 
-        Reflected Flux at Bottom Layer = flux_direct * r_bottom_multi_direct +
+            Upward Flux into Top Layer = flux_direct * r_bottom_multi_direct +
                                         flux_diffuse * r_bottom_multi_diffuse
+
+            Both upward fluxes are diffuse since they are from radiation
+            that is scattered upwards
 
         Conservation of energy:
             a_bottom_multi_direct + a_top_multi_direct + r_multi_direct = 1.0
             a_bottom_multi_diffuse + a_top_multi_diffuse + r_multi_diffuse = 1.0
 
-        The combined loss of flux for the downward and upward paths must equal
-        the absorption at the top layer
-            1 - t_direct - t_multi_direct + r_bottom_multi_direct - r_multi_direct = a_top_multi_direct
-            1 - t_diffuse - t_multi_diffuse + r_bottom_multi_diffuse - r_multi_diffuse = a_top_multi_diffuse
+        The absorption at the top layer (after accounting for multi-reflection)
+        must equal the combined loss of flux for the downward and upward paths:
+         
+            a_top_multi_direct = (1 - t_direct - t_multi_direct) + 
+                                (r_bottom_multi_direct - r_multi_direct)
+            a_top_multi_diffuse = (1 - t_diffuse - t_multi_diffuse) + 
+                                (r_bottom_multi_diffuse - r_multi_diffuse)
 
     """
     # The top layer splits the direct beam into transmitted and extinguished components
@@ -254,6 +262,7 @@ def propagate_layer_up (t_direct, t_diffuse, e_split_direct, e_split_diffuse, r_
     # See p.418-424 of "A First Course in Atmospheric Radiation (2nd edition)"
     # by Grant W. Petty
 
+    # pre-compute denominator
     d = 1.0 / (1.0 - e_diffuse * e_r_diffuse * r_bottom_diffuse)
 
     t_multi_direct = t_direct * r_bottom_direct * e_diffuse * e_r_diffuse * d + \
@@ -270,9 +279,9 @@ def propagate_layer_up (t_direct, t_diffuse, e_split_direct, e_split_diffuse, r_
     # These should sum to 1.0
     total_direct = a_bottom_multi_direct + a_top_multi_direct + r_multi_direct
     assert isclose(total_direct, 1.0, abs_tol=1e-5)
-    # These should sum to zero
-    diff_flux_minus_absorption = 1 - t_direct - t_multi_direct + r_bottom_multi_direct - r_multi_direct - a_top_multi_direct
-    assert isclose(diff_flux_minus_absorption, 0.0, abs_tol=1e-5)
+    # Loss of flux should equal absorption
+    diff_flux = 1 - t_direct - t_multi_direct + r_bottom_multi_direct - r_multi_direct 
+    assert isclose(diff_flux, a_top_multi_direct, abs_tol=1e-5)
 
     # Multi-reflection for diffuse flux
 
@@ -289,8 +298,8 @@ def propagate_layer_up (t_direct, t_diffuse, e_split_direct, e_split_diffuse, r_
 
     total_diffuse = a_bottom_multi_diffuse + a_top_multi_diffuse + r_multi_diffuse
     assert isclose(total_diffuse, 1.0, abs_tol=1e-5)
-    diff_flux_minus_absorption = 1 - t_diffuse - t_multi_diffuse + r_bottom_multi_diffuse - r_multi_diffuse - a_top_multi_diffuse
-    assert isclose(diff_flux_minus_absorption, 0.0, abs_tol=1e-5)
+    diff_flux = 1 - t_diffuse - t_multi_diffuse + r_bottom_multi_diffuse - r_multi_diffuse
+    assert isclose(diff_flux, a_top_multi_diffuse, abs_tol=1e-5)
 
     return t_multi_direct, t_multi_diffuse, \
             r_multi_direct, r_multi_diffuse, \
@@ -365,12 +374,12 @@ class RT_Net(Layer):
             
             direct_down = direct_flux_down[i]
             diffuse_down = diffuse_flux_down[i]
-            
+
 def train():
     epochs      = 100000
     patience    = 1000 #25
     batch_size  = 2048
-    layer_input = Input(shape(n_layers,n_features), batch_size=batch_size,   name="layer_input")
+    layer_input = Input(shape=(n_layers,n_features), batch_size=batch_size, name="layer_input")
     mu_input = Input(shape=(1,), batch_size=batch_size, name="mu_input")
     albedo_input = Input(shape=(2,), batch_size=batch_size, name="albedo_input")
     input = [layer_input, mu_input, albedo_input]
