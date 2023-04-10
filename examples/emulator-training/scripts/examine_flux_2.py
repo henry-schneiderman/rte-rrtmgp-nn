@@ -16,6 +16,7 @@ if True:
     c_0 = data_1.variables["nitrous_oxide"]
     c_1 = data_1.variables["nitrogen_dioxide"]
     c_h2o = data_1.variables["water_vapor"]
+    c_ch4 = data_1.variables["methane"]
     c_2 = data_2.variables["rrtmgp_sw_input"]
 
     print("nitrous oxide  = " + str(c_0[7,2200,0:60].data))
@@ -27,6 +28,10 @@ if True:
     print (" ")
     print("h2o  = " + str(c_h2o[7,2200,0:6].data))
     print("h2o  = " + str(c_2[7,2200,0:6, 2].data))
+
+    print (" ")
+    print("ch4  = " + str(c_ch4[7,2200,0:6].data))
+    print("ch4  = " + str(c_2[7,2200,0:6, 6].data))
 else:
 
     c_1 = data_1.variables["clwc"]
