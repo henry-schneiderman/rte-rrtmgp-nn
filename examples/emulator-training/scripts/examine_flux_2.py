@@ -15,7 +15,7 @@ data_2 = xr.open_dataset(file_name_out2) #Dataset(file_name_in)
 if True:
     c_0 = data_1.variables["nitrous_oxide"]
     c_1 = data_1.variables["nitrogen_dioxide"]
-    c_h2o = data_1.variables["water vapor"]
+    c_h2o = data_1.variables["water_vapor"]
     c_2 = data_2.variables["rrtmgp_sw_input"]
 
     print("nitrous oxide  = " + str(c_0[7,2200,0:60].data))
