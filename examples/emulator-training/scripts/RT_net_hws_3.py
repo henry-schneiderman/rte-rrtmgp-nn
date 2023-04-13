@@ -17,7 +17,7 @@ class NoInputLayer(Layer):
         self.w = tf.random.normal((num_outputs),minval=minval,maxval=maxval)
         self.w = tf.Variable(self.w)
     def call(self):
-        return(self.w)
+        return(tf.nn.relu(self.w))
 
 class DenseFFN(Layer):
     """
@@ -34,11 +34,12 @@ class DenseFFN(Layer):
         for hidden in self.hidden:
             X = hidden(X)
         return self.out(X)
-class AtmLayer(Layer):
-    def __init__(self, n_hidden_gas, n_hidden_ext):
+    
+class OpticalDepth(Layer):
+    def __init__(self, n_hidden, n_channels):
         super().__init__()
 
-        self._n_nets=29
+        self._n_channels = n_channels
 
         n_gas = {}
         n_gas['h2o']=29
@@ -50,37 +51,45 @@ class AtmLayer(Layer):
         # the atmosphere: o2, n2
         # Could probably include co2, too, but it is separated out for
         # now to account for annual differences
-        n_gas['u']=13  
+        n_gas['uniform']=13  
 
-        self.ke_gas = {}
+        self.gas_index = {}
+        self.gas_index['h2o']=2
+        self.gas_index['o3'] =3
+        self.gas_index['co2']=4
+        self.gas_index['n2o']=5
+        self.gas_index['ch4']=6
+        # 'u' represents all gases that are uniform in concentration in
+        # the atmosphere: o2, n2
+        # Could probably include co2, too, but it is separated out for
+        # now to account for annual differences
+        self.gas_index['uniform']=7  
+
+        self.ke_gas_net = {}
 
         # Represents a function of temperature and pressure
         # used to build a gas absorption coefficient, ke 
 
         for gas,n in n_gas.items():
-            self.ke_gas[gas] = [DenseFFN(n_hidden_gas,1) for _ in np.arange(n)]
+            self.ke_gas_net[gas] = [DenseFFN(n_hidden,1) for _ in np.arange(n)]
 
-        n_lw=self._n_nets
-        n_iw=self._n_nets
-
-        self.ke_lw = [NoInputLayer(1) for _ in np.arange(n_lw)]
-        self.ke_iw = [NoInputLayer(1) for _ in np.arange(n_iw)]
-
-        self.ext_net = [DenseFFN(n_hidden_ext,3) for _ in np.arange(self._n_nets)]
+        self.ke_lw_net = [NoInputLayer(1) for _ in np.arange(n_channels)]
+        self.ke_iw_net = [NoInputLayer(1) for _ in np.arange(n_channels)]
 
     # Note Ukkonen does not include nitrogen dioxide (no2) in simulation that generated data
     def call(self, input):
-        t_p, composition, lwp, iwp, mu, mu_bar = input
+        #t_p, composition, lwp, iwp = input
 
+        t_p = input[0:2]
+
+        # Optical depths for each gas
         tau_gas = {}
-        for gas, ke_gas in self.ke_gas.items():
-            tau_gas[gas] = [net(t_p) for net in ke_gas]
-            tau_gas[gas] = tf.multiply(tau_gas[gas],composition[gas])
-
-        tau_lw = [net() for net in self.ke_lw]
-        tau_lw = tf.multiply(tau_lw,lwp)
-        tau_iw = [net() for net in self.ke_iw]
-        tau_iw = tf.multiply(tau_iw,iwp)
+        for gas, ke_gas_net in self.ke_gas_net.items():
+            # Extinction coefficient determined by network
+            ke = [net(t_p) for net in ke_gas_net]
+            # Tau = ke * mass_path_for_gas
+            gas_index = self.gas_index[gas]
+            tau_gas[gas] = tf.multiply(ke,input[gas_index])
 
         h2o = tau_gas['h2o']
         o3 = tau_gas['o3']
@@ -89,67 +98,119 @@ class AtmLayer(Layer):
         ch4 = tau_gas['ch4']
         u = tau_gas['uniform']
 
-        tau_gases = tf.zeros((self._n_nets,1))
+        # Optical depth for each channel
+
+        # 0: tau for all gases
+        # 1: tau for liquid water
+        # 2: tau for ice water
+        output = tf.zeros((self._n_channels,3))
  
-        tau_gases[0,0] = h2o[0] + o3[0] + \
+        # Each channel combines various various extinction coefficients
+        # associated with various gases
+        output[0,0] = h2o[0] + o3[0] + \
             co2[0] + n2o[0] + ch4[0] + u[0]
-        tau_gases[1,0] = h2o[1] + o3[1] + \
+        output[1,0] = h2o[1] + o3[1] + \
             co2[1] + n2o[1] + ch4[1] + u[1]
-        tau_gases[2,0] = h2o[2] + o3[2] + \
+        output[2,0] = h2o[2] + o3[2] + \
             co2[2] + n2o[2] + ch4[2] + u[2]
 
-        tau_gases[3,0] = h2o[3] + ch4[3]
-        tau_gases[4,0] = h2o[4] + ch4[4]
+        output[3,0] = h2o[3] + ch4[3]
+        output[4,0] = h2o[4] + ch4[4]
 
-        tau_gases[5,0] = h2o[5] + co2[3]
-        tau_gases[6,0] = h2o[6] + co2[4]
+        output[5,0] = h2o[5] + co2[3]
+        output[6,0] = h2o[6] + co2[4]
 
-        tau_gases[7,0] = h2o[3] + ch4[5]
-        tau_gases[8,0] = h2o[4] + ch4[6]
+        output[7,0] = h2o[3] + ch4[5]
+        output[8,0] = h2o[4] + ch4[6]
 
-        tau_gases[9,0]  = h2o[9]  + co2[5]
-        tau_gases[10,0] = h2o[10] + co2[6]
+        output[9,0]  = h2o[9]  + co2[5]
+        output[10,0] = h2o[10] + co2[6]
 
-        tau_gases[11,0] = h2o[11] + ch4[7]
-        tau_gases[12,0] = h2o[12] + ch4[8]
+        output[11,0] = h2o[11] + ch4[7]
+        output[12,0] = h2o[12] + ch4[8]
 
-        tau_gases[13,0] = h2o[13] + co2[7]
-        tau_gases[14,0] = h2o[14] + co2[8]
+        output[13,0] = h2o[13] + co2[7]
+        output[14,0] = h2o[14] + co2[8]
 
-        tau_gases[15,0] = h2o[15] + u[3]
-        tau_gases[16,0] = h2o[16] + u[4]
+        output[15,0] = h2o[15] + u[3]
+        output[16,0] = h2o[16] + u[4]
 
-        tau_gases[17,0] = h2o[17] + o3[3] + u[5]
-        tau_gases[18,0] = h2o[18] + o3[4] + u[6]
+        output[17,0] = h2o[17] + o3[3] + u[5]
+        output[18,0] = h2o[18] + o3[4] + u[6]
 
-        tau_gases[19,0] = h2o[19] + o3[5] + u[7]
-        tau_gases[20,0] = h2o[20] + o3[6] + u[8]
+        output[19,0] = h2o[19] + o3[5] + u[7]
+        output[20,0] = h2o[20] + o3[6] + u[8]
 
-        tau_gases[21,0] = h2o[21] + o3[7] + u[9]
-        tau_gases[22,0] = h2o[22] + o3[8] + u[10]
+        output[21,0] = h2o[21] + o3[7] + u[9]
+        output[22,0] = h2o[22] + o3[8] + u[10]
 
-        tau_gases[23,0] = h2o[23]
-        tau_gases[24,0] = h2o[24]
+        output[23,0] = h2o[23]
+        output[24,0] = h2o[24]
 
-        tau_gases[25,0] = h2o[25] + o3[9]
-        tau_gases[26,0] = h2o[26] + o3[10]
+        output[25,0] = h2o[25] + o3[9]
+        output[26,0] = h2o[26] + o3[10]
 
-        tau_gases[27,0] = h2o[27] + o3[11] + u[11]
-        tau_gases[28,0] = h2o[28] + o3[12] + u[12]
+        output[27,0] = h2o[27] + o3[11] + u[11]
+        output[28,0] = h2o[28] + o3[12] + u[12]
 
+        # Optical depth for liquid and ice water for each channel
+        tau_lw = [net() for net in self.ke_lw_net]
+        output[:,1] = tf.multiply(tau_lw,input[8])
+        tau_iw = [net() for net in self.ke_iw_net]
+        output[:,2] = tf.multiply(tau_iw,input[9])
+
+        return output
+
+class LayerProperties(Layer):
+    def __init__(self, n_hidden, n_channels):
+        super().__init__()
+        self.extinction_net = [DenseFFN(n_hidden,3) for _ in np.arange(n_channels)]
+
+    def call(self, input):
+
+        # Components of optical depth for each channel
+        # tau_gases, tau_lw, tau_iw, mu, mu_bar = input
+
+        # Iterate over channels
+        # Uses mu
+        e_split_direct = [net(input[k,0],input[k,1],input[k,2], input[k,3]) for k, net in self.extinction_net.items()]
+        # Uses mu_bar
+        e_split_diffuse = [net(input[k,0],input[k,1],input[k,2], input[k,4]) for k, net in self.extinction_net.items()]
+
+        e_split_direct = tf.nn.softmax(e_split_direct)
+        e_split_diffuse = tf.nn.softmax(e_split_diffuse)
+
+        # Direct transmission of radiation. 
+        # Note that diffuse radiation can be directly transmitted
+        tau_total = input[:,0] + input[:,1] + input[:,2]
+        t_direct = tf.math.exp(-tau_total / input[:,3])
+        t_diffuse = tf.math.exp(-tau_total / input[:,4])
+
+        return t_direct, t_diffuse, e_split_direct, e_split_diffuse
+
+    def old_call(self, input):
+
+        # Components of optical depth for each channel
+        tau_gases, tau_lw, tau_iw, mu, mu_bar = input
+
+        # Total optical depth for each channel
         tau_total = tau_gases + tau_lw + tau_iw
+
+        # Use NN to determine other properties of layer
         input_1 = tau_lw / tau_total
         input_2 = tau_iw / tau_total
 
         input_3_direct = tau_total / mu
         input_3_diffuse = tau_total / mu_bar
 
-        e_split_direct = [net(input_1[k],input_2[k],input_3_direct[k], mu) for k, net in self.ext_net.items()]
-        e_split_diffuse = [net(input_1[k],input_2[k],input_3_diffuse[k], mu_bar) for k, net in self.ext_net.items()]
+        e_split_direct = [net(input_1[k],input_2[k],input_3_direct[k], mu[k]) for k, net in self.extinction_net.items()]
+        e_split_diffuse = [net(input_1[k],input_2[k],input_3_diffuse[k], mu_bar[k]) for k, net in self.extinction_net.items()]
 
         e_split_direct = tf.nn.softmax(e_split_direct)
         e_split_diffuse = tf.nn.softmax(e_split_diffuse)
 
+        # Direct transmission of radiation. 
+        # Note that diffuse radiation can be directly transmitted
         t_direct = tf.exp(-input_3_direct)
         t_diffuse = tf.exp(-input_3_diffuse)
 
@@ -287,7 +348,8 @@ def propagate_layer_up (t_direct, t_diffuse, e_split_direct, e_split_diffuse, r_
 
     # Multi-reflection for diffuse flux
 
-    t_multi_diffuse = t_diffuse * r_bottom_diffuse * e_diffuse * e_r_diffuse * d + \
+    t_multi_diffuse = \
+        t_diffuse * r_bottom_diffuse * e_diffuse * e_r_diffuse * d + \
         e_diffuse * e_t_diffuse * d
     
     a_bottom_multi_diffuse = t_diffuse * a_bottom_diffuse + t_multi_diffuse * a_bottom_diffuse
@@ -309,91 +371,123 @@ def propagate_layer_up (t_direct, t_diffuse, e_split_direct, e_split_diffuse, r_
             a_top_multi_direct, a_top_multi_diffuse, \
             a_bottom_multi_direct, a_bottom_multi_diffuse
 
-class RT_Net(Layer):
-    def __init__(self, n_hidden_gas, n_hidden_ext):
+class UpwardPropagationCell(tf.keras.layers.Layer):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.state_size = ???
+        self.output_size = ???
+
+
+
+
+    def call(self, input_at_t, states_at_t):
+        t_direct, t_diffuse, e_split_direct, e_split_diffuse = input_at_t
+
+        r_bottom_direct, r_bottom_diffuse, a_bottom_direct, a_bottom_diffuse = states_at_t
+
+        tmp = propagate_layer_up (t_direct, t_diffuse, e_split_direct, e_split_diffuse, r_bottom_direct, r_bottom_diffuse, a_bottom_direct, a_bottom_diffuse)
+
+        t_multi_direct, t_multi_diffuse, \
+            r_multi_direct, r_multi_diffuse, \
+            r_bottom_multi_direct, r_bottom_multi_diffuse, \
+            a_top_multi_direct, a_top_multi_diffuse, \
+            a_bottom_multi_direct, a_bottom_multi_diffuse = tmp
+
+        output_at_t = t_multi_direct, t_multi_diffuse, r_bottom_multi_direct, r_bottom_multi_diffuse
+        
+        state_at_t_plus_1 = r_multi_direct, r_multi_diffuse, a_top_multi_direct, a_top_multi_diffuse
+
+        return output_at_t, state_at_t_plus_1
+
+
+class DownwardPropagationCell(tf.keras.layers.Layer):
+    def __init__(self):
         super().__init__()
-        self.layer=AtmLayer(n_hidden_gas=n_hidden_gas, n_hidden_ext=n_hidden_ext)
-        self.mu_bar=NoInputLayer(1)
-        self.toa=NoInputLayer(self.layer._n_nets)
-    def call(self, input):
-        # Progress up the column to compute the impact of multi-reflection and transmission
-        # on the coefficients
 
-        # shape of input (n_layers, batch_size, n_channels)
-        t_p, composition, mu, albedo = input
-        mu_bar = self.mu_bar()
-        r_bottom_direct = albedo
-        r_bottom_diffuse = albedo
-        a_bottom_direct = 1.0 - albedo
-        a_bottom_diffuse = 1.0 - albedo
+    def call(self, input_at_t, states_at_t):
 
-        full_input = t_p, composition, mu, mu_bar
-        energy_input = 1412 * mu * tf.nn.softmax(self.toa()) # make sure outputs add to 1.0
+        direct_down, diffuse_down = states_at_t
 
-        input_shape = composition.shape
-        # batch size, number of layers, 10 outputs / per layer
-        column_coefficients = tf.zeros((input_shape[0],input_shape[1],10))
-        for i in np.arange(input_shape[0] - 1, 0, -1):
-
-            # Obtain coeffs of current atmospheric layer
-            layer_coefficients=self.layer(full_input[i])
-            t_direct, t_diffuse, e_split_direct, e_split_diffuse = layer_coefficients
-            # Multi reflection between current layer and bottom layer (composite of lower layers)
-            column_coefficients[i]= propagate_layer_up(
-                t_direct, t_diffuse, 
-                e_split_direct, e_split_diffuse, 
-                r_bottom_direct, r_bottom_diffuse,
-                a_bottom_direct,  a_bottom_diffuse)
-            
+        t_direct, t_diffuse, \
             t_multi_direct, t_multi_diffuse, \
             r_multi_direct, r_multi_diffuse, \
             r_bottom_multi_direct, r_bottom_multi_diffuse, \
             a_top_multi_direct, a_top_multi_diffuse, \
-            a_bottom_multi_direct, a_bottom_multi_diffuse = column_coefficients[i]
-            # Combine top and bottom layer after multi-reflection
-            r_bottom_direct = r_multi_direct
-            r_bottom_diffuse = r_multi_diffuse
-            a_bottom_direct = a_top_multi_direct + a_bottom_multi_direct
-            a_bottom_diffuse = a_top_multi_diffuse + a_bottom_multi_diffuse
+            a_bottom_multi_direct, a_bottom_multi_diffuse = input_at_t
 
+        absorbed_flux = direct_down * a_top_multi_direct + \
+                        diffuse_down * a_top_multi_diffuse
 
-        # Progress down the column to propagate the direct and diffuse flux
-        # and compute its absorption at each level
-        direct_flux_down = tf.zeros((input_shape[0],))
-        diffuse_flux_down = tf.zeros((input_shape[0],))
-        diffuse_flux_up = tf.zeros((input_shape[0],))
-        absorbed_flux = tf.zeros((input_shape[0],))
+        direct_flux_down = direct_down * t_direct
+        diffuse_flux_down = direct_down * t_multi_direct + \
+                                diffuse_down * (t_diffuse + t_multi_diffuse)
+        diffuse_flux_up = direct_down * r_bottom_multi_direct + \
+                            diffuse_down * r_bottom_multi_diffuse
+        
+        output_at_t = absorbed_flux, diffuse_flux_up
+        state_at_t_plus_1 = direct_flux_down, diffuse_flux_down
 
-        direct_down = 1.0
-        diffuse_down = 0.0 # 1.0
-
-        for i in np.arange(input_shape[0]):
-            t_multi_direct, t_multi_diffuse, \
-            r_multi_direct, r_multi_diffuse, \
-            r_bottom_multi_direct, r_bottom_multi_diffuse, \
-            a_top_multi_direct, a_top_multi_diffuse, \
-            a_bottom_multi_direct, a_bottom_multi_diffuse = column_coefficients[i]
-
-            absorbed_flux[i] = direct_down * a_top_multi_direct + \
-                            diffuse_down * a_top_multi_diffuse
-
-            direct_flux_down[i] = direct_down * t_direct
-            diffuse_flux_down[i] = direct_down * t_multi_direct + \
-                                    diffuse_down * (t_diffuse + t_multi_diffuse)
-            diffuse_flux_up[i] = direct_down * r_bottom_multi_direct + \
-                                diffuse_down * r_bottom_multi_diffuse
-            
-            direct_down = direct_flux_down[i]
-            diffuse_down = diffuse_flux_down[i]
-
+        return output_at_t, state_at_t_plus_1
+    
 def train():
     n_hidden_gas = [4, 5, 6]
-    n_hidden_ext = [4, 5, 6]
+    n_hidden_layer_coefficients = [4, 5, 6]
     n_layers = 60
     n_composition = 8 # 6 gases + liquid water + ice water
+    n_channels = 29
+    batch_size  = 2048
+
+    # Optical Depth
+
+    # +2 for temp and pressure (at layer not level)
+    optical_depth_input = Input(shape=(n_layers, 2 + n_composition), batch_size=batch_size, name="input_input")
+
+    optical_depth = TimeDistributed(OpticalDepth(n_hidden_gas, n_channels), name="optical_depth")(optical_depth_input)
+
+    # Layer coefficients: t, (1-t)t^, (1-t)r^, (1-t)a^
+
+    null_input_1 = Input(shape=(), batch_size=batch_size, name="null_input_1") #could be a ones input
+    mu_bar = NoInputLayer(1,name="mu_bar")(null_input_1)
+    #mu_bar = NoInputLayer(1,name="mu_bar")() #Not sure how to account for this in model def
+
+    mu_input = Input(shape=(1,), batch_size=batch_size, name="mu")
+
+    # Repeat over all n_channels
+    mu_array = tf.expand_dims(mu_input, axis=0)
+    mu_array = tf.repeat(mu_array, [n_channels], axis=0)
+
+    optical_depth_and_mu = tf.concat([optical_depth, mu_input, mu_bar], axis=1)
+
+    layer_coefficients = TimeDistributed(LayerProperties(n_hidden_layer_coefficients), name="layer_coefficients")(optical_depth_and_mu)
+
+    # Upward propagation: a and r 
+
+    upward_output, upward_state = tf.keras.layers.RNN(UpwardPropagationCell, return_sequences=True, return_state=False, go_backwards=True)(layer_coefficients)
+
+    # Downward propagation: t and a
+
+    downward_output, downward_state = tf.keras.layers.RNN(DownwardPropagationCell, return_sequences=True, return_state=False, go_backwards=False)(upward_output)
+
+    null_input_2 = Input(shape=(0,), batch_size=batch_size, name="null_input_2")
+    channel_split = NoInputLayer(n_nets,name="toa")(null_input_2)
+    toa = tf.nn.softmax(channel_split) * 1412.0
+    output_1 = tf.multiply(toa, downward_state)
+    output_2 = tf.multiply(toa, downward_output)
+
+    model = Model(inputs=[optical_depth_input,null_input_1,mu_input,null_input_2], outputs=[output_1,output_2])
+
+    ###########
+
     epochs      = 100000
     patience    = 1000 #25
-    batch_size  = 2048
+
+    r_bottom_direct = albedo
+    r_bottom_diffuse = albedo
+    a_bottom_direct = 1.0 - albedo
+    a_bottom_diffuse = 1.0 - albedo
+
+    initial_upward_state = r_bottom_direct, r_bottom_diffuse, a_bottom_direct, a_bottom_diffuse
+
     t_p_input = Input(shape=(n_layers,2),
                        batch_size=batch_size, name="t_p_input") 
     composition_input = Input(shape=(n_layers,n_composition),
