@@ -183,39 +183,15 @@ class LayerProperties(Layer):
         # Direct transmission of radiation. 
         # Note that diffuse radiation can be directly transmitted
         tau_total = input[:,0] + input[:,1] + input[:,2]
+
         t_direct = tf.math.exp(-tau_total / input[:,3])
+        t_direct = tf.expand_dims(t_direct, axis=1)
         t_diffuse = tf.math.exp(-tau_total / input[:,4])
+        t_diffuse = tf.expand_dims(t_diffuse, axis=1)
 
-        return t_direct, t_diffuse, e_split_direct, e_split_diffuse
+        output = tf.concat([t_direct, t_diffuse, e_split_direct, e_split_diffuse], axis=1)
 
-    def old_call(self, input):
-
-        # Components of optical depth for each channel
-        tau_gases, tau_lw, tau_iw, mu, mu_bar = input
-
-        # Total optical depth for each channel
-        tau_total = tau_gases + tau_lw + tau_iw
-
-        # Use NN to determine other properties of layer
-        input_1 = tau_lw / tau_total
-        input_2 = tau_iw / tau_total
-
-        input_3_direct = tau_total / mu
-        input_3_diffuse = tau_total / mu_bar
-
-        e_split_direct = [net(input_1[k],input_2[k],input_3_direct[k], mu[k]) for k, net in self.extinction_net.items()]
-        e_split_diffuse = [net(input_1[k],input_2[k],input_3_diffuse[k], mu_bar[k]) for k, net in self.extinction_net.items()]
-
-        e_split_direct = tf.nn.softmax(e_split_direct)
-        e_split_diffuse = tf.nn.softmax(e_split_diffuse)
-
-        # Direct transmission of radiation. 
-        # Note that diffuse radiation can be directly transmitted
-        t_direct = tf.exp(-input_3_direct)
-        t_diffuse = tf.exp(-input_3_diffuse)
-
-        return t_direct, t_diffuse, e_split_direct, e_split_diffuse
-
+        return output 
 
 
 def propagate_layer_up (t_direct, t_diffuse, e_split_direct, e_split_diffuse, r_bottom_direct, r_bottom_diffuse, a_bottom_direct, a_bottom_diffuse):
@@ -368,34 +344,30 @@ def propagate_layer_up (t_direct, t_diffuse, e_split_direct, e_split_diffuse, r_
     return t_multi_direct, t_multi_diffuse, \
             r_multi_direct, r_multi_diffuse, \
             r_bottom_multi_direct, r_bottom_multi_diffuse, \
-            a_top_multi_direct, a_top_multi_diffuse, \
-            a_bottom_multi_direct, a_bottom_multi_diffuse
+            a_top_multi_direct, a_top_multi_diffuse   #, \
+            #a_bottom_multi_direct, a_bottom_multi_diffuse
 
 class UpwardPropagationCell(tf.keras.layers.Layer):
-    def __init__(self, **kwargs):
+    def __init__(self, n_channels, **kwargs):
         super().__init__(**kwargs)
-        self.state_size = ???
-        self.output_size = ???
-
-
-
+        self.state_size = (n_channels, 4)
+        self.output_size = (n_channels, 4)
 
     def call(self, input_at_t, states_at_t):
-        t_direct, t_diffuse, e_split_direct, e_split_diffuse = input_at_t
+        t_direct, t_diffuse, e_split_direct, e_split_diffuse = input_at_t[:,0:1], input_at_t[:,1:2], input_at_t[:,2:5], input_at_t[:,5:8]
 
-        r_bottom_direct, r_bottom_diffuse, a_bottom_direct, a_bottom_diffuse = states_at_t
+        r_bottom_direct, r_bottom_diffuse, a_bottom_direct, a_bottom_diffuse = states_at_t[:,0:1], states_at_t[:,1:2], states_at_t[:,2:3], states_at_t[:,3:4]
 
         tmp = propagate_layer_up (t_direct, t_diffuse, e_split_direct, e_split_diffuse, r_bottom_direct, r_bottom_diffuse, a_bottom_direct, a_bottom_diffuse)
 
         t_multi_direct, t_multi_diffuse, \
             r_multi_direct, r_multi_diffuse, \
             r_bottom_multi_direct, r_bottom_multi_diffuse, \
-            a_top_multi_direct, a_top_multi_diffuse, \
-            a_bottom_multi_direct, a_bottom_multi_diffuse = tmp
+            a_top_multi_direct, a_top_multi_diffuse = tmp
 
-        output_at_t = t_multi_direct, t_multi_diffuse, r_bottom_multi_direct, r_bottom_multi_diffuse
+        output_at_t = tf.concat([t_multi_direct, t_multi_diffuse, r_bottom_multi_direct, r_bottom_multi_diffuse], axis=1)
         
-        state_at_t_plus_1 = r_multi_direct, r_multi_diffuse, a_top_multi_direct, a_top_multi_diffuse
+        state_at_t_plus_1 = tf.concat([r_multi_direct, r_multi_diffuse, a_top_multi_direct, a_top_multi_diffuse], axis=1)
 
         return output_at_t, state_at_t_plus_1
 
@@ -440,29 +412,41 @@ def train():
     # Optical Depth
 
     # +2 for temp and pressure (at layer not level)
-    optical_depth_input = Input(shape=(n_layers, 2 + n_composition), batch_size=batch_size, name="input_input")
+    optical_depth_input = Input(shape=(n_layers, 2 + n_composition), batch_size=batch_size, name="optical_depth_input")
 
+    # Shape = (n_layers, n_channels, 3)
+    # Columns: tau_gases, tau_lw, tau_ic
     optical_depth = TimeDistributed(OpticalDepth(n_hidden_gas, n_channels), name="optical_depth")(optical_depth_input)
 
     # Layer coefficients: t, (1-t)t^, (1-t)r^, (1-t)a^
 
     null_input_1 = Input(shape=(), batch_size=batch_size, name="null_input_1") #could be a ones input
     mu_bar = NoInputLayer(1,name="mu_bar")(null_input_1)
-    #mu_bar = NoInputLayer(1,name="mu_bar")() #Not sure how to account for this in model def
+
+    # Repeat over all n_channels and n_layers
+    mu_bar_array = tf.expand_dims(mu_bar, axis=0)
+    mu_bar_array = tf.repeat(mu_bar_array, [n_channels], axis=0)
+    mu_bar_array = tf.expand_dims(mu_bar_array, axis=0)
+    mu_bar_array = tf.repeat(mu_bar_array, [n_layers], axis=0)
+    mu_bar_array = tf.expand_dims(mu_bar_array, axis=2)
 
     mu_input = Input(shape=(1,), batch_size=batch_size, name="mu")
 
-    # Repeat over all n_channels
+    # Repeat over all n_channels and n_layers
     mu_array = tf.expand_dims(mu_input, axis=0)
     mu_array = tf.repeat(mu_array, [n_channels], axis=0)
+    mu_array = tf.expand_dims(mu_array, axis=0)
+    mu_array = tf.repeat(mu_array, [n_layers], axis=0)
+    mu_array = tf.expand_dims(mu_array, axis=2)
 
-    optical_depth_and_mu = tf.concat([optical_depth, mu_input, mu_bar], axis=1)
+    optical_depth_and_mu = tf.concat([optical_depth, mu_input, mu_bar], axis=2)
 
-    layer_coefficients = TimeDistributed(LayerProperties(n_hidden_layer_coefficients), name="layer_coefficients")(optical_depth_and_mu)
+    # t_direct, t_diffuse, e_split_direct, e_split_diffuse
+    layer_properties = TimeDistributed(LayerProperties(n_hidden_layer_coefficients), name="layer_properties")(optical_depth_and_mu)
 
     # Upward propagation: a and r 
 
-    upward_output, upward_state = tf.keras.layers.RNN(UpwardPropagationCell, return_sequences=True, return_state=False, go_backwards=True)(layer_coefficients)
+    upward_output, upward_state = tf.keras.layers.RNN(UpwardPropagationCell, return_sequences=True, return_state=False, go_backwards=True)(layer_properties)
 
     # Downward propagation: t and a
 
