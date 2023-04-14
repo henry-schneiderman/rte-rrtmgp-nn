@@ -3,12 +3,12 @@ from math import isclose
 
 
 import tensorflow as tf
-from tensorflow.keras import losses, optimizers, layers, Input, Model, Layer, Sequential
+from tensorflow.keras import losses, optimizers, layers, Input, Model, Sequential
 from tensorflow.keras.callbacks import EarlyStopping
 
 from tensorflow.keras.layers import Dense,TimeDistributed
 
-class Cell(tf.keras.layers.Layer):
+class Cell(layers.Layer):
     def __init__(self,  **kwargs):
         super().__init__(**kwargs)
         self.state_size = (1,)
