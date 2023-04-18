@@ -42,6 +42,8 @@ def train():
     n_layers = 10
     batch_size = 7
 
+    is_dynamic_input = False
+
     tmp = tf.range(n_layers)
     tmp = tf.expand_dims(tmp, axis=1)
     tmp = tf.expand_dims(tmp, axis=0)
@@ -53,15 +55,24 @@ def train():
     print (f"input = {tmp}   shape = {tmp.shape}")
 
     input = Input(shape=(n_layers, 1,), batch_size=batch_size, name="input")
-    initial_state = Input(shape=(1,),batch_size=batch_size, name="initial_state")
 
     layer = tf.keras.layers.RNN(Cell(), return_sequences=True, return_state=True, go_backwards=False, time_major=False)
 
+    if is_dynamic_input:
+        initial_state = Input(shape=(1,),batch_size=batch_size, name="initial_state")
+    else:
+        initial_state = tf.fill([batch_size, 1], 100.0)
+
     upward_output, upward_state = layer(inputs=input, initial_state=initial_state)
 
-    model = Model(inputs=[input, initial_state], outputs=[upward_output,upward_state])
-    state = tf.constant([[10],[110]])
-    print (f"output = {model(inputs=[tmp,state])}")
+    if is_dynamic_input:
+        model = Model(inputs=[input, initial_state], outputs=[upward_output,upward_state])
+        state = tf.constant([[10],[110]])
+        print (f"output = {model(inputs=[tmp,state])}")
+    else:
+        model = Model(inputs=[input], outputs=[upward_output,upward_state])
+        print (f"output = {model(inputs=[tmp])}")
+
 
 if __name__ == "__main__":
     train()

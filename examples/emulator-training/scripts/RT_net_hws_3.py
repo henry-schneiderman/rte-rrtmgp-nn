@@ -344,8 +344,8 @@ def propagate_layer_up (t_direct, t_diffuse, e_split_direct, e_split_diffuse, r_
     return t_multi_direct, t_multi_diffuse, \
             r_multi_direct, r_multi_diffuse, \
             r_bottom_multi_direct, r_bottom_multi_diffuse, \
-            a_top_multi_direct, a_top_multi_diffuse   #, \
-            #a_bottom_multi_direct, a_bottom_multi_diffuse
+            a_top_multi_direct, a_top_multi_diffuse, \
+            a_bottom_multi_direct, a_bottom_multi_diffuse
 
 class UpwardPropagationCell(tf.keras.layers.Layer):
     def __init__(self, n_channels, **kwargs):
@@ -363,9 +363,10 @@ class UpwardPropagationCell(tf.keras.layers.Layer):
         t_multi_direct, t_multi_diffuse, \
             r_multi_direct, r_multi_diffuse, \
             r_bottom_multi_direct, r_bottom_multi_diffuse, \
-            a_top_multi_direct, a_top_multi_diffuse = tmp
+            a_top_multi_direct, a_top_multi_diffuse, \
+            a_bottom_multi_direct, a_bottom_multi_diffuse= tmp
 
-        output_at_t = tf.concat([t_multi_direct, t_multi_diffuse, r_bottom_multi_direct, r_bottom_multi_diffuse], axis=1)
+        output_at_t = tf.concat([t_multi_direct, t_multi_diffuse, r_bottom_multi_direct, r_bottom_multi_diffuse, a_bottom_multi_direct, a_bottom_multi_diffuse], axis=1)
         
         state_at_t_plus_1 = tf.concat([r_multi_direct, r_multi_diffuse, a_top_multi_direct, a_top_multi_diffuse], axis=1)
 
@@ -445,8 +446,9 @@ def train():
     layer_properties = TimeDistributed(LayerProperties(n_hidden_layer_coefficients), name="layer_properties")(optical_depth_and_mu)
 
     # Upward propagation: a and r 
+    surface_input = Input(shape=(4), batch_size=batch_size, name="surface_input")
 
-    upward_output, upward_state = tf.keras.layers.RNN(UpwardPropagationCell, return_sequences=True, return_state=False, go_backwards=True)(layer_properties)
+    upward_output, upward_state = tf.keras.layers.RNN(UpwardPropagationCell, return_sequences=True, return_state=True, go_backwards=True)(input=layer_properties, initial_state=surface_input)
 
     # Downward propagation: t and a
 
