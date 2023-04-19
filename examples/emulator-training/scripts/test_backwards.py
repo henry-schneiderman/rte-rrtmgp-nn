@@ -61,7 +61,7 @@ def train():
     if is_dynamic_input:
         initial_state = Input(shape=(1,),batch_size=batch_size, name="initial_state")
     else:
-        initial_state = tf.fill([batch_size, 1], 100.0)
+        initial_state = tf.fill([batch_size, 1], 100.0) # this doesn't work if batch is different from input size
 
     upward_output, upward_state = layer(inputs=input, initial_state=initial_state)
 

@@ -366,7 +366,8 @@ class UpwardPropagationCell(tf.keras.layers.Layer):
             a_top_multi_direct, a_top_multi_diffuse, \
             a_bottom_multi_direct, a_bottom_multi_diffuse= tmp
 
-        output_at_t = tf.concat([t_multi_direct, t_multi_diffuse, r_bottom_multi_direct, r_bottom_multi_diffuse, a_bottom_multi_direct, a_bottom_multi_diffuse], axis=1)
+        output_at_t = tf.concat([t_multi_direct, t_multi_diffuse, r_bottom_multi_direct, r_bottom_multi_diffuse, 
+        a_bottom_multi_direct, a_bottom_multi_diffuse], axis=1)
         
         state_at_t_plus_1 = tf.concat([r_multi_direct, r_multi_diffuse, a_top_multi_direct, a_top_multi_diffuse], axis=1)
 
@@ -382,14 +383,15 @@ class DownwardPropagationCell(tf.keras.layers.Layer):
         direct_down, diffuse_down = states_at_t
 
         t_direct, t_diffuse, \
-            t_multi_direct, t_multi_diffuse, \
-            r_multi_direct, r_multi_diffuse, \
-            r_bottom_multi_direct, r_bottom_multi_diffuse, \
-            a_top_multi_direct, a_top_multi_diffuse, \
-            a_bottom_multi_direct, a_bottom_multi_diffuse = input_at_t
+        t_multi_direct, t_multi_diffuse, \
+        r_bottom_multi_direct, r_bottom_multi_diffuse, \
+        a_bottom_multi_direct, a_bottom_multi_diffuse = input_at_t
 
-        absorbed_flux = direct_down * a_top_multi_direct + \
-                        diffuse_down * a_top_multi_diffuse
+        #absorbed_flux = direct_down * a_top_multi_direct + \
+        #                diffuse_down * a_top_multi_diffuse
+
+        absorbed_flux_bottom = direct_down * a_bottom_multi_direct + \
+                                diffuse_down * a_bottom_multi_diffuse
 
         direct_flux_down = direct_down * t_direct
         diffuse_flux_down = direct_down * t_multi_direct + \
@@ -397,7 +399,9 @@ class DownwardPropagationCell(tf.keras.layers.Layer):
         diffuse_flux_up = direct_down * r_bottom_multi_direct + \
                             diffuse_down * r_bottom_multi_diffuse
         
-        output_at_t = absorbed_flux, diffuse_flux_up
+        output_at_t = direct_flux_down, diffuse_flux_down, \
+            diffuse_flux_up, absorbed_flux_bottom
+         
         state_at_t_plus_1 = direct_flux_down, diffuse_flux_down
 
         return output_at_t, state_at_t_plus_1
@@ -450,9 +454,19 @@ def train():
 
     upward_output, upward_state = tf.keras.layers.RNN(UpwardPropagationCell, return_sequences=True, return_state=True, go_backwards=True)(input=layer_properties, initial_state=surface_input)
 
+    r_multi_direct, r_multi_diffuse, a_top_multi_direct, a_top_multi_diffuse = upward_state
+
+    toa_input = Input(shape=(2), batch_size=batch_size, name="surface_input")
+
+    # Add network with Channels
+
+    t_up_diffuse = toa_input * [r_multi_direct, r_multi_diffuse]
+
+    top_layer_absorption = toa_input * [a_top_multi_direct, a_top_multi_diffuse]
+
     # Downward propagation: t and a
 
-    downward_output, downward_state = tf.keras.layers.RNN(DownwardPropagationCell, return_sequences=True, return_state=False, go_backwards=False)(upward_output)
+    downward_output = tf.keras.layers.RNN(DownwardPropagationCell, return_sequences=True, return_state=False, go_backwards=False)(input=upward_output, initial_state=toa_input)
 
     null_input_2 = Input(shape=(0,), batch_size=batch_size, name="null_input_2")
     channel_split = NoInputLayer(n_nets,name="toa")(null_input_2)
@@ -473,6 +487,11 @@ def train():
     a_bottom_diffuse = 1.0 - albedo
 
     initial_upward_state = r_bottom_direct, r_bottom_diffuse, a_bottom_direct, a_bottom_diffuse
+
+    t_down_direct = 1412.0
+    t_down_diffuse = 0.0
+
+    t_up_diffuse = t_down_direct + r_multi_direct + t_down_diffuse * r_multi_diffuse
 
     t_p_input = Input(shape=(n_layers,2),
                        batch_size=batch_size, name="t_p_input") 
