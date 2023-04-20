@@ -396,6 +396,19 @@ class DownwardPropagationCell(tf.keras.layers.Layer):
 
         return output_at_i, state_at_i_plus_1
     
+def absorbed_flux_to_heating_rate(absorbed_flux, delta_pressure):
+
+    # Note cp varies with temp and pressure: https://www.ohio.edu/mechanical/thermo/property_tables/air/air_Cp_Cv.html#:~:text=The%20nominal%20values%20used%20for,v%20%3D%200.718%20kJ%2Fkg.
+    cp = 1004 # J K-1  kg-1 
+    g = 9.81 # m s-2
+    df_dp = tf.divide(absorbed_flux, delta_pressure)
+    return tf.multiply(-(g/cp) * (24 * 3600), df_dp
+
+class CustomLoss(tf.keras.losses.Loss):
+    def call(self, y_true, y_pred):
+        flux_down_direct, flux_down_diffuse, flux_up_diffuse, heating_rate = y_true
+
+    
 def train():
     n_hidden_gas = [4, 5, 6]
     n_hidden_layer_coefficients = [4, 5, 6]
@@ -477,9 +490,11 @@ def train():
 
     absorbed_flux = tf.math.reduce_sum(absorbed_flux, axis=1)
 
+    heating_rate = absorbed_flux_to_heating_rate (absorbed_flux, delta_pressure_input)
+
     delta_pressure_input = Input(shape=(n_layers + 1), batch_size=batch_size, name="delta_pressure_input")
 
-    model = Model(inputs=[t_p_input,composition_input,null_mu_bar_input,mu_input,surface_input, null_toa_input, delta_pressure_input], outputs=[flux_down_direct, flux_down_diffuse, flux_up_diffuse, absorbed_flux])
+    model = Model(inputs=[t_p_input,composition_input,null_mu_bar_input,mu_input,surface_input, null_toa_input, delta_pressure_input], outputs=[flux_down_direct, flux_down_diffuse, flux_up_diffuse, heating_rate])
 
     ###########
 
