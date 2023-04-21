@@ -402,13 +402,71 @@ def absorbed_flux_to_heating_rate(absorbed_flux, delta_pressure):
     cp = 1004 # J K-1  kg-1 
     g = 9.81 # m s-2
     df_dp = tf.divide(absorbed_flux, delta_pressure)
-    return tf.multiply(-(g/cp) * (24 * 3600), df_dp
+    return tf.multiply(-(g/cp) * (24 * 3600), df_dp)
+
+
+def mse_heating_rate (toa_flux):
+    def loss(y_true, y_pred):
+        flux_down_direct_true, flux_down_true, flux_up_true, heating_rate_true = y_true
+
+        flux_down_direct_pred, flux_down_pred, flux_up_pred, heating_rate_pred = y_pred
+
+        error_heating_rate = tf.reduce_mean(tf.math.square(toa_flux * (heating_rate_pred - heating_rate_true)))
+
+        return error_heating_rate
+    loss.__name__ = 'mse_heating_rate'
+    return loss
+    
+def mse_weighted_flux (toa_flux, weight_profile):
+    def loss(y_true, y_pred):
+        flux_down_direct_true, flux_down_true, flux_up_true, heating_rate_true = y_true
+
+        flux_down_direct_pred, flux_down_pred, flux_up_pred, heating_rate_pred = y_pred
+
+        error_flux_down = tf.reduce_mean(tf.math.square(toa_flux * weight_profile * (flux_down_pred - flux_down_true)))
+
+        error_flux_up = tf.reduce_mean(tf.math.square(toa_flux * weight_profile * (flux_up_pred - flux_up_true)))
+
+        return 0.5 * (error_flux_down + error_flux_up)
+    loss.__name__ = 'mse_weighted_flux'
+    return loss
+
+def mse_unweighted_flux (toa_flux):
+    def loss(y_true, y_pred):
+        flux_down_direct_true, flux_down_true, flux_up_true, heating_rate_true = y_true
+
+        flux_down_direct_pred, flux_down_pred, flux_up_pred, heating_rate_pred = y_pred
+
+        error_flux_down = tf.reduce_mean(tf.math.square(toa_flux * (flux_down_pred - flux_down_true)))
+
+        error_flux_up = tf.reduce_mean(tf.math.square(toa_flux * (flux_up_pred - flux_up_true)))
+
+        return 0.5 * (error_flux_down + error_flux_up)
+    loss.__name__ = 'mse_unweighted_flux'
+    return loss
 
 class CustomLoss(tf.keras.losses.Loss):
-    def call(self, y_true, y_pred):
-        flux_down_direct, flux_down_diffuse, flux_up_diffuse, heating_rate = y_true
 
-    
+    def __init__(self, weight_profile):
+        super().__init__()
+        self.weight_profile = weight_profile
+
+    def call(self, y_true, y_pred):
+        flux_down_direct_true, flux_down_true, flux_up_true, heating_rate_true = y_true
+
+        flux_down_direct_pred, flux_down_pred, flux_up_pred, heating_rate_pred = y_pred
+
+        error_flux_down = tf.reduce_mean(tf.math.square(self.weight_profile * (flux_down_pred - flux_down_true)))
+
+        error_flux_up = tf.reduce_mean(tf.math.square(self.weight_profile * (flux_up_pred - flux_up_true)))
+
+        error_flux = 0.5 * (error_flux_down + error_flux_up)
+
+        error_heating_rate = tf.reduce_mean(tf.math.square(heating_rate_pred - heating_rate_true))
+
+        alpha = 1e-4
+        return alpha * error_heating_rate + (1.0 - alpha)*error_flux 
+
 def train():
     n_hidden_gas = [4, 5, 6]
     n_hidden_layer_coefficients = [4, 5, 6]
@@ -459,10 +517,6 @@ def train():
 
     flux_down_above_direct = Dense(units=n_channels,bias_initializer='random_normal', activation='softmax')(null_toa_input)
 
-    toa_input = Input(shape=(1), batch_size=batch_size, name="toa_input")
-
-    flux_down_above_direct = tf.multiply(flux_down_above_direct,toa_input)
-
     # Set to zeros
     flux_down_above_diffuse = Input(shape=(n_channels), batch_size=batch_size, name="flux_down_above_diffuse")
 
@@ -486,15 +540,23 @@ def train():
 
     flux_down_diffuse = tf.math.reduce_sum(flux_down_diffuse, axis=1)
 
-    flux_up_diffuse = tf.math.reduce_sum(flux_up_diffuse, axis=1)
+    # All upwelling flux is diffuse
+    flux_up = tf.math.reduce_sum(flux_up_diffuse, axis=1)
+
+    flux_down = flux_down_direct+ flux_down_below_diffuse
 
     absorbed_flux = tf.math.reduce_sum(absorbed_flux, axis=1)
 
     heating_rate = absorbed_flux_to_heating_rate (absorbed_flux, delta_pressure_input)
 
+    # Inputs for metrics and loss
     delta_pressure_input = Input(shape=(n_layers + 1), batch_size=batch_size, name="delta_pressure_input")
 
-    model = Model(inputs=[t_p_input,composition_input,null_mu_bar_input,mu_input,surface_input, null_toa_input, delta_pressure_input], outputs=[flux_down_direct, flux_down_diffuse, flux_up_diffuse, heating_rate])
+    toa_input = Input(shape=(1), batch_size=batch_size, name="toa_input")
+
+    model = Model(inputs=[t_p_input,composition_input,null_mu_bar_input, mu_input,surface_input, null_toa_input, toa_input, delta_pressure_input], outputs=[flux_down_direct, flux_down, flux_up, heating_rate])
+
+    weight_profile = tf.reduce_mean((flux_down),axis=0)
 
     ###########
 
@@ -507,10 +569,20 @@ def train():
     a_bottom_diffuse = 1.0 - albedo
 
 
-    model.compile(optimizer=optimizers.Adam(learning_rate=0.001), loss="mse")
-    callbacks = [EarlyStopping(monitor='rmse_hr',  patience=patience, verbose=1, \
-                                 mode='min',restore_best_weights=True)]
+    model.compile(
+        optimizer=optimizers.Adam(learning_rate=0.001),
+        loss=CustomLoss(weight_profile),
+        metrics=[
+            mse_heating_rate(toa_input),
+            mse_unweighted_flux(toa_input),
+            mse_weighted_flux(toa_input, weight_profile),
+        ],
+        
+    )
 
 
-
+    model.fit(
+        callbacks = [EarlyStopping(monitor='mse_heating_rate',  patience=patience, verbose=1, \
+                                 mode='min',restore_best_weights=True),]
+    )
     
