@@ -96,9 +96,16 @@ def get_max():
     t_p, composition, null_mu_bar, mu, surface, null_toa, \
     toa, mass_coordinate = inputs
 
-    max = np.amax (t_p[:,58:], axis=(0, 1))
-    min = np.amin (t_p[:,58:], axis=(0, 1))
+    max = np.amax (t_p, axis=(0, 1))
+    min = np.amin (t_p, axis=(0, 1))
     print(f"t_p shape: {t_p.shape}   min = {min}    max = {max}")
+
+    max = np.amax (composition, axis=(0, 1))
+    min = np.amin (composition, axis=(0, 1))
+    print(f"composition  h2o o3 co2 n2o ch4 mass lwp iwp;")
+    print(f" shape: {composition.shape}")
+    print(f" min = {min}")
+    print(f" max = {max}")
 
 if __name__ == "__main__":
     get_max()
