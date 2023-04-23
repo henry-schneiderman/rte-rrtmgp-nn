@@ -84,3 +84,21 @@ def load_data(file_name):
 
     return inputs, outputs 
 
+def get_max():
+
+    datadir     = "/home/hws/tmp/"
+    filename_training       = datadir + "/RADSCHEME_data_g224_CAMS_2009-2018_sans_2014-2015.2.nc"
+    filename_validation   = datadir + "/RADSCHEME_data_g224_CAMS_2014.2.nc"
+    filename_testing  = datadir +  "/RADSCHEME_data_g224_CAMS_2015_true_solar_angles.nc"
+
+    inputs, _ = load_data(filename_validation)
+
+    t_p, composition, null_mu_bar, mu, surface, null_toa, \
+    toa, mass_coordinate = inputs
+
+    max = np.amax (t_p, axis=-1)
+    min = np.amin (t_p, axis=-1)
+    print(f"t_p shape: {t_p.shape}   min = {min}    max = {max}")
+
+if __name__ == "__main__":
+    get_max()

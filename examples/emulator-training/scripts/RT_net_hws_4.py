@@ -466,6 +466,11 @@ def train():
     n_channels = 29
     batch_size  = 2048
 
+    datadir     = "/home/hws/tmp/"
+    filename_training       = datadir + "/RADSCHEME_data_g224_CAMS_2009-2018_sans_2014-2015.2.nc"
+    filename_validation   = datadir + "/RADSCHEME_data_g224_CAMS_2014.2.nc"
+    filename_testing  = datadir +  "/RADSCHEME_data_g224_CAMS_2015_true_solar_angles.nc"
+
     # Optical Depth
 
     t_p_input = Input(shape=(n_layers,2),
@@ -560,12 +565,12 @@ def train():
             mse_unweighted_flux(toa_input),
             mse_weighted_flux(toa_input, weight_profile),
         ],
-        
     )
 
-    training_inputs, training_outputs = load_data(file_name_training)
-    validation_inputs, validation_outputs = load_data(file_name_validation)
-    model.fit(x=training_inputs, y=training_outputs,
+    training_inputs, training_outputs = load_data(filename_training)
+    validation_inputs, validation_outputs = load_data(filename_validation)
+
+    history = model.fit(x=training_inputs, y=training_outputs,
               epochs = epochs, batch_size=batch_size,
               shuffle=True, verbose=1,
               validation_data=(validation_inputs, validation_outputs),callbacks = [EarlyStopping(monitor='mse_heating_rate',  patience=patience, verbose=1, \
