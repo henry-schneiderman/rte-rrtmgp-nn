@@ -22,8 +22,8 @@ def load_data(file_name):
     n_samples = n_exp * n_col 
 
     composition = np.reshape(composition, (n_samples,n_layers,n_composition))
-    t_p = composition[0:2,:,:]
-    composition = composition[2:,:,:]
+    t_p = composition[:,:,0:2]
+    composition = composition[:,:,2:]
     n_composition = n_composition - 2
 
     pressure = data.variables['pres_level'][:,:,:].data 
@@ -59,15 +59,15 @@ def load_data(file_name):
 
     null_toa = np.zeros((n_samples,0))
 
-    rsu = data.variables['rsu'][:]
-    rsd = data.variables['rsd'][:]
-    rsd_direct = data.variables['rsd_dir'][:]
+    rsu = data.variables['rsu'][:].data
+    rsd = data.variables['rsd'][:].data
+    rsd_direct = data.variables['rsd_dir'][:].data
 
-    rsu     = np.reshape(rsu,  (n_samples,n_levels))
-    rsd     = np.reshape(rsd,  (n_samples,n_levels))
-    rsd_direct     = np.reshape(rsd_direct,  (n_samples,n_levels))
+    rsu     = rsu.reshape((n_samples,n_levels))
+    rsd     = rsd.reshape((n_samples,n_levels))
+    rsd_direct     = rsd_direct.reshape((n_samples,n_levels))
 
-    toa = np.copy(rsd[:,0])
+    toa = np.copy(rsd[:,0:1])
 
     rsu = rsu / toa
     rsd = rsd / toa
@@ -91,13 +91,13 @@ def get_max():
     filename_validation   = datadir + "/RADSCHEME_data_g224_CAMS_2014.2.nc"
     filename_testing  = datadir +  "/RADSCHEME_data_g224_CAMS_2015_true_solar_angles.nc"
 
-    inputs, _ = load_data(filename_validation)
+    inputs, _ = load_data(filename_training)
 
     t_p, composition, null_mu_bar, mu, surface, null_toa, \
     toa, mass_coordinate = inputs
 
-    max = np.amax (t_p, axis=-1)
-    min = np.amin (t_p, axis=-1)
+    max = np.amax (t_p[:,58:], axis=(0, 1))
+    min = np.amin (t_p[:,58:], axis=(0, 1))
     print(f"t_p shape: {t_p.shape}   min = {min}    max = {max}")
 
 if __name__ == "__main__":
