@@ -10,7 +10,7 @@ from tensorflow.keras.callbacks import EarlyStopping
 
 from tensorflow.keras.layers import Dense,TimeDistributed
 
-
+from RT_data_hws import absorbed_flux_to_heating_rate, load_data
 class DenseFFN(Layer):
     """
     n_hidden[n_layers]: array of the number of nodes per layer
@@ -396,15 +396,6 @@ class DownwardPropagationCell(tf.keras.layers.Layer):
 
         return output_at_i, state_at_i_plus_1
     
-def absorbed_flux_to_heating_rate(absorbed_flux, delta_pressure):
-
-    # Note cp varies with temp and pressure: https://www.ohio.edu/mechanical/thermo/property_tables/air/air_Cp_Cv.html#:~:text=The%20nominal%20values%20used%20for,v%20%3D%200.718%20kJ%2Fkg.
-    cp = 1004 # J K-1  kg-1 
-    g = 9.81 # m s-2
-    df_dp = tf.divide(absorbed_flux, delta_pressure)
-    return tf.multiply(-(g/cp) * (24 * 3600), df_dp)
-
-
 def mse_heating_rate (toa_flux):
     def loss(y_true, y_pred):
         flux_down_direct_true, flux_down_true, flux_up_true, heating_rate_true = y_true
@@ -547,27 +538,19 @@ def train():
 
     absorbed_flux = tf.math.reduce_sum(absorbed_flux, axis=1)
 
-    heating_rate = absorbed_flux_to_heating_rate (absorbed_flux, delta_pressure_input)
-
     # Inputs for metrics and loss
-    delta_pressure_input = Input(shape=(n_layers + 1), batch_size=batch_size, name="delta_pressure_input")
+    delta_pressure_input = Input(shape=(n_layers), batch_size=batch_size, name="delta_pressure_input")
 
     toa_input = Input(shape=(1), batch_size=batch_size, name="toa_input")
+
+    heating_rate = absorbed_flux_to_heating_rate (absorbed_flux, delta_pressure_input)
 
     model = Model(inputs=[t_p_input,composition_input,null_mu_bar_input, mu_input,surface_input, null_toa_input, toa_input, delta_pressure_input], outputs=[flux_down_direct, flux_down, flux_up, heating_rate])
 
     weight_profile = tf.reduce_mean((flux_down),axis=0)
 
-    ###########
-
     epochs      = 100000
     patience    = 1000 #25
-
-    r_bottom_direct = albedo
-    r_bottom_diffuse = albedo
-    a_bottom_direct = 1.0 - albedo
-    a_bottom_diffuse = 1.0 - albedo
-
 
     model.compile(
         optimizer=optimizers.Adam(learning_rate=0.001),
@@ -580,9 +563,12 @@ def train():
         
     )
 
-
-    model.fit(
-        callbacks = [EarlyStopping(monitor='mse_heating_rate',  patience=patience, verbose=1, \
-                                 mode='min',restore_best_weights=True),]
-    )
+    training_inputs, training_outputs = load_data(file_name_training)
+    validation_inputs, validation_outputs = load_data(file_name_validation)
+    model.fit(x=training_inputs, y=training_outputs,
+              epochs = epochs, batch_size=batch_size,
+              shuffle=True, verbose=1,
+              validation_data=(validation_inputs, validation_outputs),callbacks = [EarlyStopping(monitor='mse_heating_rate',  patience=patience, verbose=1, \
+                                 mode='min',restore_best_weights=True),])
+    
     
