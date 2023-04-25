@@ -66,13 +66,13 @@ class OpticalDepth(Layer):
         for gas,n in n_gas.items():
             self.ke_gas_net[gas] = [DenseFFN(n_hidden,1) for _ in np.arange(n)]
 
-        self.ke_lw_net = [NoInputLayer(1) for _ in np.arange(n_channels)]
-        self.ke_iw_net = [NoInputLayer(1) for _ in np.arange(n_channels)]
+        self.ke_lw_net = [Dense(units=1,bias_initializer='random_normal', activation='relu') for _ in np.arange(n_channels)]
+        self.ke_iw_net = [Dense(units=1, bias_initializer='random_normal', activation='relu') for _ in np.arange(n_channels)]
 
     # Note Ukkonen does not include nitrogen dioxide (no2) in simulation that generated data
     def call(self, input):
 
-        t_p, composition = input
+        t_p, composition, null_lw, null_iw = input
 
         # Generate multiple optical depths for each gas
 
@@ -143,9 +143,9 @@ class OpticalDepth(Layer):
         tau_gases[28] = h2o[28] + o3[12] + u[12]
 
         # Optical depth for liquid and ice water for each channel
-        tau_lw = [net() for net in self.ke_lw_net]
+        tau_lw = [net(null_lw) for net in self.ke_lw_net]
         tau_lw = tf.multiply(tau_lw,composition[6])
-        tau_iw = [net() for net in self.ke_iw_net]
+        tau_iw = [net(null_iw) for net in self.ke_iw_net]
         tau_iw = tf.multiply(tau_iw,composition[7])
 
         return [tau_gases, tau_lw, tau_iw]
@@ -380,8 +380,9 @@ class DownwardPropagationCell(tf.keras.layers.Layer):
         absorbed_flux_top = flux_down_above_direct * a_top_multi_direct + \
                         flux_down_above_diffuse * a_top_multi_diffuse
 
-        absorbed_flux_bottom = flux_down_above_direct * a_bottom_multi_direct + \
-                                flux_down_above_diffuse * a_bottom_multi_diffuse
+        # Will want this later when incorporate surface interactions
+        #absorbed_flux_bottom = flux_down_above_direct * a_bottom_multi_direct + \
+        #flux_down_above_diffuse * a_bottom_multi_diffuse
 
         flux_down_below_direct = flux_down_above_direct * t_direct
         flux_down_below_diffuse = flux_down_above_direct * t_multi_direct + \
@@ -390,7 +391,7 @@ class DownwardPropagationCell(tf.keras.layers.Layer):
                             flux_down_above_diffuse * r_bottom_multi_diffuse
         
         output_at_i = flux_down_below_direct, flux_down_below_diffuse, \
-            flux_up_below_diffuse, absorbed_flux_top, absorbed_flux_bottom
+            flux_up_below_diffuse, absorbed_flux_top #, #absorbed_flux_bottom
          
         state_at_i_plus_1 = flux_down_below_direct, flux_down_below_diffuse
 
@@ -398,9 +399,9 @@ class DownwardPropagationCell(tf.keras.layers.Layer):
     
 def mse_heating_rate (toa_flux):
     def loss(y_true, y_pred):
-        flux_down_direct_true, flux_down_true, flux_up_true, heating_rate_true = y_true
+        _, _, _, heating_rate_true = y_true
 
-        flux_down_direct_pred, flux_down_pred, flux_up_pred, heating_rate_pred = y_pred
+        _, _, _, heating_rate_pred = y_pred
 
         error_heating_rate = tf.reduce_mean(tf.math.square(toa_flux * (heating_rate_pred - heating_rate_true)))
 
@@ -410,9 +411,9 @@ def mse_heating_rate (toa_flux):
     
 def mse_weighted_flux (toa_flux, weight_profile):
     def loss(y_true, y_pred):
-        flux_down_direct_true, flux_down_true, flux_up_true, heating_rate_true = y_true
+        _, flux_down_true, flux_up_true, _ = y_true
 
-        flux_down_direct_pred, flux_down_pred, flux_up_pred, heating_rate_pred = y_pred
+        _, flux_down_pred, flux_up_pred, _ = y_pred
 
         error_flux_down = tf.reduce_mean(tf.math.square(toa_flux * weight_profile * (flux_down_pred - flux_down_true)))
 
@@ -424,9 +425,9 @@ def mse_weighted_flux (toa_flux, weight_profile):
 
 def mse_unweighted_flux (toa_flux):
     def loss(y_true, y_pred):
-        flux_down_direct_true, flux_down_true, flux_up_true, heating_rate_true = y_true
+        _, flux_down_true, flux_up_true, _ = y_true
 
-        flux_down_direct_pred, flux_down_pred, flux_up_pred, heating_rate_pred = y_pred
+        _, flux_down_pred, flux_up_pred, _ = y_pred
 
         error_flux_down = tf.reduce_mean(tf.math.square(toa_flux * (flux_down_pred - flux_down_true)))
 
@@ -443,9 +444,9 @@ class CustomLoss(tf.keras.losses.Loss):
         self.weight_profile = weight_profile
 
     def call(self, y_true, y_pred):
-        flux_down_direct_true, flux_down_true, flux_up_true, heating_rate_true = y_true
+        _, flux_down_true, flux_up_true, heating_rate_true = y_true
 
-        flux_down_direct_pred, flux_down_pred, flux_up_pred, heating_rate_pred = y_pred
+        _, flux_down_pred, flux_up_pred, heating_rate_pred = y_pred
 
         error_flux_down = tf.reduce_mean(tf.math.square(self.weight_profile * (flux_down_pred - flux_down_true)))
 
@@ -459,8 +460,8 @@ class CustomLoss(tf.keras.losses.Loss):
         return alpha * error_heating_rate + (1.0 - alpha)*error_flux 
 
 def train():
-    n_hidden_gas = [4, 5, 6]
-    n_hidden_layer_coefficients = [4, 5, 6]
+    n_hidden_gas = [4, 5]
+    n_hidden_layer_coefficients = [4, 5]
     n_layers = 60
     n_composition = 8 # 6 gases + liquid water + ice water
     n_channels = 29
@@ -479,7 +480,11 @@ def train():
     composition_input = Input(shape=(n_layers,n_composition),
                                batch_size=batch_size, name="composition_input")
 
-    optical_depth = TimeDistributed(OpticalDepth(n_hidden_gas, n_channels), name="optical_depth")([t_p_input, composition_input])
+    null_lw_input = Input(shape=(0), batch_size=batch_size, name="null_lw_input")
+
+    null_iw_input = Input(shape=(0), batch_size=batch_size, name="null_iw_input")
+
+    optical_depth = TimeDistributed(OpticalDepth(n_hidden_gas, n_channels), name="optical_depth")([t_p_input, composition_input, null_lw_input, null_iw_input])
 
     # Layer coefficients: 
     # direct_transmission, scattered_transmission,
@@ -503,7 +508,7 @@ def train():
 
     upward_output, upward_state = tf.keras.layers.RNN(UpwardPropagationCell, return_sequences=True, return_state=True, go_backwards=True)(input=layer_properties, initial_state=surface_input)
 
-    r_multi_direct, r_multi_diffuse, a_top_multi_direct, a_top_multi_diffuse = upward_state
+    r_multi_direct, _, _, _ = upward_state
 
     # Downward propagation:
     # Determine flux absorbed at each level
@@ -522,15 +527,13 @@ def train():
     downward_output = tf.keras.layers.RNN(DownwardPropagationCell, return_sequences=True, return_state=False, go_backwards=True)(input=upward_output, initial_state=[flux_down_above_direct, flux_down_above_diffuse])
 
     flux_down_below_direct, flux_down_below_diffuse, \
-            flux_up_below_diffuse, absorbed_flux_top, absorbed_flux_bottom = downward_output
+            flux_up_below_diffuse, absorbed_flux_top = downward_output
 
     flux_down_direct = tf.concat([flux_down_above_direct,flux_down_below_direct], axis=0)
 
     flux_down_diffuse = tf.concat([flux_down_above_diffuse,flux_down_below_diffuse], axis=0)
 
     flux_up_diffuse = tf.concat([flux_up_above_diffuse, flux_up_below_diffuse], axis=0)
-
-    absorbed_flux = tf.concat([absorbed_flux_top, absorbed_flux_bottom[-1]], axis=0)
 
     flux_down_direct = tf.math.reduce_sum(flux_down_direct, axis=1)
 
@@ -541,7 +544,7 @@ def train():
 
     flux_down = flux_down_direct+ flux_down_below_diffuse
 
-    absorbed_flux = tf.math.reduce_sum(absorbed_flux, axis=1)
+    absorbed_flux = tf.math.reduce_sum(absorbed_flux_top, axis=1)
 
     # Inputs for metrics and loss
     delta_pressure_input = Input(shape=(n_layers), batch_size=batch_size, name="delta_pressure_input")
@@ -550,7 +553,7 @@ def train():
 
     heating_rate = absorbed_flux_to_heating_rate (absorbed_flux, delta_pressure_input)
 
-    model = Model(inputs=[t_p_input,composition_input,null_mu_bar_input, mu_input,surface_input, null_toa_input, toa_input, delta_pressure_input], outputs=[flux_down_direct, flux_down, flux_up, heating_rate])
+    model = Model(inputs=[t_p_input,composition_input,null_lw_input, null_iw_input, null_mu_bar_input, mu_input,surface_input, null_toa_input, toa_input, delta_pressure_input], outputs=[flux_down_direct, flux_down, flux_up, heating_rate])
 
     weight_profile = tf.reduce_mean((flux_down),axis=0)
 

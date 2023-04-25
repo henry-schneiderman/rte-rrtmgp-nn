@@ -4,10 +4,10 @@ import numpy as np
 from math import isclose
 
 import tensorflow as tf
-from tensorflow.keras import losses, optimizers, layers, Input, Model, Layer, Sequential
+from tensorflow.keras import optimizers, Input, Model 
 from tensorflow.keras.callbacks import EarlyStopping
 
-from tensorflow.keras.layers import Dense,TimeDistributed
+from tensorflow.keras.layers import Dense,TimeDistributed,Layer,RNN
 
 from RT_data_hws import absorbed_flux_to_heating_rate, load_data
 class DenseFFN(Layer):
@@ -54,7 +54,7 @@ class OpticalDepth(Layer):
         # Generate multiple optical depths for each gas
 
         tau_gas = []
-        for i, ke_gas_net in self.ke_gas_net.items():
+        for i, ke_gas_net in enumerate(self.ke_gas_net):
             # Extinction coefficient determined by network
             ke = [net(t_p) for net in ke_gas_net]
             # Tau = ke * mass_path_for_gas
@@ -65,59 +65,66 @@ class OpticalDepth(Layer):
         # Optical depth for each channel
         # using various combinations of gases' optical depths
 
-        tau_gases = tf.zeros((self._n_channels))
+        #tau_gases = tf.Variable(initial_value=np.zeros((self._n_channels, h2o.shape[1])))
+
+        tau_gases = []
  
-        tau_gases[0] = h2o[0] + o3[0] + \
-            co2[0] + n2o[0] + ch4[0] + u[0]
-        tau_gases[1] = h2o[1] + o3[1] + \
-            co2[1] + n2o[1] + ch4[1] + u[1]
-        tau_gases[2] = h2o[2] + o3[2] + \
-            co2[2] + n2o[2] + ch4[2] + u[2]
+        tau_gases.append(h2o[0] + o3[0] + \
+            co2[0] + n2o[0] + ch4[0] + u[0])
 
-        tau_gases[3] = h2o[3] + ch4[3]
-        tau_gases[4] = h2o[4] + ch4[4]
+        tau_gases.append(h2o[0] + o3[0] + \
+            co2[0] + n2o[0] + ch4[0] + u[0])
+        tau_gases.append(h2o[1] + o3[1] + \
+            co2[1] + n2o[1] + ch4[1] + u[1])
+        tau_gases.append(h2o[2] + o3[2] + \
+            co2[2] + n2o[2] + ch4[2] + u[2])
 
-        tau_gases[5] = h2o[5] + co2[3]
-        tau_gases[6] = h2o[6] + co2[4]
+        tau_gases.append(h2o[3] + ch4[3])
+        tau_gases.append(h2o[4] + ch4[4])
 
-        tau_gases[7] = h2o[3] + ch4[5]
-        tau_gases[8] = h2o[4] + ch4[6]
+        tau_gases.append(h2o[5] + co2[3])
+        tau_gases.append(h2o[6] + co2[4])
 
-        tau_gases[9]  = h2o[9]  + co2[5]
-        tau_gases[10] = h2o[10] + co2[6]
+        tau_gases.append(h2o[7] + ch4[5])
+        tau_gases.append(h2o[8] + ch4[6])
 
-        tau_gases[11] = h2o[11] + ch4[7]
-        tau_gases[12] = h2o[12] + ch4[8]
+        tau_gases.append(h2o[9]  + co2[5])
+        tau_gases.append(h2o[10] + co2[6])
 
-        tau_gases[13] = h2o[13] + co2[7]
-        tau_gases[14] = h2o[14] + co2[8]
+        tau_gases.append(h2o[11] + ch4[7])
+        tau_gases.append(h2o[12] + ch4[8])
 
-        tau_gases[15] = h2o[15] + u[3]
-        tau_gases[16] = h2o[16] + u[4]
+        tau_gases.append(h2o[13] + co2[7])
+        tau_gases.append(h2o[14] + co2[8])
 
-        tau_gases[17] = h2o[17] + o3[3] + u[5]
-        tau_gases[18] = h2o[18] + o3[4] + u[6]
+        tau_gases.append(h2o[15] + u[3])
+        tau_gases.append(h2o[16] + u[4])
 
-        tau_gases[19] = h2o[19] + o3[5] + u[7]
-        tau_gases[20] = h2o[20] + o3[6] + u[8]
+        tau_gases.append(h2o[17] + o3[3] + u[5])
+        tau_gases.append(h2o[18] + o3[4] + u[6])
 
-        tau_gases[21] = h2o[21] + o3[7] + u[9]
-        tau_gases[22] = h2o[22] + o3[8] + u[10]
+        tau_gases.append(h2o[19] + o3[5] + u[7])
+        tau_gases.append(h2o[20] + o3[6] + u[8])
 
-        tau_gases[23] = h2o[23]
-        tau_gases[24] = h2o[24]
+        tau_gases.append(h2o[21] + o3[7] + u[9])
+        tau_gases.append(h2o[22] + o3[8] + u[10])
 
-        tau_gases[25] = h2o[25] + o3[9]
-        tau_gases[26] = h2o[26] + o3[10]
+        tau_gases.append(h2o[23])
+        tau_gases.append(h2o[24])
 
-        tau_gases[27] = h2o[27] + o3[11] + u[11]
-        tau_gases[28] = h2o[28] + o3[12] + u[12]
+        tau_gases.append(h2o[25] + o3[9])
+        tau_gases.append(h2o[26] + o3[10])
+
+        tau_gases.append(h2o[27] + o3[11] + u[11])
+        tau_gases.append(h2o[28] + o3[12] + u[12])
+
+        tau_gases = tf.convert_to_tensor(tau_gases)
 
         # Optical depth for liquid and ice water for each channel
         tau_lw = [net(null_lw) for net in self.ke_lw_net]
-        tau_lw = tf.multiply(tau_lw,composition[6])
+        tau_lw = tf.multiply(tau_lw,composition[:,6])
         tau_iw = [net(null_iw) for net in self.ke_iw_net]
-        tau_iw = tf.multiply(tau_iw,composition[7])
+        tau_iw = tf.multiply(tau_iw,composition[:,7])
 
         return [tau_gases, tau_lw, tau_iw]
 
@@ -132,9 +139,9 @@ class LayerProperties(Layer):
 
         # Iterate over channels
 
-        e_split_direct = [net(tau_gases[k], tau_lw[k], tau_iw[k], mu[k]) for k, net in self.extinction_net.items()]
+        e_split_direct = [net(tau_gases[k], tau_lw[k], tau_iw[k], mu[k]) for k, net in enumerate(self.extinction_net)]
 
-        e_split_diffuse = [net(tau_gases[k], tau_lw[k], tau_iw[k], mu_bar[k]) for k, net in self.extinction_net.items()]
+        e_split_diffuse = [net(tau_gases[k], tau_lw[k], tau_iw[k], mu_bar[k]) for k, net in enumerate(self.extinction_net)]
 
         e_split_direct = tf.nn.softmax(e_split_direct,axis=-1)
         e_split_diffuse = tf.nn.softmax(e_split_diffuse,axis=-1)
@@ -307,7 +314,7 @@ def propagate_layer_up (t_direct, t_diffuse, e_split_direct, e_split_diffuse, r_
             a_top_multi_direct, a_top_multi_diffuse, \
             a_bottom_multi_direct, a_bottom_multi_diffuse
 
-class UpwardPropagationCell(tf.keras.layers.Layer):
+class UpwardPropagationCell(Layer):
     def __init__(self, n_channels, **kwargs):
         super().__init__(**kwargs)
         self.state_size = (n_channels, 4)
@@ -335,7 +342,7 @@ class UpwardPropagationCell(tf.keras.layers.Layer):
         return output_at_i, state_at_i_plus_1
 
 
-class DownwardPropagationCell(tf.keras.layers.Layer):
+class DownwardPropagationCell(Layer):
     def __init__(self):
         super().__init__()
 
@@ -454,9 +461,9 @@ def train():
     composition_input = Input(shape=(n_layers,n_composition),
                                batch_size=batch_size, name="composition_input")
 
-    null_lw_input = Input(shape=(0), batch_size=batch_size, name="null_lw_input")
+    null_lw_input = Input(shape=(n_layers, 0), batch_size=batch_size, name="null_lw_input")
 
-    null_iw_input = Input(shape=(0), batch_size=batch_size, name="null_iw_input")
+    null_iw_input = Input(shape=(n_layers, 0), batch_size=batch_size, name="null_iw_input")
 
     optical_depth = TimeDistributed(OpticalDepth(n_hidden_gas, n_channels), name="optical_depth")([t_p_input, composition_input, null_lw_input, null_iw_input])
 
@@ -480,7 +487,7 @@ def train():
     # absorption and reflection (albedo) of the surface
     surface_input = Input(shape=(4), batch_size=batch_size, name="surface_input")
 
-    upward_output, upward_state = tf.keras.layers.RNN(UpwardPropagationCell, return_sequences=True, return_state=True, go_backwards=True)(input=layer_properties, initial_state=surface_input)
+    upward_output, upward_state = RNN(UpwardPropagationCell, return_sequences=True, return_state=True, go_backwards=True)(input=layer_properties, initial_state=surface_input)
 
     r_multi_direct, _, _, _ = upward_state
 
@@ -498,7 +505,7 @@ def train():
     flux_up_above_diffuse = tf.multiply(flux_down_above_direct,r_multi_direct)
 
     # Downward propagation: t and a
-    downward_output = tf.keras.layers.RNN(DownwardPropagationCell, return_sequences=True, return_state=False, go_backwards=True)(input=upward_output, initial_state=[flux_down_above_direct, flux_down_above_diffuse])
+    downward_output = RNN(DownwardPropagationCell, return_sequences=True, return_state=False, go_backwards=True)(input=upward_output, initial_state=[flux_down_above_direct, flux_down_above_diffuse])
 
     flux_down_below_direct, flux_down_below_diffuse, \
             flux_up_below_diffuse, absorbed_flux_top = downward_output
@@ -550,4 +557,5 @@ def train():
               validation_data=(validation_inputs, validation_outputs),callbacks = [EarlyStopping(monitor='mse_heating_rate',  patience=patience, verbose=1, \
                                  mode='min',restore_best_weights=True),])
     
-    
+if __name__ == "__main__":
+    train()
