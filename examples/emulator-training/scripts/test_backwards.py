@@ -22,6 +22,7 @@ class Cell(layers.Layer):
         print(f'States = {states_at_t}')
         return output_at_t, state_at_t_plus_1
 
+    """
     def get_initial_state(self, value, inputs=None, batch_size=None, dtype=None):
         if inputs.shape[0] == None:
             bs = batch_size
@@ -36,13 +37,14 @@ class Cell(layers.Layer):
         output = tf.fill((bs,self.state_size), value, dtype=dt)
 
         return output
+    """
 
         
 def train():
     n_layers = 10
-    batch_size = 7
+    batch_size = 2
 
-    is_dynamic_input = False
+    is_dynamic_input = True
 
     tmp = tf.range(n_layers)
     tmp = tf.expand_dims(tmp, axis=1)

@@ -13,7 +13,7 @@ def absorbed_flux_to_heating_rate(absorbed_flux, delta_pressure):
     df_dp = absorbed_flux / delta_pressure
     return -(g/cp) * 24 * 3600 * df_dp
 
-def load_data(file_name):
+def load_data(file_name, n_channels):
     data = xr.open_dataset(file_name)
 
     composition = data.variables['rrtmgp_sw_input'][:].data
@@ -72,7 +72,11 @@ def load_data(file_name):
 
     surface_absorption = np.ones(shape=(n_samples,1)) - surface_albedo
 
-    surface = np.concatenate([surface_albedo, surface_albedo, surface_absorption, surface_absorption], axis=1)
+    surface_albedo = np.repeat(np.expand_dims(surface_albedo,axis=1),repeats=n_channels,axis=1)
+
+    surface_absorption = np.repeat(np.expand_dims(surface_absorption,axis=1),repeats=n_channels,axis=1)
+
+    surface = [surface_albedo, surface_albedo, surface_absorption, surface_absorption]
 
     null_toa = np.zeros((n_samples,0))
 
