@@ -1,18 +1,31 @@
 from netCDF4 import Dataset
 import numpy as np
 import xarray as xr
+import math
 
 data_dir       = "/home/hws/tmp/"
-file_name_in   = data_dir + "CAMS_2014_RFMIPstyle.nc"
+#file_name_in   = data_dir + "CAMS_2014_RFMIPstyle.nc"
+file_name_in   = data_dir + "CAMS_2015_RFMIPstyle.nc"
 #file_name_in   = data_dir + "CAMS_2009-2018_sans_2014-2015_RFMIPstyle.nc"
 #file_name_out  = data_dir + "RADSCHEME_data_g224_CAMS_2014.nc"
 #file_name_out  = data_dir + "RADSCHEME_data_g224_CAMS_2009-2018_sans_2014-2015.nc"
-file_name_out2  = data_dir + "RADSCHEME_data_g224_CAMS_2014.2.nc"
+#file_name_out2  = data_dir + "RADSCHEME_data_g224_CAMS_2014.2.nc"
+file_name_out2  = data_dir + "RADSCHEME_data_g224_CAMS_2015_true_solar_angles.nc"
 #file_name_out2  = data_dir + "RADSCHEME_data_g224_CAMS_2009-2018_sans_2014-2015.2.nc"
 data_1 = xr.open_dataset(file_name_in)
 data_2 = xr.open_dataset(file_name_out2) #Dataset(file_name_in)
 
 if True:
+    angle = data_1.variables["solar_zenith_angle"]
+    print(f'theta = {angle[0:7,200].data}')
+    print(f'cos(theta) = {np.cos((np.pi / 180.0) * angle[0:7,200].data)}')
+    #print(f'theta = {angle[7,2200:2204].data}')
+    #print(f'cos(theta) = {np.cos((np.pi / 180.0) * angle[7,2200:2204].data)}')
+    mu = data_2.variables["mu0"]
+    print("mu  = " + str(mu[0:7,200].data))
+    #print("mu  = " + str(mu[7,2200:2204].data))
+    print("")
+
     c_0 = data_1.variables["nitrous_oxide"]
     c_1 = data_1.variables["nitrogen_dioxide"]
     c_h2o = data_1.variables["water_vapor"]

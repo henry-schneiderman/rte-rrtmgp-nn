@@ -13,6 +13,7 @@ data = xr.open_dataset(file_name_out2) #Dataset(file_name_in)
 
 
 rsd = data.variables["rsd"]
+rsu = data.variables["rsu"]
 mu = data.variables["mu0"]
 pres = data.variables["pres_level"]
 
@@ -31,7 +32,13 @@ print("rsd = " + str(rsd[0:7,401,0].data))
 print(" ")
 print(" ")
 
+print("rsu top = " + str(rsu[7,200,0:5].data))
+print("rsu bottom = " + str(rsu[7,200,-5:].data))
+print("rsu tops = " + str(rsu[7,200:209,0].data))
+print("rsu bottoms = " + str(rsu[7,200:209,-1].data))
+print(" ")
 print(str(pres[0,200,:].data))
 print(str(pres[0,201,:].data))
+
 
 

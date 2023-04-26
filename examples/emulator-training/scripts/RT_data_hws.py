@@ -68,34 +68,38 @@ def load_data(file_name, n_channels):
 
     surface_albedo = data.variables['sfc_alb'][:].data
     surface_albedo = surface_albedo[:,:,0]
-    surface_albedo = np.reshape(surface_albedo,(n_samples,1))
+    surface_albedo = np.reshape(surface_albedo,(n_samples,1,1))
 
-    surface_absorption = np.ones(shape=(n_samples,1)) - surface_albedo
+    surface_absorption = np.ones(shape=(n_samples,1,1)) - surface_albedo
 
     surface_albedo = np.repeat(np.expand_dims(surface_albedo,axis=1),repeats=n_channels,axis=1)
 
     surface_absorption = np.repeat(np.expand_dims(surface_absorption,axis=1),repeats=n_channels,axis=1)
 
-    surface = [surface_albedo, surface_albedo, surface_absorption, surface_absorption]
+    surface = np.concatenate([surface_albedo, surface_albedo, surface_absorption, surface_absorption], axis=2)
+
+    surface = np.reshape(surface, (-1,n_channels * 4))
 
     null_toa = np.zeros((n_samples,0))
 
-    flux_down_above_diffuse = np.zeros((n_samples, 2))
+    flux_down_above_diffuse = np.zeros((n_samples, n_channels, 1))
 
     rsu = data.variables['rsu'][:].data
     rsd = data.variables['rsd'][:].data
     rsd_direct = data.variables['rsd_dir'][:].data
 
-    rsu     = rsu.reshape((n_samples,n_levels))
-    rsd     = rsd.reshape((n_samples,n_levels))
-    rsd_direct     = rsd_direct.reshape((n_samples,n_levels))
+    rsu     = rsu.reshape((n_samples,n_levels, 1))
+    rsd     = rsd.reshape((n_samples,n_levels, 1))
+    rsd_direct     = rsd_direct.reshape((n_samples,n_levels, 1))
 
-    toa = np.copy(rsd[:,0:1])
+    toa = np.copy(rsd[:,0:1,:])
 
     rsu = rsu / toa
     rsd = rsd / toa
     rsd_direct = rsd_direct / toa
     absorbed_flux = rsd[:,:-1] - rsd[:,1:] + rsu[:,1:] - rsu[:,:-1]
+
+    toa = np.squeeze(toa,axis=2)
 
     delta_pressure = np.squeeze(delta_pressure)
     heating_rate = absorbed_flux_to_heating_rate (absorbed_flux, delta_pressure)

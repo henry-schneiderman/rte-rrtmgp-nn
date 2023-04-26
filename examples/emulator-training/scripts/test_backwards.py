@@ -9,21 +9,28 @@ from tensorflow.keras.callbacks import EarlyStopping
 from tensorflow.keras.layers import Dense,TimeDistributed
 
 class Cell(layers.Layer):
-    def __init__(self, **kwargs):
+    def __init__(self, batch_size, **kwargs):
         super().__init__(**kwargs)
-        self.state_size = (1,)
+        #self.state_size = (batch_size, 2,4,)
+        self.state_size = [(2,),(1,)]
+        #self.state_size = (1)
         self.output_size = (1,)
 
     def call(self, input_at_t, states_at_t):
-        output_at_t = input_at_t
-        state_at_t_plus_1 = states_at_t[0] + input_at_t
+        #output_at_t = input_at_t
+        #s1, s2 = states_at_t[0]
+        s1 = states_at_t[0][0] + states_at_t[0][0]
+        s2 = states_at_t[0][1] + input_at_t
+        output_at_t = input_at_t + states_at_t[0][1]
+        state_at_t_plus_1 = [s1,s2]
+        #state_at_t_plus_1 = states_at_t[0] + input_at_t
         print(" ")
         print (f' input = {input_at_t}')
         print(f'States = {states_at_t}')
         return output_at_t, state_at_t_plus_1
 
-    """
-    def get_initial_state(self, value, inputs=None, batch_size=None, dtype=None):
+
+    """ def get_initial_state(self, value, inputs=None, batch_size=None, dtype=None):
         if inputs.shape[0] == None:
             bs = batch_size
         else:
@@ -36,8 +43,8 @@ class Cell(layers.Layer):
 
         output = tf.fill((bs,self.state_size), value, dtype=dt)
 
-        return output
-    """
+        return output """
+
 
         
 def train():
@@ -58,19 +65,28 @@ def train():
 
     input = Input(shape=(n_layers, 1,), batch_size=batch_size, name="input")
 
-    layer = tf.keras.layers.RNN(Cell(), return_sequences=True, return_state=True, go_backwards=False, time_major=False)
+
+    layer = tf.keras.layers.RNN(Cell(batch_size), return_sequences=True, return_state=True, go_backwards=False, time_major=False)
 
     if is_dynamic_input:
-        initial_state = Input(shape=(1,),batch_size=batch_size, name="initial_state")
+        initial_state = Input(shape=(2,4,),batch_size=batch_size, name="initial_state")
+        initial_state = Input(shape=(2,),batch_size=batch_size, name="initial_state")
+        initial_state_2 = Input(shape=(1,),batch_size=batch_size, name="initial_state")
     else:
-        initial_state = tf.fill([batch_size, 1], 100.0) # this doesn't work if batch is different from input size
+        initial_state = tf.fill([batch_size, 2, 4], 100.0) # this doesn't work if batch is different from input size
 
-    upward_output, upward_state = layer(inputs=input, initial_state=initial_state)
+    upward_output, upward_state = layer(inputs=input, initial_state=[initial_state,initial_state_2])
 
     if is_dynamic_input:
         model = Model(inputs=[input, initial_state], outputs=[upward_output,upward_state])
-        state = tf.constant([[10],[110]])
-        print (f"output = {model(inputs=[tmp,state])}")
+        state = tf.constant([[[10, 14, 17, 20],[110, 120, 130, 140]],
+                             [[20, 24, 27, 30],[410, 420, 530, 640]]])
+        
+        state = tf.constant([[10,14],
+                             [640,9]])
+        state_2 = tf.constant([[10,14],[1014]],
+                        [[640,9],[6409]])
+        print (f"output = {model(inputs=[tmp, state_2])}")
     else:
         model = Model(inputs=[input], outputs=[upward_output,upward_state])
         print (f"output = {model(inputs=[tmp])}")
