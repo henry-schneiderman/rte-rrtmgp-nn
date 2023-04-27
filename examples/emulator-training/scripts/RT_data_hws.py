@@ -34,9 +34,7 @@ def load_data(file_name, n_channels):
     n_composition = n_composition - 2
 
     pressure = data.variables['pres_level'][:,:,:].data 
-    pressure = np.reshape(pressure,(n_samples,n_levels))
-
-    pressure = np.reshape(pressure,(n_samples,n_levels,1))
+    pressure = np.reshape(pressure,(n_samples,n_levels, 1))
 
     delta_pressure = pressure[:,1:,:] - pressure[:,:-1,:] 
 
@@ -78,6 +76,8 @@ def load_data(file_name, n_channels):
 
     surface = np.concatenate([surface_albedo, surface_albedo, surface_absorption, surface_absorption], axis=2)
 
+    # Ideally wouldn't have to flatten the last two axes. However, could not get a custom RNN to
+    # work with a multidimensional initial state
     surface = np.reshape(surface, (-1,n_channels * 4))
 
     null_toa = np.zeros((n_samples,0))
@@ -94,6 +94,7 @@ def load_data(file_name, n_channels):
 
     toa = np.copy(rsd[:,0:1,:])
 
+    # Normalize by the toa incoming flux
     rsu = rsu / toa
     rsd = rsd / toa
     rsd_direct = rsd_direct / toa
@@ -101,7 +102,7 @@ def load_data(file_name, n_channels):
 
     toa = np.squeeze(toa,axis=2)
 
-    delta_pressure = np.squeeze(delta_pressure)
+    delta_pressure = np.squeeze(delta_pressure, axis=2)
     heating_rate = absorbed_flux_to_heating_rate (absorbed_flux, delta_pressure)
 
     inputs = (t_p, composition, null_lw, null_iw, null_mu_bar, mu, surface, null_toa, \

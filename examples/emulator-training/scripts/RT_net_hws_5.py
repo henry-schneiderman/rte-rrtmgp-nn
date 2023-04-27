@@ -502,6 +502,8 @@ def train():
     filename_validation   = datadir + "/RADSCHEME_data_g224_CAMS_2014.2.nc"
     filename_testing  = datadir +  "/RADSCHEME_data_g224_CAMS_2015_true_solar_angles.nc"
 
+    filename_model = datadir + "/Model-"
+
     # Optical Depth
 
     t_p_input = Input(shape=(n_layers,2),
@@ -596,15 +598,19 @@ def train():
 
     # All upwelling flux is diffuse
     flux_up = tf.math.reduce_sum(flux_up_diffuse, axis=2)
+    flux_up = tf.squeeze(flux_up,axis=2)
 
     flux_down = flux_down_direct + flux_down_diffuse
+    flux_down = tf.squeeze(flux_down,axis=2)
+    flux_down_direct = tf.squeeze(flux_down_direct,axis=2)
 
     print(f"absorbed_flux_top = {absorbed_flux_top.shape}")
 
     absorbed_flux = tf.math.reduce_sum(absorbed_flux_top, axis=2)
+    absorbed_flux = tf.squeeze(absorbed_flux,axis=2)
 
     # Inputs for metrics and loss
-    delta_pressure_input = Input(shape=(n_layers,1), batch_size=batch_size, name="delta_pressure_input")
+    delta_pressure_input = Input(shape=(n_layers), batch_size=batch_size, name="delta_pressure_input")
 
     toa_input = Input(shape=(1), batch_size=batch_size, name="toa_input")
 
@@ -612,7 +618,7 @@ def train():
 
     model = Model(inputs=[t_p_input,composition_input,null_lw_input, null_iw_input, null_mu_bar_input, mu_input,surface_input, null_toa_input, toa_input, flux_down_above_diffuse, delta_pressure_input], outputs=[flux_down_direct, flux_down, flux_up, heating_rate])
 
-    weight_profile = tf.reduce_mean((flux_down),axis=0)
+    weight_profile = 1.0 / tf.math.reduce_mean(flux_down, axis=0, keepdims=True)
 
     model.compile(
         optimizer=optimizers.Adam(learning_rate=0.001),
@@ -623,15 +629,18 @@ def train():
             mse_weighted_flux(toa_input, weight_profile),
         ],
     )
+    model.summary()
 
     training_inputs, training_outputs = load_data(filename_training, n_channels)
-    validation_inputs, validation_outputs = load_data(filename_validation)
+    validation_inputs, validation_outputs = load_data(filename_validation, n_channels)
 
     history = model.fit(x=training_inputs, y=training_outputs,
               epochs = epochs, batch_size=batch_size,
               shuffle=True, verbose=1,
               validation_data=(validation_inputs, validation_outputs),callbacks = [EarlyStopping(monitor='mse_heating_rate',  patience=patience, verbose=1, \
                                  mode='min',restore_best_weights=True),])
+    
+    model.save(filename_model + 'TEMP.' + str(epochs))
     
 if __name__ == "__main__":
     train()
