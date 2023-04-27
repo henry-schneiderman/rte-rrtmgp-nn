@@ -8,11 +8,12 @@ from tensorflow.keras.callbacks import EarlyStopping
 
 from tensorflow.keras.layers import Dense,TimeDistributed
 
+
 class Cell(layers.Layer):
     def __init__(self, batch_size, **kwargs):
         super().__init__(**kwargs)
         #self.state_size = (batch_size, 2,4,)
-        self.state_size = [(2,),(1,)]
+        self.state_size = (2,)
         #self.state_size = (1)
         self.output_size = (1,)
 
@@ -22,7 +23,7 @@ class Cell(layers.Layer):
         s1 = states_at_t[0][0] + states_at_t[0][0]
         s2 = states_at_t[0][1] + input_at_t
         output_at_t = input_at_t + states_at_t[0][1]
-        state_at_t_plus_1 = [s1,s2]
+        state_at_t_plus_1 = states_at_t[0]  + [1.0, 5.0]
         #state_at_t_plus_1 = states_at_t[0] + input_at_t
         print(" ")
         print (f' input = {input_at_t}')
@@ -75,18 +76,17 @@ def train():
     else:
         initial_state = tf.fill([batch_size, 2, 4], 100.0) # this doesn't work if batch is different from input size
 
-    upward_output, upward_state = layer(inputs=input, initial_state=[initial_state,initial_state_2])
+    upward_output, upward_state = layer(inputs=input, initial_state=[initial_state])
 
     if is_dynamic_input:
         model = Model(inputs=[input, initial_state], outputs=[upward_output,upward_state])
         state = tf.constant([[[10, 14, 17, 20],[110, 120, 130, 140]],
                              [[20, 24, 27, 30],[410, 420, 530, 640]]])
         
-        state = tf.constant([[10,14],
-                             [640,9]])
-        state_2 = tf.constant([[10,14],[1014]],
-                        [[640,9],[6409]])
-        print (f"output = {model(inputs=[tmp, state_2])}")
+        state = tf.constant([[10.0,14.0],
+                             [640.0,9.0]])
+
+        print (f"output = {model(inputs=[tmp, state])}")
     else:
         model = Model(inputs=[input], outputs=[upward_output,upward_state])
         print (f"output = {model(inputs=[tmp])}")

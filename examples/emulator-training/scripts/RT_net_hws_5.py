@@ -9,7 +9,12 @@ from tensorflow.keras.callbacks import EarlyStopping
 
 from tensorflow.keras.layers import Dense,TimeDistributed,Layer,RNN
 
+from tensorflow.python.framework.ops import disable_eager_execution
+
+disable_eager_execution()
+
 from RT_data_hws import absorbed_flux_to_heating_rate, load_data
+
 class DenseFFN(Layer):
     """
     n_hidden[n_layers]: array of the number of nodes per layer
@@ -352,9 +357,11 @@ class UpwardPropagationCell(Layer):
         self._n_channels = n_channels
 
     def call(self, input_at_i, states_at_i):
+        print("***")
         t_direct, t_diffuse, e_split_direct, e_split_diffuse = input_at_i[:,:,0:1], input_at_i[:,:,1:2], input_at_i[:,:,2:5],input_at_i[:,:,5:]
 
-        print(f"t_direct shape = {t_direct.shape}")
+        print(f"Enter upward RNN, state.len = {len(states_at_i)} and state[0].shape = {states_at_i[0].shape}")
+        print(f"t_direct  = {tf.get_static_value(t_direct)}")
 
         reshaped_state = tf.reshape(states_at_i[0], (-1,self._n_channels,4))
 
@@ -379,8 +386,12 @@ class UpwardPropagationCell(Layer):
         
         state_at_i_plus_1 = tf.concat([r_multi_direct, r_multi_diffuse, a_top_multi_direct, a_top_multi_diffuse], axis=2)
 
-        state_at_i_plus_1 = tf.reshape(state_at_i_plus_1,(-1,self._n_channels * 4))
 
+
+        print("*")
+        state_at_i_plus_1 = tf.reshape(state_at_i_plus_1,(-1,self._n_channels * 4))
+        print("**")
+        print(" ")
         return output_at_i, state_at_i_plus_1
 
 
@@ -427,9 +438,9 @@ class DownwardPropagationCell(Layer):
     
 def mse_heating_rate (toa_flux):
     def loss(y_true, y_pred):
-        _, _, _, heating_rate_true = y_true
+        heating_rate_true = y_true[3]
 
-        _, _, _, heating_rate_pred = y_pred
+        heating_rate_pred = y_pred[3]
 
         error_heating_rate = tf.reduce_mean(tf.math.square(toa_flux * (heating_rate_pred - heating_rate_true)))
 
@@ -439,9 +450,16 @@ def mse_heating_rate (toa_flux):
     
 def mse_weighted_flux (toa_flux, weight_profile):
     def loss(y_true, y_pred):
-        _, flux_down_true, flux_up_true, _ = y_true
+        flux_down_true, flux_up_true = y_true[1], y_true[2]
 
-        _, flux_down_pred, flux_up_pred, _ = y_pred
+        flux_down_pred, flux_up_pred = y_pred[1], y_pred[2]
+
+        print("mse_weighted_flux:")
+        print(f"mse_weighted_flux: flux_down_true.shape={flux_down_true.shape}")
+        print(f"mse_weighted_flux: flux_down_pred.shape={flux_down_pred.shape}")
+        print(f"mse_weighted_flux: flux_up_pred.shape={flux_up_pred.shape}")
+        print(f"mse_weighted_flux: toa.shape={toa_flux.shape}")
+        print(f"mse_weighted_flux: weight_profile.shape={weight_profile.shape}")
 
         error_flux_down = tf.reduce_mean(tf.math.square(toa_flux * weight_profile * (flux_down_pred - flux_down_true)))
 
@@ -453,9 +471,9 @@ def mse_weighted_flux (toa_flux, weight_profile):
 
 def mse_unweighted_flux (toa_flux):
     def loss(y_true, y_pred):
-        _, flux_down_true, flux_up_true, _ = y_true
+        flux_down_true, flux_up_true = y_true[1], y_true[2]
 
-        _, flux_down_pred, flux_up_pred, _ = y_pred
+        flux_down_pred, flux_up_pred = y_pred[1], y_pred[2]
 
         error_flux_down = tf.reduce_mean(tf.math.square(toa_flux * (flux_down_pred - flux_down_true)))
 
@@ -472,9 +490,9 @@ class CustomLoss(tf.keras.losses.Loss):
         self.weight_profile = weight_profile
 
     def call(self, y_true, y_pred):
-        _, flux_down_true, flux_up_true, heating_rate_true = y_true
+        flux_down_true, flux_up_true, heating_rate_true = y_true[1], y_true[2], y_true[3]
 
-        _, flux_down_pred, flux_up_pred, heating_rate_pred = y_pred
+        flux_down_pred, flux_up_pred, heating_rate_pred = y_pred[1], y_pred[2], y_pred[3]
 
         error_flux_down = tf.reduce_mean(tf.math.square(self.weight_profile * (flux_down_pred - flux_down_true)))
 
@@ -493,7 +511,7 @@ def train():
     n_layers = 60
     n_composition = 8 # 6 gases + liquid water + ice water
     n_channels = 29
-    batch_size  = 2048
+    batch_size  = 10 #2048
     epochs      = 100000
     patience    = 1000 #25
 
@@ -623,10 +641,11 @@ def train():
     model.compile(
         optimizer=optimizers.Adam(learning_rate=0.001),
         loss=CustomLoss(weight_profile),
+        experimental_run_tf_function=False,
         metrics=[
             mse_heating_rate(toa_input),
             mse_unweighted_flux(toa_input),
-            mse_weighted_flux(toa_input, weight_profile),
+            #mse_weighted_flux(toa_input, weight_profile),
         ],
     )
     model.summary()

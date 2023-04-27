@@ -60,7 +60,8 @@ def load_data(file_name, n_channels):
     null_iw = np.zeros((n_samples, n_layers, 0))
 
     mu = data.variables['mu0'][:].data 
-    mu = np.reshape(mu,(n_samples,1))
+    mu = np.reshape(mu,(n_samples,1,1))
+    mu = np.repeat(mu,axis=1,repeats=n_layers)
 
     null_mu_bar = np.zeros((n_samples,0))
 
@@ -102,9 +103,10 @@ def load_data(file_name, n_channels):
 
     toa = np.squeeze(toa,axis=2)
 
-    delta_pressure = np.squeeze(delta_pressure, axis=2)
-    heating_rate = absorbed_flux_to_heating_rate (absorbed_flux, delta_pressure)
 
+    heating_rate = absorbed_flux_to_heating_rate (absorbed_flux, delta_pressure)
+    delta_pressure = np.squeeze(delta_pressure, axis=2)
+    heating_rate = np.squeeze(heating_rate, axis=2)
     inputs = (t_p, composition, null_lw, null_iw, null_mu_bar, mu, surface, null_toa, \
     toa, flux_down_above_diffuse, delta_pressure)
 
