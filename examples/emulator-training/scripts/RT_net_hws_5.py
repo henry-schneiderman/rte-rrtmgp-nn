@@ -12,6 +12,7 @@ from tensorflow.keras.layers import Dense,TimeDistributed,Layer,RNN
 from tensorflow.python.framework.ops import disable_eager_execution
 
 disable_eager_execution()
+tf.compat.v1.experimental.output_all_intermediates(True)
 
 from RT_data_hws import absorbed_flux_to_heating_rate, load_data
 
@@ -67,9 +68,6 @@ class OpticalDepth(Layer):
             tau_gas.append(tf.multiply(ke,tf.reshape(composition[:,i],(1,-1, 1))))
 
         h2o, o3, co2, n2o, ch4, u = tau_gas
-
-        print(f'Shape of h2o = {h2o.shape}')
-        print(" ")
 
         # Optical depth for each channel
         # using various combinations of gases' optical depths
@@ -139,9 +137,6 @@ class OpticalDepth(Layer):
         tau_lw = tf.transpose(tau_lw, perm=[1,0,2])
         tau_iw = tf.transpose(tau_iw, perm=[1,0,2])
 
-        print(f'Shape of tau_gases = {tau_gases.shape}')
-        print(" ")
-
         return [tau_gases, tau_lw, tau_iw]
 
 class LayerProperties(Layer):
@@ -154,11 +149,6 @@ class LayerProperties(Layer):
         tau_gases, tau_lw, tau_iw, mu, mu_bar = input
 
         # Iterate over channels
-        print(f'Shape of mu = {mu.shape}')
-        print(" ")
-
-        print(f'Shape of mu_bar = {mu_bar.shape}')
-        print(" ")
 
         e_split_direct = [net(tf.concat([tau_gases[:,k], tau_lw[:,k], tau_iw[:,k], mu], axis=1)) for k, net in enumerate(self.extinction_net)]
 
@@ -484,6 +474,14 @@ def mse_unweighted_flux (toa_flux):
     return loss
 
 class CustomLoss(tf.keras.losses.Loss):
+    def __init__(self, weight_profile):
+        super().__init__()
+        self.weight_profile = weight_profile
+    def call(self, y_true, y_pred):
+        error = tf.reduce_mean(tf.math.square(self.weight_profile * (y_pred - y_true)))
+        return(error)
+
+class CustomLossOld(tf.keras.losses.Loss):
 
     def __init__(self, weight_profile):
         super().__init__()
@@ -622,6 +620,8 @@ def train():
     flux_down = tf.squeeze(flux_down,axis=2)
     flux_down_direct = tf.squeeze(flux_down_direct,axis=2)
 
+
+
     print(f"absorbed_flux_top = {absorbed_flux_top.shape}")
 
     absorbed_flux = tf.math.reduce_sum(absorbed_flux_top, axis=2)
@@ -634,19 +634,24 @@ def train():
 
     heating_rate = absorbed_flux_to_heating_rate (absorbed_flux, delta_pressure_input)
 
+    print(f"heating rate = {heating_rate.shape}")
     model = Model(inputs=[t_p_input,composition_input,null_lw_input, null_iw_input, null_mu_bar_input, mu_input,surface_input, null_toa_input, toa_input, flux_down_above_diffuse, delta_pressure_input], outputs=[flux_down_direct, flux_down, flux_up, heating_rate])
-
+    print(f"flux down direct (after squeeze)= {flux_down_direct.shape}")
     weight_profile = 1.0 / tf.math.reduce_mean(flux_down, axis=0, keepdims=True)
+
+    print(f"flux_down.name = {flux_down.name}")
+    print(f"flux_up.name = {flux_up.name}")
+    print(f"heating_rate.name = {heating_rate.name}")
 
     model.compile(
         optimizer=optimizers.Adam(learning_rate=0.001),
-        loss=CustomLoss(weight_profile),
+        loss=['mse','mse','mse','mse'],
+        #loss={flux_down.name:'mse', flux_up.name : 'mse', heating_rate.name: 'mse'},
+        loss_weights=[0.0,0.5,0.5,1.0e-4],
+        #loss_weights={flux_down.name:0.5, flux_up.name: 0.5, heating_rate.name: 1.0e-4},
         experimental_run_tf_function=False,
-        metrics=[
-            mse_heating_rate(toa_input),
-            mse_unweighted_flux(toa_input),
-            #mse_weighted_flux(toa_input, weight_profile),
-        ],
+        metrics=[['mse'],['mse'],['mse'],['mse']],
+    #{flux_down.name:'mse', flux_up.name : 'mse', heating_rate.name: 'mse'},
     )
     model.summary()
 
@@ -656,8 +661,10 @@ def train():
     history = model.fit(x=training_inputs, y=training_outputs,
               epochs = epochs, batch_size=batch_size,
               shuffle=True, verbose=1,
-              validation_data=(validation_inputs, validation_outputs),callbacks = [EarlyStopping(monitor='mse_heating_rate',  patience=patience, verbose=1, \
-                                 mode='min',restore_best_weights=True),])
+              validation_data=(validation_inputs, validation_outputs))
+              
+    #,callbacks = [EarlyStopping(monitor='mse_heating_rate',  patience=patience, verbose=1, \
+    #                  mode='min',restore_best_weights=True),])
     
     model.save(filename_model + 'TEMP.' + str(epochs))
     

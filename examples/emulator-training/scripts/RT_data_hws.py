@@ -99,14 +99,19 @@ def load_data(file_name, n_channels):
     rsu = rsu / toa
     rsd = rsd / toa
     rsd_direct = rsd_direct / toa
-    absorbed_flux = rsd[:,:-1] - rsd[:,1:] + rsu[:,1:] - rsu[:,:-1]
+    absorbed_flux = rsd[:,:-1,:] - rsd[:,1:,:] + rsu[:,1:,:] - rsu[:,:-1,:]
 
     toa = np.squeeze(toa,axis=2)
 
 
     heating_rate = absorbed_flux_to_heating_rate (absorbed_flux, delta_pressure)
     delta_pressure = np.squeeze(delta_pressure, axis=2)
+
     heating_rate = np.squeeze(heating_rate, axis=2)
+    rsu = np.squeeze(rsu,axis=2)
+    rsd = np.squeeze(rsd,axis=2)
+    rsd_direct = np.squeeze(rsd_direct,axis=2)
+    
     inputs = (t_p, composition, null_lw, null_iw, null_mu_bar, mu, surface, null_toa, \
     toa, flux_down_above_diffuse, delta_pressure)
 
