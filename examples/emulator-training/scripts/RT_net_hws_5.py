@@ -521,7 +521,7 @@ def train():
     batch_size  = 2048
     epochs      = 100000
     n_epochs    = 0
-    epochs_period = 10
+    epochs_period = 2
     patience    = 1000 #25
 
     datadir     = "/home/hws/tmp/"
