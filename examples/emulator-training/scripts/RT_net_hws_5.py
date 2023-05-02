@@ -21,9 +21,9 @@ class DenseFFN(Layer):
     n_hidden[n_layers]: array of the number of nodes per layer
     Last layer has RELU activation insuring non-negative output
     """
-    def __init__(self, n_hidden, n_outputs):
+    def __init__(self, n_hidden, n_outputs, minval, maxval):
         super().__init__()
-        self.hidden = [Dense(units=n, activation='relu',kernel_initializer=tf.keras.initializers.glorot_uniform(), bias_initializer=initializers.RandomNormal()) for n in n_hidden]
+        self.hidden = [Dense(units=n, activation='relu',kernel_initializer=initializers.RandomUniform(minval=minval, maxval=maxval), bias_initializer=initializers.RandomNormal()) for n in n_hidden]
         # RELU insures that absorption coefficient is non-negative
         self.out = Dense(units=n_outputs, activation='softplus',kernel_initializer=tf.keras.initializers.glorot_uniform()) 
 
@@ -47,10 +47,10 @@ class OpticalDepth(Layer):
         # used to build a gas absorption coefficient, ke 
 
         for n in n_ke:
-            self.ke_gas_net.append([DenseFFN(n_hidden,1) for _ in np.arange(n)])
+            self.ke_gas_net.append([DenseFFN(n_hidden,1,minval=20.0,maxval=1000.0) for _ in np.arange(n)])
 
-        self.ke_lw_net = [Dense(units=1,bias_initializer=initializers.RandomUniform(minval=0.05, maxval=0.95), activation='softplus',) for _ in np.arange(n_channels)]
-        self.ke_iw_net = [Dense(units=1, bias_initializer=initializers.RandomUniform(minval=0.05, maxval=0.95), activation='softplus') for _ in np.arange(n_channels)]
+        self.ke_lw_net = [Dense(units=1,bias_initializer=initializers.RandomUniform(minval=50.0, maxval=10000.0), activation='softplus',) for _ in np.arange(n_channels)]
+        self.ke_iw_net = [Dense(units=1, bias_initializer=initializers.RandomUniform(minval=50.0, maxval=10000.0), activation='softplus') for _ in np.arange(n_channels)]
 
     # Note Ukkonen does not include nitrogen dioxide (no2) in simulation that generated data
     def call(self, input):
@@ -59,12 +59,15 @@ class OpticalDepth(Layer):
 
         # Generate multiple optical depths for each gas
 
+        print(f"shape of composition = {composition.shape}")
+
         tau_gas = []
         for i, ke_gas_net in enumerate(self.ke_gas_net):
             # Extinction coefficient determined by network
             ke = [net(t_p) for net in ke_gas_net]
             # Tau = ke * mass_path_for_gas
             ke = tf.convert_to_tensor(ke)
+            print(f"shape of ke = {ke.shape}")
             tau_gas.append(tf.multiply(ke,tf.reshape(composition[:,i],(1,-1, 1))))
 
         h2o, o3, co2, n2o, ch4, u = tau_gas
@@ -142,11 +145,13 @@ class OpticalDepth(Layer):
 class LayerProperties(Layer):
     def __init__(self, n_hidden, n_channels):
         super().__init__()
-        self.extinction_net = [DenseFFN(n_hidden,3) for _ in np.arange(n_channels)]
+        self.extinction_net = [DenseFFN(n_hidden,3,minval=0.0,maxval=1.0) for _ in np.arange(n_channels)]
 
     def call(self, input):
 
         tau_gases, tau_lw, tau_iw, mu, mu_bar = input
+
+        print(f"LayerProperties(): shape of tau_gases = {tau_gases.shape}")
 
         # Iterate over channels
 
@@ -164,6 +169,12 @@ class LayerProperties(Layer):
         # Note that diffuse radiation can be directly transmitted
 
         tau_total = tau_gases + tau_lw + tau_iw
+
+        print(f'Shape of mu = {mu.shape}')
+        print(" ")
+
+        print(f'Shape of mu_bar = {mu_bar.shape}')
+        print(" ")
 
         t_direct = tf.math.exp(-tau_total / tf.expand_dims(mu,axis=2))
 
@@ -421,58 +432,11 @@ class DownwardPropagationCell(Layer):
         output_at_i = tf.concat([flux_down_below_direct, flux_down_below_diffuse, \
             flux_up_below_diffuse, absorbed_flux_top], axis=2) #, #absorbed_flux_bottom
          
-        state_at_i_plus_1 = flux_down_below_direct, flux_down_below_diffuse
+        #state_at_i_plus_1 = flux_down_below_direct, flux_down_below_diffuse
         state_at_i_plus_1=tf.concat([flux_down_above_direct, flux_down_above_diffuse], axis=2)
         state_at_i_plus_1=tf.reshape(state_at_i_plus_1,(-1,self._n_channels*2))
 
         return output_at_i, state_at_i_plus_1
-    
-def mse_heating_rate (toa_flux):
-    def loss(y_true, y_pred):
-        heating_rate_true = y_true[3]
-
-        heating_rate_pred = y_pred[3]
-
-        error_heating_rate = tf.reduce_mean(tf.math.square(toa_flux * (heating_rate_pred - heating_rate_true)))
-
-        return error_heating_rate
-    loss.__name__ = 'mse_heating_rate'
-    return loss
-    
-def mse_weighted_flux (toa_flux, weight_profile):
-    def loss(y_true, y_pred):
-        flux_down_true, flux_up_true = y_true[1], y_true[2]
-
-        flux_down_pred, flux_up_pred = y_pred[1], y_pred[2]
-
-        print("mse_weighted_flux:")
-        print(f"mse_weighted_flux: flux_down_true.shape={flux_down_true.shape}")
-        print(f"mse_weighted_flux: flux_down_pred.shape={flux_down_pred.shape}")
-        print(f"mse_weighted_flux: flux_up_pred.shape={flux_up_pred.shape}")
-        print(f"mse_weighted_flux: toa.shape={toa_flux.shape}")
-        print(f"mse_weighted_flux: weight_profile.shape={weight_profile.shape}")
-
-        error_flux_down = tf.reduce_mean(tf.math.square(toa_flux * weight_profile * (flux_down_pred - flux_down_true)))
-
-        error_flux_up = tf.reduce_mean(tf.math.square(toa_flux * weight_profile * (flux_up_pred - flux_up_true)))
-
-        return 0.5 * (error_flux_down + error_flux_up)
-    loss.__name__ = 'mse_weighted_flux'
-    return loss
-
-def mse_unweighted_flux (toa_flux):
-    def loss(y_true, y_pred):
-        flux_down_true, flux_up_true = y_true[1], y_true[2]
-
-        flux_down_pred, flux_up_pred = y_pred[1], y_pred[2]
-
-        error_flux_down = tf.reduce_mean(tf.math.square(toa_flux * (flux_down_pred - flux_down_true)))
-
-        error_flux_up = tf.reduce_mean(tf.math.square(toa_flux * (flux_up_pred - flux_up_true)))
-
-        return 0.5 * (error_flux_down + error_flux_up)
-    loss.__name__ = 'mse_unweighted_flux'
-    return loss
 
 class CustomLossWeighted(tf.keras.losses.Loss):
     def __init__(self, weight_profile):
@@ -490,28 +454,6 @@ class CustomLossTOA(tf.keras.losses.Loss):
         error = tf.reduce_mean(tf.math.square(self.toa * (y_pred - y_true)))
         return(error)
 
-class CustomLossOld(tf.keras.losses.Loss):
-
-    def __init__(self, weight_profile):
-        super().__init__()
-        self.weight_profile = weight_profile
-
-    def call(self, y_true, y_pred):
-        flux_down_true, flux_up_true, heating_rate_true = y_true[1], y_true[2], y_true[3]
-
-        flux_down_pred, flux_up_pred, heating_rate_pred = y_pred[1], y_pred[2], y_pred[3]
-
-        error_flux_down = tf.reduce_mean(tf.math.square(self.weight_profile * (flux_down_pred - flux_down_true)))
-
-        error_flux_up = tf.reduce_mean(tf.math.square(self.weight_profile * (flux_up_pred - flux_up_true)))
-
-        error_flux = 0.5 * (error_flux_down + error_flux_up)
-
-        error_heating_rate = tf.reduce_mean(tf.math.square(heating_rate_pred - heating_rate_true))
-
-        alpha = 1e-4
-        return alpha * error_heating_rate + (1.0 - alpha)*error_flux 
-
 def train():
     n_hidden_gas = [4, 5]
     n_hidden_layer_coefficients = [4, 5]
@@ -521,7 +463,7 @@ def train():
     batch_size  = 2048
     epochs      = 100000
     n_epochs    = 0
-    epochs_period = 2
+    epochs_period = 10
     patience    = 1000 #25
 
     datadir     = "/home/hws/tmp/"
@@ -646,7 +588,17 @@ def train():
     heating_rate = absorbed_flux_to_heating_rate (absorbed_flux, delta_pressure_input)
 
     print(f"heating rate = {heating_rate.shape}")
-    model = Model(inputs=[t_p_input,composition_input,null_lw_input, null_iw_input, null_mu_bar_input, mu_input,surface_input, null_toa_input, toa_input, flux_down_above_diffuse, delta_pressure_input], outputs={'flux_down_direct': flux_down_direct, 'flux_down': flux_down, 'flux_up': flux_up, 'heating_rate' : heating_rate})
+    model = Model(inputs=[t_p_input,composition_input,null_lw_input, null_iw_input, null_mu_bar_input, mu_input,surface_input, null_toa_input, toa_input, flux_down_above_diffuse, delta_pressure_input], 
+    outputs=[flux_down_direct, flux_down, flux_up,heating_rate, optical_depth])
+    #outputs={'flux_down_direct': flux_down_direct, 'flux_down': flux_down, 'flux_up': flux_up, 'heating_rate' : heating_rate})
+
+    training_inputs, training_outputs = load_data(filename_training, n_channels)
+    validation_inputs, validation_outputs = load_data(filename_validation, n_channels)
+
+    tmp_outputs = model.predict(validation_inputs)
+
+    print(f"tmp_output / optical depth for gases= {tmp_outputs[4][0]}")
+
     print(f"flux down direct (after squeeze)= {flux_down_direct.shape}")
     eps = 1.0e-04
     weight_profile = 1.0 / (eps + tf.math.reduce_mean(flux_down, axis=0, keepdims=True))
@@ -666,22 +618,23 @@ def train():
     print(f"heating_rate.name = {heating_rate.name} {heating_rate_name}")
 
     model.compile(
-        optimizer=optimizers.Adam(learning_rate=0.001),
+        optimizer=optimizers.Adam(learning_rate=0.01),
         #loss={flux_down_direct_name: 'mse',flux_down_name:'mse', flux_up_name:'mse', heating_rate_name: 'mse'},
-        loss=['mse', 'mse', 'mse', 'mse'],
+        #loss=['mse', 'mse', 'mse', 'mse'],
+        loss=[CustomLossTOA(toa_input), CustomLossTOA(toa_input), CustomLossTOA(toa_input), CustomLossTOA(toa_input)],
         #loss={flux_down.name:'mse', flux_up.name : 'mse', heating_rate.name: 'mse'},
         #loss_weights={flux_down_direct_name: 0.1,flux_down_name:0.5, flux_up_name:0.5, heating_rate_name: 0.2},
         loss_weights= [0.0,0.5,0.5,0.2],
         #loss_weights={flux_down.name:0.5, flux_up.name: 0.5, heating_rate.name: 1.0e-4},
         experimental_run_tf_function=False,
         #metrics={flux_down_direct_name: ['mse'],flux_down_name:['mse'], flux_up_name:['mse'], heating_rate_name: ['mse']},
-        metrics=[['mse'],['mse'],['mse'],['mse',CustomLossTOA(toa_input)]],
+        #metrics=[['mse'],['mse'],['mse'],['mse',CustomLossTOA(toa_input)]],
+        metrics=[[CustomLossTOA(toa_input)],[CustomLossTOA(toa_input)],[CustomLossTOA(toa_input)],[CustomLossTOA(toa_input)]],
     #{flux_down.name:'mse', flux_up.name : 'mse', heating_rate.name: 'mse'},
     )
     model.summary()
 
-    training_inputs, training_outputs = load_data(filename_training, n_channels)
-    validation_inputs, validation_outputs = load_data(filename_validation, n_channels)
+
 
     while n_epochs < epochs:
         history = model.fit(x=training_inputs, y=training_outputs,
