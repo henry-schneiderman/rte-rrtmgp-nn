@@ -194,6 +194,7 @@ class LayerProperties(Layer):
 
         return layer_properties
 
+@tf.function
 def propagate_layer_up (t_direct, t_diffuse, e_split_direct, e_split_diffuse, r_bottom_direct, r_bottom_diffuse, a_bottom_direct, a_bottom_diffuse):
     """
     Combines the properties of two atmospheric layers within a column: 
