@@ -11,10 +11,13 @@ from tensorflow.keras.layers import Dense,TimeDistributed,Layer,RNN
 
 from tensorflow.python.framework.ops import disable_eager_execution
 
+# These avoided crashes at some point
 #disable_eager_execution()
-tf.config.run_functions_eagerly(True)
-tf.data.experimental.enable_debug_mode()
 #tf.compat.v1.experimental.output_all_intermediates(True)
+
+# These are for debugging
+#tf.config.run_functions_eagerly(True)
+#tf.data.experimental.enable_debug_mode()
 
 from RT_data_hws import absorbed_flux_to_heating_rate, load_data
 
@@ -33,42 +36,6 @@ class DenseFFN(Layer):
         for hidden in self.hidden:
             X = hidden(X)
         return self.out(X)
-
-class ConsolidateFlux(Layer):
-    def __init__(self):
-        super().__init__()
-    def call(self, input):
-        print("starting: consolidated flux")
-        flux_down_above_direct, flux_down_above_diffuse, \
-        flux_down_below_direct, flux_down_below_diffuse, \
-        flux_up_above_diffuse, flux_up_below_diffuse, \
-        absorbed_flux_top = input
-
-        flux_down_above_direct = tf.expand_dims(flux_down_above_direct, axis=1)
-        flux_down_above_diffuse = tf.expand_dims(flux_down_above_diffuse, axis=1)
-        flux_up_above_diffuse = tf.expand_dims(flux_up_above_diffuse, axis=1)
-
-        flux_down_direct = tf.concat([flux_down_above_direct,flux_down_below_direct], axis=1)
-        flux_down_diffuse = tf.concat([flux_down_above_diffuse,flux_down_below_diffuse], axis=1)
-        flux_up_diffuse = tf.concat([flux_up_above_diffuse, flux_up_below_diffuse], axis=1)
-
-        # Sum across channels
-        flux_down_direct = tf.math.reduce_sum(flux_down_direct, axis=2)
-        flux_down_diffuse = tf.math.reduce_sum(flux_down_diffuse, axis=2)
-        flux_up = tf.math.reduce_sum(flux_up_diffuse, axis=2)
-
-        flux_down = flux_down_direct + flux_down_diffuse
-        flux_down = tf.squeeze(flux_down,axis=2)
-        flux_down_direct = tf.squeeze(flux_down_direct,axis=2)
-        flux_up = tf.squeeze(flux_up,axis=2)
-
-        print(f"absorbed_flux_top = {absorbed_flux_top.shape}")
-
-        absorbed_flux = tf.math.reduce_sum(absorbed_flux_top, axis=2)
-        absorbed_flux = tf.squeeze(absorbed_flux,axis=2)
-
-        print("consolidated flux")
-        return flux_down_above_direct, flux_down, flux_up, absorbed_flux
 
 class OpticalDepth(Layer):
     def __init__(self, n_hidden, n_channels):
@@ -471,21 +438,90 @@ class DownwardPropagationCell(Layer):
         print ("Downward prop")
         return output_at_i, state_at_i_plus_1
 
+class ConsolidateFlux(Layer):
+    def __init__(self):
+        super().__init__()
+    def call(self, input):
+        print("starting: consolidated flux")
+        flux_down_above_direct, flux_down_above_diffuse, \
+        flux_down_below_direct, flux_down_below_diffuse, \
+        flux_up_above_diffuse, flux_up_below_diffuse, \
+        absorbed_flux_top = input
+
+        flux_down_above_direct = tf.expand_dims(flux_down_above_direct, axis=1)
+        flux_down_above_diffuse = tf.expand_dims(flux_down_above_diffuse, axis=1)
+        flux_up_above_diffuse = tf.expand_dims(flux_up_above_diffuse, axis=1)
+
+        flux_down_direct = tf.concat([flux_down_above_direct,flux_down_below_direct], axis=1)
+        flux_down_diffuse = tf.concat([flux_down_above_diffuse,flux_down_below_diffuse], axis=1)
+        flux_up_diffuse = tf.concat([flux_up_above_diffuse, flux_up_below_diffuse], axis=1)
+
+        # Sum across channels
+        flux_down_direct = tf.math.reduce_sum(flux_down_direct, axis=2)
+        flux_down_diffuse = tf.math.reduce_sum(flux_down_diffuse, axis=2)
+        flux_up = tf.math.reduce_sum(flux_up_diffuse, axis=2)
+
+        flux_down = flux_down_direct + flux_down_diffuse
+        flux_down = tf.squeeze(flux_down,axis=2)
+        flux_down_direct = tf.squeeze(flux_down_direct,axis=2)
+        flux_up = tf.squeeze(flux_up,axis=2)
+
+        print(f"Consolidation: absorbed_flux_top = {absorbed_flux_top.shape}")
+
+        absorbed_flux = tf.math.reduce_sum(absorbed_flux_top, axis=2)
+        absorbed_flux = tf.squeeze(absorbed_flux,axis=2)
+
+        print(f"Consolidation: direct_down = {flux_down_direct.shape}")
+        print(f"Consolidation: direct = {flux_down.shape}")
+        print(f"Consolidation: up = {flux_up.shape}")
+        print(f"Consolidation: absorbed_flux = {absorbed_flux.shape}")
+
+        print("consolidated flux")
+        return flux_down_direct, flux_down, flux_up, absorbed_flux
+
+class HeatingRate(Layer):
+    def __init__(self):
+        super().__init__()
+    def call(self, input):
+        print("starting: heating_rate")
+        delta_pressure, absorbed_flux = input
+        heating_rate = absorbed_flux_to_heating_rate (absorbed_flux, delta_pressure)
+        print("finishing: heating_rate")
+        return heating_rate
+
+
+class Toa(Layer):
+    def __init__(self):
+        super().__init__()
+    def call(self, input):
+        print("starting: Toa")
+        toa = input[0]
+        result = toa * 1.0
+        print("finishing: Toa")
+        return result
+
 class CustomLossWeighted(tf.keras.losses.Loss):
     def __init__(self, weight_profile):
         super().__init__()
         self.weight_profile = weight_profile
     def call(self, y_true, y_pred):
         error = tf.reduce_mean(tf.math.square(self.weight_profile * (y_pred - y_true)))
-        return(error)
+        return error
     
 class CustomLossTOA(tf.keras.losses.Loss):
-    def __init__(self, toa):
-        super().__init__()
+    def __init__(self, toa, name="weighted_toa", **kwargs):
+        super().__init__(name=name, **kwargs)
         self.toa = toa
     def call(self, y_true, y_pred):
         error = tf.reduce_mean(tf.math.square(self.toa * (y_pred - y_true)))
-        return(error)
+        return error
+
+    def get_config(self):
+        config = {
+            'toa': self.toa,
+        }
+        base_config = super().get_config()
+        return {**base_config, **config}
 
 def train():
     n_hidden_gas = [4, 5]
@@ -493,7 +529,7 @@ def train():
     n_layers = 60
     n_composition = 8 # 6 gases + liquid water + ice water
     n_channels = 29
-    batch_size  = 10 #2048
+    batch_size  = 2048
     epochs      = 100000
     n_epochs    = 0
     epochs_period = 10
@@ -594,7 +630,10 @@ def train():
 
     toa_input = Input(shape=(1), batch_size=batch_size, name="toa_input")
 
-    heating_rate = absorbed_flux_to_heating_rate (absorbed_flux, delta_pressure_input)
+    toa = Toa()([toa_input])
+
+    heating_rate = HeatingRate()([delta_pressure_input, absorbed_flux])
+
 
     print(f"heating rate = {heating_rate.shape}")
     model = Model(inputs=[t_p_input,composition_input,null_lw_input, null_iw_input, null_mu_bar_input, mu_input,r_bottom_direct_input, r_bottom_diffuse_input, a_bottom_direct_input, a_bottom_diffuse_input, null_toa_input, toa_input, flux_down_above_diffuse_input, delta_pressure_input], 
@@ -631,15 +670,17 @@ def train():
         optimizer=optimizers.Adam(learning_rate=0.01),
         #loss={flux_down_direct_name: 'mse',flux_down_name:'mse', flux_up_name:'mse', heating_rate_name: 'mse'},
         #loss=['mse', 'mse', 'mse', 'mse'],
-        loss=[CustomLossTOA(toa_input), CustomLossTOA(toa_input), CustomLossTOA(toa_input), CustomLossTOA(toa_input)],
+        #loss=[CustomLossTOA(toa), CustomLossTOA(toa), CustomLossTOA(toa), CustomLossTOA(toa)],
+        loss=[CustomLossTOA(1400.0), CustomLossTOA(1400.0), CustomLossTOA(1400.0), CustomLossTOA(1400.0)],
         #loss={flux_down.name:'mse', flux_up.name : 'mse', heating_rate.name: 'mse'},
         #loss_weights={flux_down_direct_name: 0.1,flux_down_name:0.5, flux_up_name:0.5, heating_rate_name: 0.2},
         loss_weights= [0.0,0.5,0.5,0.2],
         #loss_weights={flux_down.name:0.5, flux_up.name: 0.5, heating_rate.name: 1.0e-4},
-        experimental_run_tf_function=False,
+        #experimental_run_tf_function=False,
         #metrics={flux_down_direct_name: ['mse'],flux_down_name:['mse'], flux_up_name:['mse'], heating_rate_name: ['mse']},
-        #metrics=[['mse'],['mse'],['mse'],['mse',CustomLossTOA(toa_input)]],
-        metrics=[[CustomLossTOA(toa_input)],[CustomLossTOA(toa_input)],[CustomLossTOA(toa_input)],[CustomLossTOA(toa_input)]],
+        #metrics=[['mse'],['mse'],['mse'],['mse']],
+        #metrics=[[CustomLossTOA(toa)],[CustomLossTOA(toa)],[CustomLossTOA(toa)],[CustomLossTOA(toa)]],
+        metrics=[[CustomLossTOA(1400.0)],[CustomLossTOA(1400.0)],[CustomLossTOA(1400.0)],[CustomLossTOA(1400.0)]],
     #{flux_down.name:'mse', flux_up.name : 'mse', heating_rate.name: 'mse'},
     )
     model.summary()
