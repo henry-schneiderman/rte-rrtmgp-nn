@@ -16,8 +16,8 @@ from tensorflow.python.framework.ops import disable_eager_execution
 #tf.compat.v1.experimental.output_all_intermediates(True)
 
 # These are for debugging
-#tf.config.run_functions_eagerly(True)
-#tf.data.experimental.enable_debug_mode()
+tf.config.run_functions_eagerly(True)
+tf.data.experimental.enable_debug_mode()
 
 from RT_data_hws import absorbed_flux_to_heating_rate, load_data
 
@@ -425,6 +425,8 @@ class DownwardPropagationCell(Layer):
 
         flux_down_above_direct, flux_down_above_diffuse = states_at_i
 
+        print(f"flux_down_above= {flux_down_above_direct}")
+
         i = input_at_i
 
         t_direct, t_diffuse, \
@@ -552,12 +554,12 @@ class DirectLoss(tf.keras.losses.Loss):
         super().__init__(name=name, **kwargs)
     def call(self, y_true, y_pred):
         error = tf.reduce_mean(y_pred - y_true, axis=0)
-        error_0 = error[-1]
+        error_0 = error[0]
         error_1 = tf.reduce_sum(error[1:5])
         error_2 = tf.reduce_sum(error[5:15])
         error_3 = tf.reduce_sum(error[15:30])
         error_4 = tf.reduce_sum(error[30:])
-        return error_0
+        return error_4
 
 
 
@@ -567,7 +569,7 @@ def train():
     n_layers = 60
     n_composition = 8 # 6 gases + liquid water + ice water
     n_channels = 29
-    batch_size  = 10 #2048q
+    batch_size  = 10 #2048
     epochs      = 100000
     n_epochs    = 0
     epochs_period = 10
@@ -630,7 +632,7 @@ def train():
 
     null_toa_input = Input(shape=(0), batch_size=batch_size, name="null_toa_input")
 
-    flux_down_above_direct = Dense(units=n_channels,bias_initializer='random_normal', activation='softmax')(null_toa_input)
+    flux_down_above_direct = Dense(units=n_channels,bias_initializer='ones', activation='softmax')(null_toa_input)
 
     print(f"flux_down_above_direct.shape={flux_down_above_direct.shape}")
 
