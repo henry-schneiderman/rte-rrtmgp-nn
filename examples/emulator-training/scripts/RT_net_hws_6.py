@@ -28,7 +28,7 @@ class DenseFFN(Layer):
     """
     def __init__(self, n_hidden, n_outputs, minval, maxval):
         super().__init__()
-        self.hidden = [Dense(units=n, activation='relu',kernel_initializer=initializers.RandomUniform(minval=minval, maxval=maxval), bias_initializer=initializers.RandomNormal()) for n in n_hidden]
+        self.hidden = [Dense(units=n, activation='elu',kernel_initializer=initializers.RandomUniform(minval=minval, maxval=maxval), bias_initializer=initializers.RandomNormal()) for n in n_hidden]
         # RELU insures that absorption coefficient is non-negative
         self.out = Dense(units=n_outputs, activation='softplus',kernel_initializer=tf.keras.initializers.glorot_uniform()) 
 
@@ -52,10 +52,10 @@ class OpticalDepth(Layer):
         # used to build a gas absorption coefficient, ke 
 
         for n in n_ke:
-            self.ke_gas_net.append([DenseFFN(n_hidden,1,minval=20.0,maxval=1000.0) for _ in np.arange(n)])
+            self.ke_gas_net.append([DenseFFN(n_hidden,1,minval=-10.0,maxval=10.0) for _ in np.arange(n)])
 
-        self.ke_lw_net = [Dense(units=1,bias_initializer=initializers.RandomUniform(minval=50.0, maxval=10000.0), activation='softplus',) for _ in np.arange(n_channels)]
-        self.ke_iw_net = [Dense(units=1, bias_initializer=initializers.RandomUniform(minval=50.0, maxval=10000.0), activation='softplus') for _ in np.arange(n_channels)]
+        self.ke_lw_net = [Dense(units=1,bias_initializer=initializers.RandomUniform(minval=50.0, maxval=1000.0), activation='softplus',) for _ in np.arange(n_channels)]
+        self.ke_iw_net = [Dense(units=1, bias_initializer=initializers.RandomUniform(minval=50.0, maxval=1000.0), activation='softplus') for _ in np.arange(n_channels)]
 
     # Note Ukkonen does not include nitrogen dioxide (no2) in simulation that generated data
     def call(self, input):
@@ -146,11 +146,14 @@ class OpticalDepth(Layer):
         tau_iw = tf.transpose(tau_iw, perm=[1,0,2])
 
         return [tau_gases, tau_lw, tau_iw]
+    
+    def compute_output_shape(self, input_shape):
+        return super().compute_output_shape(input_shape)
 
 class LayerProperties(Layer):
     def __init__(self, n_hidden, n_channels):
         super().__init__()
-        self.extinction_net = [DenseFFN(n_hidden,3,minval=0.0,maxval=1.0) for _ in np.arange(n_channels)]
+        self.extinction_net = [DenseFFN(n_hidden,3,minval=-1.0,maxval=1.0) for _ in np.arange(n_channels)]
 
     def call(self, input):
 
@@ -181,13 +184,13 @@ class LayerProperties(Layer):
         print(f'Shape of mu_bar = {mu_bar.shape}')
         print(" ")
 
-        t_direct = tf.math.exp(-tau_total / tf.expand_dims(mu,axis=2))
+        t_direct = tf.math.exp(-tau_total / (tf.expand_dims(mu,axis=2) + 0.01))
 
         print(f'Shape of t_direct = {t_direct.shape}')
         print(" ")
 
         # To avoid division by zero
-        t_diffuse = tf.math.exp(-tau_total / (tf.expand_dims(mu_bar,axis=2) + 0.05))
+        t_diffuse = tf.math.exp(-tau_total / (tf.expand_dims(mu_bar,axis=2) + 0.01))
 
         e_split_direct = tf.transpose(e_split_direct,perm=[1,0,2])
         e_split_diffuse = tf.transpose(e_split_diffuse,perm=[1,0,2])
@@ -310,25 +313,37 @@ def propagate_layer_up (t_direct, t_diffuse, e_split_direct, e_split_diffuse, r_
     # Also see Shonk and Hogan, 2007
 
     # pre-compute denominator. Add constant to avoid division by zero
-    eps = 1.0e-04
+    eps = 1.0e-06
     d = 1.0 / (1.0 - e_diffuse * e_r_diffuse * r_bottom_diffuse + eps)
 
-    t_multi_direct = t_direct * r_bottom_direct * e_diffuse * e_r_diffuse * d + \
-        e_direct * e_t_direct * d
+    t_multi_direct = t_direct * r_bottom_direct * e_diffuse * e_r_diffuse * d +  e_direct * e_t_direct * d
     
     a_bottom_multi_direct = t_direct * a_bottom_direct + t_multi_direct * a_bottom_diffuse
 
     r_bottom_multi_direct = t_direct * r_bottom_direct * d + e_direct * e_t_direct * r_bottom_diffuse * d
 
-    a_top_multi_direct = e_direct * e_a_direct + r_bottom_multi_direct * e_diffuse*e_a_diffuse
+    a_top_multi_direct = e_direct * e_a_direct + r_bottom_multi_direct * e_diffuse * e_a_diffuse
 
-    r_multi_direct = e_direct * e_r_direct + r_bottom_multi_direct * (t_diffuse + e_diffuse*e_t_diffuse)
+    r_multi_direct = e_direct * e_r_direct + r_bottom_multi_direct * (t_diffuse + e_diffuse * e_t_diffuse)
 
     # These should sum to 1.0
     total_direct = a_bottom_multi_direct + a_top_multi_direct + r_multi_direct
+    #print(f"total_direct.shape = {total_direct.shape}")
+    print(f"total_direct (should equal 1.0) = {total_direct}")
+    print(f"t_direct:  = {t_direct}")
+    print(f"t_diffuse:  = {t_diffuse}")
+    print(f"e_direct:  = {e_direct}")
+    print(f"Direct_sum (should equal 1.0) =  {e_t_direct + e_r_direct + e_a_direct}")
+    print(f"Diffuse_sum (should equal 1.0) =  {e_t_diffuse + e_r_diffuse + e_a_diffuse}")
+    print(f"Direct Bottom Sum:  = {r_bottom_direct + a_bottom_direct}")
+    print(f"Diffuse Bottom Sum:  = {r_bottom_diffuse + a_bottom_diffuse}")
+
+    #print(f"denominator term (should *NOT* equal 1.0) = {e_diffuse * e_r_diffuse * r_bottom_diffuse}")
     #assert isclose(total_direct, 1.0, abs_tol=1e-5)
     # Loss of flux should equal absorption
     diff_flux = 1.0 - t_direct - t_multi_direct + r_bottom_multi_direct - r_multi_direct 
+    print(f"direct diff flux - abs (should equal 0.0) = {tf.get_static_value(diff_flux - a_top_multi_direct)}")
+
     #assert isclose(diff_flux, a_top_multi_direct, abs_tol=1e-5)
 
     # Multi-reflection for diffuse flux
@@ -347,7 +362,9 @@ def propagate_layer_up (t_direct, t_diffuse, e_split_direct, e_split_diffuse, r_
 
     total_diffuse = a_bottom_multi_diffuse + a_top_multi_diffuse + r_multi_diffuse
     #assert isclose(total_diffuse, 1.0, abs_tol=1e-5)
+    print(f"total_diffuse (should equal 1.0) = {tf.get_static_value(total_diffuse)}")
     diff_flux = 1.0 - t_diffuse - t_multi_diffuse + r_bottom_multi_diffuse - r_multi_diffuse
+    print(f"diffuse diff flux - abs (should equal 0.0) = {tf.get_static_value(diff_flux - a_top_multi_diffuse)}")
     #assert isclose(diff_flux, a_top_multi_diffuse, abs_tol=1e-5)
 
     return t_multi_direct, t_multi_diffuse, \
@@ -359,8 +376,6 @@ def propagate_layer_up (t_direct, t_diffuse, e_split_direct, e_split_diffuse, r_
 class UpwardPropagationCell(Layer):
     def __init__(self, n_channels, **kwargs):
         super().__init__(**kwargs)
-        #self.state_size = ((n_channels, 1), (n_channels,1), (n_channels, 1), (n_channels, 1))
-        #self.state_size = (n_channels * 4)
         self.state_size = [tf.TensorShape([n_channels, 1]), tf.TensorShape([n_channels, 1]), tf.TensorShape([n_channels, 1]), tf.TensorShape([n_channels, 1])]
         self.output_size = tf.TensorShape([n_channels, 8])
         self._n_channels = n_channels
@@ -391,7 +406,7 @@ class UpwardPropagationCell(Layer):
 
         print(f"Upward Prop, r_multi_direct.shape = {r_multi_direct.shape}")
         
-        state_at_i_plus_1 = [r_multi_direct, r_multi_diffuse, a_top_multi_direct, a_top_multi_diffuse]
+        state_at_i_plus_1 = [r_multi_direct, r_multi_diffuse, a_top_multi_direct + a_bottom_multi_direct, a_top_multi_diffuse + a_bottom_multi_diffuse]
 
         print("*")
 
@@ -523,13 +538,36 @@ class CustomLossTOA(tf.keras.losses.Loss):
         base_config = super().get_config()
         return {**base_config, **config}
 
+
+class CustomLossTOA_2(tf.keras.losses.Loss):
+    def __init__(self, toa, name="weighted_toa_2", **kwargs):
+        super().__init__(name=name, **kwargs)
+        self.toa = toa
+    def call(self, y_true, y_pred):
+        error = tf.reduce_mean(self.toa * (y_pred - y_true))
+        return error
+
+class DirectLoss(tf.keras.losses.Loss):
+    def __init__(self, name="direct_loss", **kwargs):
+        super().__init__(name=name, **kwargs)
+    def call(self, y_true, y_pred):
+        error = tf.reduce_mean(y_pred - y_true, axis=0)
+        error_0 = error[-1]
+        error_1 = tf.reduce_sum(error[1:5])
+        error_2 = tf.reduce_sum(error[5:15])
+        error_3 = tf.reduce_sum(error[15:30])
+        error_4 = tf.reduce_sum(error[30:])
+        return error_0
+
+
+
 def train():
     n_hidden_gas = [4, 5]
     n_hidden_layer_coefficients = [4, 5]
     n_layers = 60
     n_composition = 8 # 6 gases + liquid water + ice water
     n_channels = 29
-    batch_size  = 2048
+    batch_size  = 10 #2048q
     epochs      = 100000
     n_epochs    = 0
     epochs_period = 10
@@ -652,20 +690,6 @@ def train():
     eps = 1.0e-04
     weight_profile = 1.0 / (eps + tf.math.reduce_mean(flux_down, axis=0, keepdims=True))
 
-    prefix = 'tf_op_layer_'
-    tmp = flux_down_direct.name
-    flux_down_direct_name = prefix + tmp[:tmp.find(':')]
-    tmp = flux_down.name
-    flux_down_name = prefix + tmp[:tmp.find(':')]
-    tmp = flux_up.name
-    flux_up_name = prefix + tmp[:tmp.find(':')]
-    tmp = heating_rate.name
-    heating_rate_name = prefix + tmp[:tmp.find(':')]
-    print(f"flux_down_direct.name = {flux_down.name} {flux_down_direct_name}")
-    print(f"flux_down.name = {flux_down.name} {flux_down_name}")
-    print(f"flux_up.name = {flux_up.name} {flux_up_name}")
-    print(f"heating_rate.name = {heating_rate.name} {heating_rate_name}")
-
     model.compile(
         optimizer=optimizers.Adam(learning_rate=0.01),
         #loss={flux_down_direct_name: 'mse',flux_down_name:'mse', flux_up_name:'mse', heating_rate_name: 'mse'},
@@ -680,7 +704,7 @@ def train():
         #metrics={flux_down_direct_name: ['mse'],flux_down_name:['mse'], flux_up_name:['mse'], heating_rate_name: ['mse']},
         #metrics=[['mse'],['mse'],['mse'],['mse']],
         #metrics=[[CustomLossTOA(toa)],[CustomLossTOA(toa)],[CustomLossTOA(toa)],[CustomLossTOA(toa)]],
-        metrics=[[CustomLossTOA(1400.0)],[CustomLossTOA(1400.0)],[CustomLossTOA(1400.0)],[CustomLossTOA(1400.0)]],
+        metrics=[[CustomLossTOA(1400.0), DirectLoss()],[CustomLossTOA(1400.0)],[CustomLossTOA(1400.0)],[CustomLossTOA(1400.0)]],
     #{flux_down.name:'mse', flux_up.name : 'mse', heating_rate.name: 'mse'},
     )
     model.summary()
