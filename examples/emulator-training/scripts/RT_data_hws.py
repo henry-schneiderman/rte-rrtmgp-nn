@@ -80,11 +80,7 @@ def load_data(file_name, n_channels):
 
     surface_absorption = np.repeat(np.expand_dims(surface_absorption,axis=1),repeats=n_channels,axis=1)
 
-    surface = np.concatenate([surface_albedo, surface_albedo, surface_absorption, surface_absorption], axis=2)
-
-    # Ideally wouldn't have to flatten the last two axes. However, could not get a custom RNN to
-    # work with a multidimensional initial state
-    surface = np.reshape(surface, (-1,n_channels * 4))
+    surface = [surface_albedo, surface_albedo, surface_absorption, surface_absorption]
 
     null_toa = np.zeros((n_samples,0))
 
@@ -117,10 +113,13 @@ def load_data(file_name, n_channels):
     rsd = np.squeeze(rsd,axis=2)
     rsd_direct = np.squeeze(rsd_direct,axis=2)
     
-    inputs = (t_p, composition, null_lw, null_iw, null_mu_bar, mu, surface, null_toa, \
+    inputs = (t_p, composition, null_lw, null_iw, null_mu_bar, mu, *surface, null_toa, \
     toa, flux_down_above_diffuse, delta_pressure)
 
     outputs = (rsd_direct, rsd, rsu, heating_rate)
+
+    #inputs = [x[:100] for x in inputs]
+    #outputs = [x[:100] for x in outputs]
 
     return inputs, outputs 
 
