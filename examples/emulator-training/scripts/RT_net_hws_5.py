@@ -12,8 +12,8 @@ from tensorflow.keras.layers import Dense,TimeDistributed,Layer,RNN
 from tensorflow.python.framework.ops import disable_eager_execution
 
 #disable_eager_execution()
-tf.config.run_functions_eagerly(True)
-tf.data.experimental.enable_debug_mode()
+#tf.config.run_functions_eagerly(True)
+#tf.data.experimental.enable_debug_mode()
 #tf.compat.v1.experimental.output_all_intermediates(True)
 
 from RT_data_hws import absorbed_flux_to_heating_rate, load_data
@@ -464,7 +464,7 @@ def train():
     n_layers = 60
     n_composition = 8 # 6 gases + liquid water + ice water
     n_channels = 29
-    batch_size  = 10 #2048
+    batch_size  = 2048
     epochs      = 100000
     n_epochs    = 0
     epochs_period = 10
