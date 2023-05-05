@@ -28,6 +28,10 @@ class DenseFFN(Layer):
     """
     def __init__(self, n_hidden, n_outputs, minval, maxval):
         super().__init__()
+        self.n_hidden = n_hidden
+        self.n_outputs = n_outputs
+        self.minval = minval
+        self.maxval = maxval
         self.hidden = [Dense(units=n, activation='elu',kernel_initializer=initializers.RandomUniform(minval=minval, maxval=maxval), bias_initializer=initializers.RandomNormal()) for n in n_hidden]
         # RELU insures that absorption coefficient is non-negative
         self.out = Dense(units=n_outputs, activation='softplus',kernel_initializer=initializers.RandomUniform(minval=minval, maxval=maxval)) 
@@ -37,6 +41,22 @@ class DenseFFN(Layer):
             X = hidden(X)
         return self.out(X)
 
+
+    def get_config(self):
+        config = {
+            'n_hidden': self.n_hidden,
+            'n_outputs': self.n_outputs,
+            'minval' : self.minval,
+            'maxval' : self.maxval,
+        }
+        return config
+
+    
+    @classmethod
+    def from_config(cls, config):
+        return cls(**config)
+
+
 class DenseFFN_2(Layer):
     """
     n_hidden[n_layers]: array of the number of nodes per layer
@@ -44,6 +64,8 @@ class DenseFFN_2(Layer):
     """
     def __init__(self, n_hidden, n_outputs):
         super().__init__()
+        self.n_hidden = n_hidden
+        self.n_outputs = n_outputs
         self.l0 = Dense(n_hidden[0], activation=None, kernel_initializer=tf.keras.initializers.glorot_uniform(), name="layer1")
         self.bn0 = BatchNormalization()
         self.ba0 = tf.keras.layers.Activation('relu')
@@ -61,11 +83,21 @@ class DenseFFN_2(Layer):
         X = self.ba1(X)
         return self.out(X)
 
+    def get_config(self):
+        return {'n_hidden': self.n_hidden,
+                'n_outputs': self.n_outputs,
+        }
+            
+    @classmethod
+    def from_config(cls, config):
+        return cls(**config)
+
 class OpticalDepth(Layer):
     def __init__(self, n_hidden, n_channels):
         super().__init__()
 
-        self._n_channels = n_channels
+        self.n_channels = n_channels
+        self.n_hidden = n_hidden
 
         # h2o, o3, co2, n2o, ch4, uniform
         n_ke = np.array([29,13,9,3,9,13])
@@ -76,11 +108,11 @@ class OpticalDepth(Layer):
         # used to build a gas absorption coefficient, ke 
 
         for n in n_ke:
-            self.ke_gas_net.append([DenseFFN(n_hidden,1,minval=-1.0,maxval=1.0) for _ in np.arange(n)])
+            self.ke_gas_net.append([DenseFFN(self.n_hidden,1,minval=-1.0,maxval=1.0) for _ in np.arange(n)])
             #self.ke_gas_net.append([DenseFFN_2(n_hidden,1) for _ in np.arange(n)])
 
-        self.ke_lw_net = [Dense(units=1,bias_initializer=initializers.RandomUniform(minval=0.10, maxval=1.0), activation='softplus',) for _ in np.arange(n_channels)]
-        self.ke_iw_net = [Dense(units=1, bias_initializer=initializers.RandomUniform(minval=0.10, maxval=1.0), activation='softplus') for _ in np.arange(n_channels)]
+        self.ke_lw_net = [Dense(units=1,bias_initializer=initializers.RandomUniform(minval=0.10, maxval=1.0), activation='softplus',) for _ in np.arange(self.n_channels)]
+        self.ke_iw_net = [Dense(units=1, bias_initializer=initializers.RandomUniform(minval=0.10, maxval=1.0), activation='softplus') for _ in np.arange(self.n_channels)]
 
     # Note Ukkonen does not include nitrogen dioxide (no2) in simulation that generated data
     def call(self, input):
@@ -105,7 +137,7 @@ class OpticalDepth(Layer):
         # Optical depth for each channel
         # using various combinations of gases' optical depths
 
-        #tau_gases = tf.Variable(initial_value=np.zeros((self._n_channels, h2o.shape[1])))
+        #tau_gases = tf.Variable(initial_value=np.zeros((self.n_channels, h2o.shape[1])))
 
         tau_gases = []
 
@@ -173,14 +205,24 @@ class OpticalDepth(Layer):
         return [tau_gases, tau_lw, tau_iw]
     
     def compute_output_shape(self, input_shape):
-        return [tf.TensorShape([input_shape[0],self._n_channels,1]), tf.TensorShape([input_shape[0],self._n_channels,1]), tf.TensorShape([input_shape[0],self._n_channels,1])]
+        return [tf.TensorShape([input_shape[0][0],self.n_channels,1]), tf.TensorShape([input_shape[0][0],self.n_channels,1]), tf.TensorShape([input_shape[0][0],self.n_channels,1])]
+
+    def get_config(self):
+        return {'n_channels': self.n_channels,
+                'n_hidden' : self.n_hidden,
+        }
+    
+    @classmethod
+    def from_config(cls, config):
+        return cls(**config)
 
 class LayerProperties(Layer):
     def __init__(self, n_hidden, n_channels):
         super().__init__()
-        self._n_channels = n_channels
-        self.extinction_net = [DenseFFN(n_hidden,3,minval=-1.0,maxval=1.0) for _ in np.arange(n_channels)]
-        #self.extinction_net = [DenseFFN_2(n_hidden,3) for _ in np.arange(n_channels)]
+        self.n_channels = n_channels
+        self.n_hidden = n_hidden
+        self.extinction_net = [DenseFFN(self.n_hidden,3,minval=-1.0,maxval=1.0) for _ in np.arange(self.n_channels)]
+        #self.extinction_net = [DenseFFN_2(n_hidden,3) for _ in np.arange(self.n_channels)]
 
     def call(self, input):
 
@@ -230,7 +272,17 @@ class LayerProperties(Layer):
         return layer_properties
 
     def compute_output_shape(self, input_shape):
-        return tf.TensorShape([input_shape[0],self._n_channels,8])
+        return tf.TensorShape([input_shape[0][0],self.n_channels,8])
+
+    def get_config(self):
+        return {
+                'n_channels': self.n_channels,
+                'n_hidden': self.n_hidden
+        }
+    
+    @classmethod
+    def from_config(cls, config):
+        return cls(**config)
 
 @tf.function
 def propagate_layer_up (t_direct, t_diffuse, e_split_direct, e_split_diffuse, r_bottom_direct, r_bottom_diffuse, a_bottom_direct, a_bottom_diffuse):
@@ -406,9 +458,10 @@ def propagate_layer_up (t_direct, t_diffuse, e_split_direct, e_split_diffuse, r_
 class UpwardPropagationCell(Layer):
     def __init__(self, n_channels, **kwargs):
         super().__init__(**kwargs)
-        self.state_size = [tf.TensorShape([n_channels, 1]), tf.TensorShape([n_channels, 1]), tf.TensorShape([n_channels, 1]), tf.TensorShape([n_channels, 1])]
-        self.output_size = tf.TensorShape([n_channels, 10])
-        self._n_channels = n_channels
+        self.n_channels = n_channels
+        self.state_size = [tf.TensorShape([self.n_channels, 1]), tf.TensorShape([self.n_channels, 1]), tf.TensorShape([self.n_channels, 1]), tf.TensorShape([self.n_channels, 1])]
+        self.output_size = tf.TensorShape([self.n_channels, 10])
+
 
     def call(self, input_at_i, states_at_i):
         print("***")
@@ -445,14 +498,24 @@ class UpwardPropagationCell(Layer):
         return output_at_i, state_at_i_plus_1
 
     def compute_output_shape(self, input_shape):
-        return tf.TensorShape([input_shape[0],self._n_channels,10])
+        return tf.TensorShape([input_shape[0],self.n_channels,10])
 
+    def get_config(self):
+        return {
+                'n_channels': self.n_channels,
+        }
+    
+    @classmethod
+    def from_config(cls, config):
+        return cls(**config)
+    
 class DownwardPropagationCell(Layer):
     def __init__(self,n_channels):
         super().__init__()
-        self.state_size = [tf.TensorShape([n_channels, 1]), tf.TensorShape([n_channels, 1])]
-        self.output_size = tf.TensorShape([n_channels, 4])
-        self._n_channels = n_channels
+        self.n_channels = n_channels
+        self.state_size = [tf.TensorShape([self.n_channels, 1]), tf.TensorShape([self.n_channels, 1])]
+        self.output_size = tf.TensorShape([self.n_channels, 4])
+
 
     def call(self, input_at_i, states_at_i):
 
@@ -502,7 +565,16 @@ class DownwardPropagationCell(Layer):
         return output_at_i, state_at_i_plus_1
 
     def compute_output_shape(self, input_shape):
-        return tf.TensorShape([input_shape[0],self._n_channels,4])
+        return tf.TensorShape([input_shape[0],self.n_channels,4])
+
+    def get_config(self):
+        return {
+                'n_channels': self.n_channels,
+        }
+            
+    @classmethod
+    def from_config(cls, config):
+        return cls(**config)
 
 class ConsolidateFlux(Layer):
     def __init__(self):
@@ -547,7 +619,10 @@ class ConsolidateFlux(Layer):
         return flux_down_direct, flux_down, flux_up, absorbed_flux
 
     def compute_output_shape(self, input_shape):
-        return [tf.TensorShape([input_shape[0][0],input_shape[2][1] + 1]),tf.TensorShape([input_shape[0][0],input_shape[2][1] + 1]), tf.TensorShape([input_shape[0][0],input_shape[2][1] + 1]), tf.TensorShape([input_shape[0][0],input_shape[2][1]])]
+        return [tf.TensorShape([input_shape[0][0],input_shape[2][1] + 1]),
+                tf.TensorShape([input_shape[0][0],input_shape[2][1] + 1]), 
+                tf.TensorShape([input_shape[0][0],input_shape[2][1] + 1]), 
+                tf.TensorShape([input_shape[0][0],input_shape[2][1]])]
 
 class HeatingRate(Layer):
     def __init__(self):
@@ -594,6 +669,10 @@ class CustomLossTOA(tf.keras.losses.Loss):
         }
         base_config = super().get_config()
         return {**base_config, **config}
+    
+    @classmethod
+    def from_config(cls, config):
+        return cls(**config)
 
 
 class CustomLossTOA_2(tf.keras.losses.Loss):
@@ -664,7 +743,7 @@ def train():
     batch_size  = 2048
     epochs      = 100000
     n_epochs    = 0
-    epochs_period = 40
+    epochs_period = 2
     patience    = 1000 #25
 
     datadir     = "/home/hws/tmp/"
@@ -808,6 +887,8 @@ def train():
     )
     model.summary()
 
+    print(f"model.metrics_names = {model.metrics_names}")
+
     
     #output = model(inputs=validation_inputs)
 
@@ -825,10 +906,16 @@ def train():
         
         n_epochs = n_epochs + epochs_period
         print(f"Writing model {n_epochs}")
-        model.save(filename_model + 'TEMP.' + str(n_epochs))
+        model.save(filename_model + 'TEMP.' + str(n_epochs), save_traces=True)
         
         del model
-        model = tf.keras.models.load_model(filename_model + 'TEMP.' + str(n_epochs))
+        model = tf.keras.models.load_model(filename_model + 'TEMP.' + str(n_epochs),
+                                           custom_objects={'OpticalDepth': OpticalDepth,
+                                                           'LayerProperties': LayerProperties,
+                                                           'UpwardPropagationCell' : UpwardPropagationCell,
+                                                           'DownwardPropagationCell' : DownwardPropagationCell,
+                                                           'DenseFFN' : DenseFFN,
+                                                           })
 
 if __name__ == "__main__":
     train()
