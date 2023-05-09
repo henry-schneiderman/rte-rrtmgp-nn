@@ -1,3 +1,5 @@
+# Same as #6 except twice the channels
+
 import os
 import datetime
 import numpy as np
@@ -19,7 +21,7 @@ from tensorflow.python.framework.ops import disable_eager_execution
 #tf.config.run_functions_eagerly(True)
 #tf.data.experimental.enable_debug_mode()
 
-from RT_data_hws import absorbed_flux_to_heating_rate, load_data
+from RT_data_hws import absorbed_flux_to_heating_rate, load_data_2
 
 class DenseFFN(Layer):
     """
@@ -101,25 +103,30 @@ class OpticalDepth(Layer):
         super().__init__(**kwargs)
 
         self.n_channels = n_channels
+        self.n_half_channels = n_channels / 2
         self.n_hidden = n_hidden
 
         # h2o, o3, co2, n2o, ch4, uniform
         n_ke = np.array([29,13,9,3,9,13])
 
-        self.ke_gas_net = []
+        self.ke_gas_net_1 = []
+        self.ke_gas_net_2 = []
 
         # Represents a function of temperature and pressure
         # used to build a gas absorption coefficient, ke 
 
         for n in n_ke:
-            self.ke_gas_net.append([DenseFFN(self.n_hidden,1,minval=-1.0,maxval=1.0) for _ in np.arange(n)])
-            #self.ke_gas_net.append([DenseFFN_2(n_hidden,1) for _ in np.arange(n)])
+            self.ke_gas_net_1.append([DenseFFN(self.n_hidden,1,minval=-1.0,maxval=1.0) for _ in np.arange(n)])
+            self.ke_gas_net_2.append([DenseFFN(self.n_hidden,1,minval=-1.0,maxval=1.0) for _ in np.arange(n)])
 
-        self.ke_lw_net = [Dense(units=1,bias_initializer=initializers.RandomUniform(minval=10.10, maxval=100.0), activation='softplus',) for _ in np.arange(self.n_channels)]
-        self.ke_iw_net = [Dense(units=1, bias_initializer=initializers.RandomUniform(minval=10.10, maxval=100.0), activation='softplus') for _ in np.arange(self.n_channels)]
 
+        self.ke_lw_net_1 = [Dense(units=1,bias_initializer=initializers.RandomUniform(minval=10.10, maxval=100.0), activation='softplus',) for _ in np.arange(self.n_half_channels)]
+        self.ke_iw_net_1 = [Dense(units=1, bias_initializer=initializers.RandomUniform(minval=10.10, maxval=100.0), activation='softplus') for _ in np.arange(self.n_half_channels)]
+
+        self.ke_lw_net_2 = [Dense(units=1,bias_initializer=initializers.RandomUniform(minval=10.10, maxval=100.0), activation='softplus',) for _ in np.arange(self.n_half_channels)]
+        self.ke_iw_net_2 = [Dense(units=1, bias_initializer=initializers.RandomUniform(minval=10.10, maxval=100.0), activation='softplus') for _ in np.arange(self.n_half_channels)]
     # Note Ukkonen does not include nitrogen dioxide (no2) in simulation that generated data
-    def call(self, input):
+    def subcall(self, input, gas_net, lw_net, iw_net):
 
         t_p, composition, null_lw, null_iw = input
 
@@ -128,7 +135,7 @@ class OpticalDepth(Layer):
         print(f"shape of composition = {composition.shape}")
 
         tau_gas = []
-        for i, ke_gas_net in enumerate(self.ke_gas_net):
+        for i, ke_gas_net in enumerate(gas_net):
             # Extinction coefficient determined by network
             ke = [net(t_p) for net in ke_gas_net]
             # Tau = ke * mass_path_for_gas
@@ -194,17 +201,33 @@ class OpticalDepth(Layer):
         tau_gases = tf.convert_to_tensor(tau_gases)
 
         # Optical depth for liquid and ice water for each channel
-        tau_lw = [net(null_lw) for net in self.ke_lw_net]
+        tau_lw = [net(null_lw) for net in lw_net]
         tau_lw = tf.convert_to_tensor(tau_lw)
         tau_lw = tf.multiply(tau_lw,tf.reshape(composition[:,6], (1,-1, 1)))
 
-        tau_iw = [net(null_iw) for net in self.ke_iw_net]
+        tau_iw = [net(null_iw) for net in iw_net]
         tau_iw = tf.convert_to_tensor(tau_iw)
         tau_iw = tf.multiply(tau_iw,tf.reshape(composition[:,7], (1,-1, 1)))
 
         tau_gases = tf.transpose(tau_gases, perm=[1,0,2])
         tau_lw = tf.transpose(tau_lw, perm=[1,0,2])
         tau_iw = tf.transpose(tau_iw, perm=[1,0,2])
+
+        return [tau_gases, tau_lw, tau_iw]
+    
+    def call(self, input):
+
+        t_p, composition, null_lw, null_iw = input
+
+        output_1 = self.subcall(input, self.ke_gas_net_1, self.ke_lw_net_1, self.ke_iw_net_1)
+        output_2 = self.subcall(input, self.ke_gas_net_2, self.ke_lw_net_2, self.ke_iw_net_2)
+
+        tau_gases_1, tau_lw_1, tau_iw_1 = output_1
+        tau_gases_2, tau_lw_2, tau_iw_2 = output_2
+
+        tau_gases = tf.concat((tau_gases_1, tau_gases_2), axis=1)
+        tau_lw = tf.concat((tau_lw_1, tau_lw_2), axis=1)
+        tau_iw = tf.concat((tau_iw_1, tau_iw_2), axis=1)
 
         return [tau_gases, tau_lw, tau_iw]
     
@@ -522,59 +545,34 @@ class DownwardPropagationCell(Layer):
     def __init__(self,n_channels,**kwargs):
         super().__init__(**kwargs)
         self.n_channels = n_channels
-        self.state_size = [tf.TensorShape([self.n_channels, 1]), tf.TensorShape([self.n_channels, 1])]
-        self.output_size = tf.TensorShape([self.n_channels, 4])
-
+        self.state_size = [tf.TensorShape([self.n_channels, 1])]
+        self.output_size = tf.TensorShape([self.n_channels, 1])
 
     def call(self, input_at_i, states_at_i):
 
-        flux_down_above_direct, flux_down_above_diffuse = states_at_i
+        flux_down_above_direct, = states_at_i
 
         print(f"flux_down_above= {flux_down_above_direct}")
 
         i = input_at_i
 
-        t_direct, t_diffuse, \
-        t_multi_direct, t_multi_diffuse, \
-        r_multi_direct, r_multi_diffuse, \
-        r_bottom_multi_direct, r_bottom_multi_diffuse, \
-        a_top_multi_direct, a_top_multi_diffuse  = i[:,:,0:1], i[:,:,1:2],i[:,:,2:3], i[:,:,3:4],i[:,4:5], i[:,:,5:6],i[:,:,6:7], i[:,:,7:8],i[:,:,8:9], i[:,:,9:10]
-
-        absorbed_flux_top = flux_down_above_direct * a_top_multi_direct + \
-                        flux_down_above_diffuse * a_top_multi_diffuse
-
+        t_direct = i[:,:,0:1]
 
         # Will want this later when incorporate surface interactions
         #absorbed_flux_bottom = flux_down_above_direct * a_bottom_multi_direct + \
         #flux_down_above_diffuse * a_bottom_multi_diffuse
 
         flux_down_below_direct = flux_down_above_direct * t_direct
-        flux_down_below_diffuse = flux_down_above_direct * t_multi_direct + \
-                                flux_down_above_diffuse * (t_diffuse + t_multi_diffuse)
-        flux_up_below_diffuse = flux_down_above_direct * r_bottom_multi_direct + \
-                            flux_down_above_diffuse * r_bottom_multi_diffuse
-
-        ## For debugging
-
-        flux_up_above_diffuse = flux_down_above_direct * r_multi_direct + \
-                            flux_down_above_diffuse * r_multi_diffuse
         
-        diff_flux = flux_down_above_direct - flux_down_below_direct + flux_down_above_diffuse - flux_down_below_diffuse + flux_up_below_diffuse - flux_up_above_diffuse
-
-        print(f"Total_Flux - Total_absorption (should equal 0.0) = {tf.get_static_value(diff_flux - absorbed_flux_top)}")
-
-        #assert isclose(diff_flux, absorbed_flux_top, abs_tol=1e-5)
-        
-        output_at_i = tf.concat([flux_down_below_direct, flux_down_below_diffuse, \
-            flux_up_below_diffuse, absorbed_flux_top], axis=2) #, #absorbed_flux_bottom
+        output_at_i = flux_down_below_direct
          
-        state_at_i_plus_1=[flux_down_below_direct, flux_down_below_diffuse]
+        state_at_i_plus_1=[flux_down_below_direct,]
 
         print ("Downward prop")
         return output_at_i, state_at_i_plus_1
 
     def compute_output_shape(self, input_shape):
-        return tf.TensorShape([input_shape[0],self.n_channels,4])
+        return tf.TensorShape([input_shape[0],self.n_channels,1])
 
     def get_config(self):
         base_config = super(DownwardPropagationCell, self).get_config()
@@ -592,48 +590,23 @@ class ConsolidateFlux(Layer):
         super().__init__(**kwargs)
     def call(self, input):
         print("starting: consolidated flux")
-        flux_down_above_direct, flux_down_above_diffuse, \
-        flux_down_below_direct, flux_down_below_diffuse, \
-        flux_up_above_diffuse, flux_up_below_diffuse, \
-        absorbed_flux_top = input
+        flux_down_above_direct, flux_down_below_direct = input
 
         # Add layers dimension
         flux_down_above_direct = tf.expand_dims(flux_down_above_direct, axis=1)
-        flux_down_above_diffuse = tf.expand_dims(flux_down_above_diffuse, axis=1)
-        flux_up_above_diffuse = tf.expand_dims(flux_up_above_diffuse, axis=1)
+
 
         flux_down_direct = tf.concat([flux_down_above_direct,flux_down_below_direct], axis=1)
-        flux_down_diffuse = tf.concat([flux_down_above_diffuse,flux_down_below_diffuse], axis=1)
-        flux_up_diffuse = tf.concat([flux_up_above_diffuse, flux_up_below_diffuse], axis=1)
 
         # Sum across channels
         flux_down_direct = tf.math.reduce_sum(flux_down_direct, axis=2)
-        flux_down_diffuse = tf.math.reduce_sum(flux_down_diffuse, axis=2)
-        flux_up = tf.math.reduce_sum(flux_up_diffuse, axis=2)
-
-        flux_down = flux_down_direct + flux_down_diffuse
-        flux_down = tf.squeeze(flux_down,axis=2)
+     
         flux_down_direct = tf.squeeze(flux_down_direct,axis=2)
-        flux_up = tf.squeeze(flux_up,axis=2)
 
-        print(f"Consolidation: absorbed_flux_top = {absorbed_flux_top.shape}")
-
-        absorbed_flux = tf.math.reduce_sum(absorbed_flux_top, axis=2)
-        absorbed_flux = tf.squeeze(absorbed_flux,axis=2)
-
-        print(f"Consolidation: direct_down = {flux_down_direct.shape}")
-        print(f"Consolidation: direct = {flux_down.shape}")
-        print(f"Consolidation: up = {flux_up.shape}")
-        print(f"Consolidation: absorbed_flux = {absorbed_flux.shape}")
-
-        print("consolidated flux")
-        return flux_down_direct, flux_down, flux_up, absorbed_flux
+        return flux_down_direct
 
     def compute_output_shape(self, input_shape):
-        return [tf.TensorShape([input_shape[0][0],input_shape[2][1] + 1]),
-                tf.TensorShape([input_shape[0][0],input_shape[2][1] + 1]), 
-                tf.TensorShape([input_shape[0][0],input_shape[2][1] + 1]), 
-                tf.TensorShape([input_shape[0][0],input_shape[2][1]])]
+        return [tf.TensorShape([input_shape[0][0],input_shape[2][1] + 1]),]
 
 class VerificationLayer(Layer):
     def __init__(self, **kwargs):
@@ -758,15 +731,14 @@ class DirectLoss4(tf.keras.losses.Loss):
         return error_4
 
 
-
 def train():
 
     n_hidden_gas = [4, 5]
     n_hidden_layer_coefficients = [4, 5]
     n_layers = 60
     n_composition = 8 # 6 gases + liquid water + ice water
-    n_channels = 29
-    batch_size  = 2048
+    n_channels = 58
+    batch_size  = 512 #2048
     epochs      = 100000
     n_epochs    = 0
     epochs_period = 20
@@ -807,26 +779,6 @@ def train():
 
     layer_properties = TimeDistributed(LayerProperties(n_hidden_layer_coefficients, n_channels), name="layer_properties")([*optical_depth, mu_input, mu_bar])
 
-    # Upward propagation: a and r 
-    # (Working upwards layer by layer computing
-    # absorption and reflection for the entire atmosphere
-    # below the current layer)
-
-    # absorption and reflection (albedo) of the surface
-    r_bottom_direct_input = Input(shape=(n_channels,1), batch_size=batch_size, name="r_bottom_direct_input")
-    r_bottom_diffuse_input = Input(shape=(n_channels,1), batch_size=batch_size, name="r_bottom_diffuse_input")
-    a_bottom_direct_input = Input(shape=(n_channels,1), batch_size=batch_size, name="a_bottom_direct_input")
-    a_bottom_diffuse_input = Input(shape=(n_channels,1), batch_size=batch_size, name="a_bottom_diffuse_input")
-
-    upward_output, r_multi_direct, _, _, _, = RNN(UpwardPropagationCell(n_channels), return_sequences=True, return_state=True, go_backwards=True, time_major=False)(inputs=layer_properties, initial_state=[r_bottom_direct_input, r_bottom_diffuse_input, a_bottom_direct_input, a_bottom_diffuse_input])
-
-    print ("****")
-    print(f"r_multi_direct shape={tf.shape(r_multi_direct)}")
-
-    # Downward propagation:
-    # Determine flux absorbed at each level
-    # Determine downward and upward flux at all levels
-
     null_toa_input = Input(shape=(0), batch_size=batch_size, name="null_toa_input")
 
     flux_down_above_direct = Dense(units=n_channels,bias_initializer='ones', activation='softmax')(null_toa_input)
@@ -835,62 +787,27 @@ def train():
 
     flux_down_above_direct = tf.expand_dims(flux_down_above_direct,2)
 
-    # Set to zeros
-    flux_down_above_diffuse_input = Input(shape=(n_channels, 1), batch_size=batch_size, name="flux_down_above_diffuse_input")
+    initial_state_down=[flux_down_above_direct,]
 
-    flux_up_above_diffuse = tf.multiply(flux_down_above_direct,r_multi_direct)
-
-    initial_state_down=[flux_down_above_direct, flux_down_above_diffuse_input]
-
-    #tmp_tensor = RearrangeTensor()(upward_output)
-    tmp_tensor = tf.reverse(upward_output, axis=[1])
-
-    downward_input = tf.concat([layer_properties[:,:,:,0:1], layer_properties[:,:,:,1:2],tmp_tensor],axis=3)
-
-    #initial_state_down=tf.concat([flux_down_above_direct, flux_down_above_diffuse], axis=1)
-    #print(f"initial_state_down.shape={initial_state_down.shape}")
-    #print(" ")
-    #initial_state_down=tf.reshape(initial_state_down,(-1,n_channels*2))
+    downward_input = layer_properties
 
     # Downward propagation: t and a
-    downward_output = RNN(DownwardPropagationCell(n_channels), return_sequences=True, return_state=False, go_backwards=False, time_major=False)(inputs=downward_input, initial_state=initial_state_down)
+    flux_down_below_direct = RNN(DownwardPropagationCell(n_channels), return_sequences=True, return_state=False, go_backwards=False, time_major=False)(inputs=downward_input, initial_state=initial_state_down)
 
-    print(f"downward output shape = {downward_output.shape}")
+    flux_inputs = (flux_down_above_direct, flux_down_below_direct)
 
-    flux_down_below_direct, flux_down_below_diffuse, \
-            flux_up_below_diffuse, absorbed_flux_top = downward_output[:,:,:,0:1],downward_output[:,:,:,1:2],downward_output[:,:,:,2:3],downward_output[:,:,:,3:4]
-
-    flux_inputs = (flux_down_above_direct, flux_down_above_diffuse_input,
-        flux_down_below_direct, flux_down_below_diffuse, 
-        flux_up_above_diffuse, flux_up_below_diffuse,
-        absorbed_flux_top)
-
-    #model_error = VerificationLayer()([flux_down_above_direct, layer_properties[:,:,:,0:1], flux_down_below_direct])
-
-    #print(f"model error = {model_error}")
-        
-    flux_down_direct, flux_down, flux_up, absorbed_flux = ConsolidateFlux()(flux_inputs)
-
-    # Inputs for metrics and loss
-    delta_pressure_input = Input(shape=(n_layers), batch_size=batch_size, name="delta_pressure_input")
-
-    toa_input = Input(shape=(1), batch_size=batch_size, name="toa_input")
-
-    toa = Toa()([toa_input])
-
-    heating_rate = HeatingRate()([delta_pressure_input, absorbed_flux])
+    flux_down_direct = ConsolidateFlux()(flux_inputs)
 
     # This is just to force the VerificationLayer to run
     #heating_rate = heating_rate + tf.expand_dims(model_error, axis=1)
 
-    print(f"heating rate = {heating_rate.shape}")
-    model = Model(inputs=[t_p_input,composition_input,null_lw_input, null_iw_input, null_mu_bar_input, mu_input,r_bottom_direct_input, r_bottom_diffuse_input, a_bottom_direct_input, a_bottom_diffuse_input, null_toa_input, toa_input, flux_down_above_diffuse_input, delta_pressure_input], 
-    outputs=[flux_down_direct, flux_down, flux_up, heating_rate])
+    model = Model(inputs=[t_p_input,composition_input,null_lw_input, null_iw_input, null_mu_bar_input, mu_input,null_toa_input], 
+    outputs=[flux_down_direct])
     #outputs=[flux_down_direct, flux_down, flux_up,heating_rate, optical_depth])
     #outputs={'flux_down_direct': flux_down_direct, 'flux_down': flux_down, 'flux_up': flux_up, 'heating_rate' : heating_rate})
 
-    training_inputs, training_outputs = load_data(filename_training, n_channels)
-    validation_inputs, validation_outputs = load_data(filename_validation, n_channels)
+    training_inputs, training_outputs = load_data_2(filename_training, n_channels)
+    validation_inputs, validation_outputs = load_data_2(filename_validation, n_channels)
 
     #tmp_outputs = model.predict(validation_inputs)
 
@@ -898,25 +815,25 @@ def train():
 
     print(f"flux down direct (after squeeze)= {flux_down_direct.shape}")
     eps = 1.0e-04
-    weight_profile = 1.0 / (eps + tf.math.reduce_mean(flux_down, axis=0, keepdims=True))
+    #weight_profile = 1.0 / (eps + tf.math.reduce_mean(flux_down, axis=0, keepdims=True))
 
     model.compile(
         optimizer=optimizers.Adam(learning_rate=0.001),
         #loss={flux_down_direct_name: 'mse',flux_down_name:'mse', flux_up_name:'mse', heating_rate_name: 'mse'},
         #loss=['mse', 'mse', 'mse', 'mse'],
         #loss=[CustomLossTOA(toa), CustomLossTOA(toa), CustomLossTOA(toa), CustomLossTOA(toa)],
-        loss=[CustomLossTOA(1400.0), CustomLossTOA(1400.0), CustomLossTOA(1400.0), CustomLossTOA(1400.0)],
+        loss=[CustomLossTOA(1400.0),],
         #loss={flux_down.name:'mse', flux_up.name : 'mse', heating_rate.name: 'mse'},
         #loss_weights={flux_down_direct_name: 0.1,flux_down_name:0.5, flux_up_name:0.5, heating_rate_name: 0.2},
         #loss_weights= [0.1,0.5,0.5,0.2],
         #loss_weights= [0.1,0.5,0.5,0.8], #TEMP.
-        loss_weights= [1.0,0.0,0.0,0.0], #TEMP.2.
+        loss_weights= [1.0], #TEMP.2.
         #loss_weights={flux_down.name:0.5, flux_up.name: 0.5, heating_rate.name: 1.0e-4},
         #experimental_run_tf_function=False,
         #metrics={flux_down_direct_name: ['mse'],flux_down_name:['mse'], flux_up_name:['mse'], heating_rate_name: ['mse']},
         #metrics=[['mse'],['mse'],['mse'],['mse']],
         #metrics=[[CustomLossTOA(toa)],[CustomLossTOA(toa)],[CustomLossTOA(toa)],[CustomLossTOA(toa)]],
-        metrics=[[CustomLossTOA(1400.0), DirectLoss0(), DirectLoss1(), DirectLoss2(),DirectLoss4()],[CustomLossTOA(1400.0)],[CustomLossTOA(1400.0)],[CustomLossTOA(1400.0)]],
+        metrics=[[CustomLossTOA(1400.0),]],
     #{flux_down.name:'mse', flux_up.name : 'mse', heating_rate.name: 'mse'},
     )
     model.summary()

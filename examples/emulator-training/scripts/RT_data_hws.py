@@ -68,6 +68,8 @@ def load_data(file_name, n_channels):
     mu = np.reshape(mu,(n_samples,1,1))
     mu = np.repeat(mu,axis=1,repeats=n_layers)
 
+
+
     null_mu_bar = np.zeros((n_samples,0))
 
     surface_albedo = data.variables['sfc_alb'][:].data
@@ -122,6 +124,14 @@ def load_data(file_name, n_channels):
     #outputs = [x[:100] for x in outputs]
 
     return inputs, outputs 
+
+def load_data_2(file_name, n_channels):
+    inputs, outputs = load_data(file_name, n_channels)
+    t_p, composition, null_lw, null_iw, null_mu_bar, mu, _, _, _, _, null_toa, \
+    toa, flux_down_above_diffuse, delta_pressure = inputs
+    i = [t_p, composition, null_lw, null_iw, null_mu_bar, mu, null_toa]
+    o = [outputs[0]]
+    return i, o
 
 def get_max():
 

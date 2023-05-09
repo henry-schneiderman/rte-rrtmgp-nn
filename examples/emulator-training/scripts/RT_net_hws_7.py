@@ -1,3 +1,5 @@
+# Same as #6 except twice the channels
+
 import os
 import datetime
 import numpy as np
@@ -101,25 +103,30 @@ class OpticalDepth(Layer):
         super().__init__(**kwargs)
 
         self.n_channels = n_channels
+        self.n_half_channels = n_channels / 2
         self.n_hidden = n_hidden
 
         # h2o, o3, co2, n2o, ch4, uniform
         n_ke = np.array([29,13,9,3,9,13])
 
-        self.ke_gas_net = []
+        self.ke_gas_net_1 = []
+        self.ke_gas_net_2 = []
 
         # Represents a function of temperature and pressure
         # used to build a gas absorption coefficient, ke 
 
         for n in n_ke:
-            self.ke_gas_net.append([DenseFFN(self.n_hidden,1,minval=-1.0,maxval=1.0) for _ in np.arange(n)])
-            #self.ke_gas_net.append([DenseFFN_2(n_hidden,1) for _ in np.arange(n)])
+            self.ke_gas_net_1.append([DenseFFN(self.n_hidden,1,minval=-1.0,maxval=1.0) for _ in np.arange(n)])
+            self.ke_gas_net_2.append([DenseFFN(self.n_hidden,1,minval=-1.0,maxval=1.0) for _ in np.arange(n)])
 
-        self.ke_lw_net = [Dense(units=1,bias_initializer=initializers.RandomUniform(minval=10.10, maxval=100.0), activation='softplus',) for _ in np.arange(self.n_channels)]
-        self.ke_iw_net = [Dense(units=1, bias_initializer=initializers.RandomUniform(minval=10.10, maxval=100.0), activation='softplus') for _ in np.arange(self.n_channels)]
 
+        self.ke_lw_net_1 = [Dense(units=1,bias_initializer=initializers.RandomUniform(minval=10.10, maxval=100.0), activation='softplus',) for _ in np.arange(self.n_half_channels)]
+        self.ke_iw_net_1 = [Dense(units=1, bias_initializer=initializers.RandomUniform(minval=10.10, maxval=100.0), activation='softplus') for _ in np.arange(self.n_half_channels)]
+
+        self.ke_lw_net_2 = [Dense(units=1,bias_initializer=initializers.RandomUniform(minval=10.10, maxval=100.0), activation='softplus',) for _ in np.arange(self.n_half_channels)]
+        self.ke_iw_net_2 = [Dense(units=1, bias_initializer=initializers.RandomUniform(minval=10.10, maxval=100.0), activation='softplus') for _ in np.arange(self.n_half_channels)]
     # Note Ukkonen does not include nitrogen dioxide (no2) in simulation that generated data
-    def call(self, input):
+    def subcall(self, input, gas_net, lw_net, iw_net):
 
         t_p, composition, null_lw, null_iw = input
 
@@ -128,7 +135,7 @@ class OpticalDepth(Layer):
         print(f"shape of composition = {composition.shape}")
 
         tau_gas = []
-        for i, ke_gas_net in enumerate(self.ke_gas_net):
+        for i, ke_gas_net in enumerate(gas_net):
             # Extinction coefficient determined by network
             ke = [net(t_p) for net in ke_gas_net]
             # Tau = ke * mass_path_for_gas
@@ -194,17 +201,33 @@ class OpticalDepth(Layer):
         tau_gases = tf.convert_to_tensor(tau_gases)
 
         # Optical depth for liquid and ice water for each channel
-        tau_lw = [net(null_lw) for net in self.ke_lw_net]
+        tau_lw = [net(null_lw) for net in lw_net]
         tau_lw = tf.convert_to_tensor(tau_lw)
         tau_lw = tf.multiply(tau_lw,tf.reshape(composition[:,6], (1,-1, 1)))
 
-        tau_iw = [net(null_iw) for net in self.ke_iw_net]
+        tau_iw = [net(null_iw) for net in iw_net]
         tau_iw = tf.convert_to_tensor(tau_iw)
         tau_iw = tf.multiply(tau_iw,tf.reshape(composition[:,7], (1,-1, 1)))
 
         tau_gases = tf.transpose(tau_gases, perm=[1,0,2])
         tau_lw = tf.transpose(tau_lw, perm=[1,0,2])
         tau_iw = tf.transpose(tau_iw, perm=[1,0,2])
+
+        return [tau_gases, tau_lw, tau_iw]
+    
+    def call(self, input):
+
+        t_p, composition, null_lw, null_iw = input
+
+        output_1 = self.subcall(input, self.ke_gas_net_1, self.ke_lw_net_1, self.ke_iw_net_1)
+        output_2 = self.subcall(input, self.ke_gas_net_2, self.ke_lw_net_2, self.ke_iw_net_2)
+
+        tau_gases_1, tau_lw_1, tau_iw_1 = output_1
+        tau_gases_2, tau_lw_2, tau_iw_2 = output_2
+
+        tau_gases = tf.concat((tau_gases_1, tau_gases_2), axis=1)
+        tau_lw = tf.concat((tau_lw_1, tau_lw_2), axis=1)
+        tau_iw = tf.concat((tau_iw_1, tau_iw_2), axis=1)
 
         return [tau_gases, tau_lw, tau_iw]
     
@@ -765,8 +788,8 @@ def train():
     n_hidden_layer_coefficients = [4, 5]
     n_layers = 60
     n_composition = 8 # 6 gases + liquid water + ice water
-    n_channels = 29
-    batch_size  = 2048
+    n_channels = 58
+    batch_size  = 512 #2048
     epochs      = 100000
     n_epochs    = 0
     epochs_period = 20
