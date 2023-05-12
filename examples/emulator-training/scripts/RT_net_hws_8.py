@@ -1,4 +1,5 @@
 # Same as #6 except twice the channels
+# Also stripped out everything except direct down path
 
 import os
 import datetime
@@ -28,15 +29,15 @@ class DenseFFN(Layer):
     n_hidden[n_layers]: array of the number of nodes per layer
     Last layer has RELU activation insuring non-negative output
     """
-    def __init__(self, n_hidden, n_outputs, minval, maxval,**kwargs):
+    def __init__(self, n_hidden, n_outputs, minval, maxval, name=None, **kwargs):
         super().__init__(**kwargs)
         self.n_hidden = n_hidden
         self.n_outputs = n_outputs
         self.minval = minval
         self.maxval = maxval
-        self.hidden = [Dense(units=n, activation='elu',kernel_initializer=initializers.RandomUniform(minval=minval, maxval=maxval), bias_initializer=initializers.RandomNormal()) for n in n_hidden]
+        self.hidden = [Dense(units=n, activation='elu',kernel_initializer=initializers.RandomUniform(minval=minval, maxval=maxval), bias_initializer=initializers.RandomNormal(), name=name + str(n)) for n in n_hidden]
         # RELU insures that absorption coefficient is non-negative
-        self.out = Dense(units=n_outputs, activation='softplus',kernel_initializer=initializers.RandomUniform(minval=minval, maxval=maxval)) 
+        self.out = Dense(units=n_outputs, activation='softplus',kernel_initializer=initializers.RandomUniform(minval=minval, maxval=maxval), name=name + 'output') 
 
     def call(self, X):
 
@@ -99,11 +100,14 @@ class DenseFFN_2(Layer):
         return cls(**config)
 
 class OpticalDepth(Layer):
-    def __init__(self, n_hidden, n_channels, **kwargs):
+    def __init__(self, n_hidden, n_channels, is_doubled=False, **kwargs):
         super().__init__(**kwargs)
 
         self.n_channels = n_channels
-        self.n_half_channels = n_channels / 2
+        if is_doubled:
+            self.n_half_channels = n_channels / 2
+        else:
+            self.n_half_channels = n_channels 
         self.n_hidden = n_hidden
 
         # h2o, o3, co2, n2o, ch4, uniform
@@ -115,16 +119,19 @@ class OpticalDepth(Layer):
         # Represents a function of temperature and pressure
         # used to build a gas absorption coefficient, ke 
 
-        for n in n_ke:
-            self.ke_gas_net_1.append([DenseFFN(self.n_hidden,1,minval=-1.0,maxval=1.0) for _ in np.arange(n)])
-            self.ke_gas_net_2.append([DenseFFN(self.n_hidden,1,minval=-1.0,maxval=1.0) for _ in np.arange(n)])
+        for i, n in enumerate(n_ke):
+            self.ke_gas_net_1.append([DenseFFN(self.n_hidden,1,minval=-1.0,maxval=1.0, name='ke_gas.' + str(i) + f".{j}.") for j in np.arange(n)])
+
+            if is_doubled:
+                self.ke_gas_net_2.append([DenseFFN(self.n_hidden,1,minval=-1.0,maxval=1.0) for _ in np.arange(n)])
 
 
-        self.ke_lw_net_1 = [Dense(units=1,bias_initializer=initializers.RandomUniform(minval=10.10, maxval=100.0), activation='softplus',) for _ in np.arange(self.n_half_channels)]
-        self.ke_iw_net_1 = [Dense(units=1, bias_initializer=initializers.RandomUniform(minval=10.10, maxval=100.0), activation='softplus') for _ in np.arange(self.n_half_channels)]
+        self.ke_lw_net_1 = [Dense(units=1,bias_initializer=initializers.RandomUniform(minval=100.0, maxval=1000.0), activation='softplus', name='ke_lw.' + f'{i}.') for i in np.arange(self.n_half_channels)]
+        self.ke_iw_net_1 = [Dense(units=1, bias_initializer=initializers.RandomUniform(minval=100.0, maxval=1000.0), activation='softplus', name='ke_iw.' + f'{i}.') for i in np.arange(self.n_half_channels)]
 
-        self.ke_lw_net_2 = [Dense(units=1,bias_initializer=initializers.RandomUniform(minval=10.10, maxval=100.0), activation='softplus',) for _ in np.arange(self.n_half_channels)]
-        self.ke_iw_net_2 = [Dense(units=1, bias_initializer=initializers.RandomUniform(minval=10.10, maxval=100.0), activation='softplus') for _ in np.arange(self.n_half_channels)]
+        if is_doubled:
+            self.ke_lw_net_2 = [Dense(units=1,bias_initializer=initializers.RandomUniform(minval=10.10, maxval=100.0), activation='softplus',) for _ in np.arange(self.n_half_channels)]
+            self.ke_iw_net_2 = [Dense(units=1, bias_initializer=initializers.RandomUniform(minval=10.10, maxval=100.0), activation='softplus') for _ in np.arange(self.n_half_channels)]
     # Note Ukkonen does not include nitrogen dioxide (no2) in simulation that generated data
     def subcall(self, input, gas_net, lw_net, iw_net):
 
@@ -220,16 +227,20 @@ class OpticalDepth(Layer):
         t_p, composition, null_lw, null_iw = input
 
         output_1 = self.subcall(input, self.ke_gas_net_1, self.ke_lw_net_1, self.ke_iw_net_1)
-        output_2 = self.subcall(input, self.ke_gas_net_2, self.ke_lw_net_2, self.ke_iw_net_2)
 
-        tau_gases_1, tau_lw_1, tau_iw_1 = output_1
-        tau_gases_2, tau_lw_2, tau_iw_2 = output_2
+        if False:
+            output_2 = self.subcall(input, self.ke_gas_net_2, self.ke_lw_net_2, self.ke_iw_net_2)
 
-        tau_gases = tf.concat((tau_gases_1, tau_gases_2), axis=1)
-        tau_lw = tf.concat((tau_lw_1, tau_lw_2), axis=1)
-        tau_iw = tf.concat((tau_iw_1, tau_iw_2), axis=1)
+            tau_gases_1, tau_lw_1, tau_iw_1 = output_1
+            tau_gases_2, tau_lw_2, tau_iw_2 = output_2
 
-        return [tau_gases, tau_lw, tau_iw]
+            tau_gases = tf.concat((tau_gases_1, tau_gases_2), axis=1)
+            tau_lw = tf.concat((tau_lw_1, tau_lw_2), axis=1)
+            tau_iw = tf.concat((tau_iw_1, tau_iw_2), axis=1)
+
+            return [tau_gases, tau_lw, tau_iw]
+        else:
+            return output_1
     
     def compute_output_shape(self, input_shape):
         return [tf.TensorShape([input_shape[0][0],self.n_channels,1]), tf.TensorShape([input_shape[0][0],self.n_channels,1]), tf.TensorShape([input_shape[0][0],self.n_channels,1])]
@@ -249,7 +260,7 @@ class LayerProperties(Layer):
         super().__init__(**kwargs)
         self.n_channels = n_channels
         self.n_hidden = n_hidden
-        self.extinction_net = [DenseFFN(self.n_hidden,3,minval=-1.0,maxval=1.0) for _ in np.arange(self.n_channels)]
+        self.extinction_net = [DenseFFN(self.n_hidden,3,minval=-1.0,maxval=1.0, name=f"extinction.{i}.") for i in np.arange(self.n_channels)]
         #self.extinction_net = [DenseFFN_2(n_hidden,3) for _ in np.arange(self.n_channels)]
 
     def call(self, input):
@@ -737,8 +748,8 @@ def train():
     n_hidden_layer_coefficients = [4, 5]
     n_layers = 60
     n_composition = 8 # 6 gases + liquid water + ice water
-    n_channels = 58
-    batch_size  = 512 #2048
+    n_channels = 29 #58
+    batch_size  = 2048
     epochs      = 100000
     n_epochs    = 0
     epochs_period = 20
@@ -781,7 +792,11 @@ def train():
 
     null_toa_input = Input(shape=(0), batch_size=batch_size, name="null_toa_input")
 
-    flux_down_above_direct = Dense(units=n_channels,bias_initializer='ones', activation='softmax')(null_toa_input)
+    #flux_down_above_direct = Dense(units=n_channels,bias_initializer='ones', activation='softmax')(null_toa_input)
+
+    flux_down_above_direct = Dense(units=n_channels,bias_initializer=initializers.RandomUniform(minval=0.1, maxval=1.0), activation='softmax', name='null_toa_dense')(null_toa_input)
+
+    #flux_down_above_direct = tf.keras.layers.Dropout(0.2)(flux_down_above_direct)
 
     print(f"flux_down_above_direct.shape={flux_down_above_direct.shape}")
 
@@ -818,7 +833,7 @@ def train():
     #weight_profile = 1.0 / (eps + tf.math.reduce_mean(flux_down, axis=0, keepdims=True))
 
     model.compile(
-        optimizer=optimizers.Adam(learning_rate=0.001),
+        optimizer=optimizers.Adam(learning_rate=0.1),
         #loss={flux_down_direct_name: 'mse',flux_down_name:'mse', flux_up_name:'mse', heating_rate_name: 'mse'},
         #loss=['mse', 'mse', 'mse', 'mse'],
         #loss=[CustomLossTOA(toa), CustomLossTOA(toa), CustomLossTOA(toa), CustomLossTOA(toa)],
@@ -827,7 +842,7 @@ def train():
         #loss_weights={flux_down_direct_name: 0.1,flux_down_name:0.5, flux_up_name:0.5, heating_rate_name: 0.2},
         #loss_weights= [0.1,0.5,0.5,0.2],
         #loss_weights= [0.1,0.5,0.5,0.8], #TEMP.
-        loss_weights= [1.0], #TEMP.2.
+        loss_weights= [1.0], #TEMP.3.
         #loss_weights={flux_down.name:0.5, flux_up.name: 0.5, heating_rate.name: 1.0e-4},
         #experimental_run_tf_function=False,
         #metrics={flux_down_direct_name: ['mse'],flux_down_name:['mse'], flux_up_name:['mse'], heating_rate_name: ['mse']},
@@ -846,27 +861,27 @@ def train():
     #print(f"len of output = {len(output)}")
 
     if False:
-        n_epochs = 66
-        model.load_weights((filename_model + 'TEMP.2.' + str(n_epochs)))
-
-    tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=log_dir, histogram_freq=1)
+        n_epochs = 30
+        model.load_weights((filename_model + 'TEMP.3.' + str(n_epochs)))
+    writer = tf.summary.create_file_writer(log_dir)
+    tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=log_dir, histogram_freq=1, write_images=False, profile_batch=(4, 10))
     while n_epochs < epochs:
         history = model.fit(x=training_inputs, y=training_outputs,
                 epochs = epochs_period, batch_size=batch_size,
                 shuffle=True, verbose=1,
-                validation_data=(validation_inputs, validation_outputs))
-                #callbacks = [tensorboard_callback])
+                validation_data=(validation_inputs, validation_outputs),
+                callbacks = [tensorboard_callback])
                 
         #,callbacks = [EarlyStopping(monitor='heating_rate',  patience=patience, verbose=1, \
         #                  mode='min',restore_best_weights=True),])
         
         n_epochs = n_epochs + epochs_period
         print(f"Writing model weights {n_epochs}")
-        model.save_weights(filename_model + 'TEMP.2.' + str(n_epochs)) #, save_traces=True)
+        model.save_weights(filename_model + 'TEMP.3.' + str(n_epochs)) #, save_traces=True)
         
         #del model
 
-        model.load_weights((filename_model + 'TEMP.2.' + str(n_epochs)))
+        model.load_weights((filename_model + 'TEMP.3.' + str(n_epochs)))
         """ model = tf.keras.models.load_model(filename_model + 'TEMP.' + str(n_epochs),
                                            custom_objects={'OpticalDepth': OpticalDepth,
                                                            'LayerProperties': LayerProperties,
