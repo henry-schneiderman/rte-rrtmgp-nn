@@ -1,5 +1,6 @@
-# Same as #6 except twice the channels
+# Same as #6 except can use twice the channels
 # Also stripped out everything except direct down path
+# And Renormalized inputs to be between 0.0 and 1.0 (changes mostly in RT_net_data.py)
 
 import os
 import datetime
@@ -35,8 +36,11 @@ class DenseFFN(Layer):
         self.n_outputs = n_outputs
         self.minval = minval
         self.maxval = maxval
-        self.hidden = [Dense(units=n, activation='elu',kernel_initializer=initializers.RandomUniform(minval=minval, maxval=maxval), bias_initializer=initializers.RandomNormal(), name=name + str(n)) for n in n_hidden]
-        # RELU insures that absorption coefficient is non-negative
+        self.hidden = [Dense(units=n, activation='elu',
+                             #kernel_initializer=initializers.RandomUniform(minval=minval, maxval=maxval), 
+                             kernel_initializer=initializers.GlorotUniform(),
+                             bias_initializer=initializers.RandomNormal(), name=name + str(n)) for n in n_hidden]
+        # RELU / softplus insures that absorption coefficient is non-negative
         self.out = Dense(units=n_outputs, activation='softplus',kernel_initializer=initializers.RandomUniform(minval=minval, maxval=maxval), name=name + 'output') 
 
     def call(self, X):
@@ -126,12 +130,12 @@ class OpticalDepth(Layer):
                 self.ke_gas_net_2.append([DenseFFN(self.n_hidden,1,minval=-1.0,maxval=1.0) for _ in np.arange(n)])
 
 
-        self.ke_lw_net_1 = [Dense(units=1,bias_initializer=initializers.RandomUniform(minval=100.0, maxval=1000.0), activation='softplus', name='ke_lw.' + f'{i}.') for i in np.arange(self.n_half_channels)]
-        self.ke_iw_net_1 = [Dense(units=1, bias_initializer=initializers.RandomUniform(minval=100.0, maxval=1000.0), activation='softplus', name='ke_iw.' + f'{i}.') for i in np.arange(self.n_half_channels)]
+        self.ke_lw_net_1 = [Dense(units=1,bias_initializer=initializers.RandomUniform(minval=0.0, maxval=1.0), activation='softplus', name='ke_lw.' + f'{i}.') for i in np.arange(self.n_half_channels)]
+        self.ke_iw_net_1 = [Dense(units=1, bias_initializer=initializers.RandomUniform(minval=0.0, maxval=1.0), activation='softplus', name='ke_iw.' + f'{i}.') for i in np.arange(self.n_half_channels)]
 
         if is_doubled:
-            self.ke_lw_net_2 = [Dense(units=1,bias_initializer=initializers.RandomUniform(minval=10.10, maxval=100.0), activation='softplus',) for _ in np.arange(self.n_half_channels)]
-            self.ke_iw_net_2 = [Dense(units=1, bias_initializer=initializers.RandomUniform(minval=10.10, maxval=100.0), activation='softplus') for _ in np.arange(self.n_half_channels)]
+            self.ke_lw_net_2 = [Dense(units=1,bias_initializer=initializers.RandomUniform(minval=0.0, maxval=1.0), activation='softplus',) for _ in np.arange(self.n_half_channels)]
+            self.ke_iw_net_2 = [Dense(units=1, bias_initializer=initializers.RandomUniform(minval=0.0, maxval=1.0), activation='softplus') for _ in np.arange(self.n_half_channels)]
     # Note Ukkonen does not include nitrogen dioxide (no2) in simulation that generated data
     def subcall(self, input, gas_net, lw_net, iw_net):
 

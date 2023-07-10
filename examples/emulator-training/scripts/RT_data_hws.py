@@ -26,11 +26,15 @@ def load_data(file_name, n_channels):
     composition = np.reshape(composition, (n_samples,n_layers,n_composition))
     t_p = composition[:,:,0:2]
 
+    t_p_mean = np.array([248.6, 35043.8])
+    t_p_min = np.array([176.0, 0.0])
     t_p_max = np.array([320.10498, 105420.29])
 
+    t_p_mean = t_p_mean.reshape((1, 1, -1))
     t_p_max = t_p_max.reshape((1, 1, -1))
+    t_p_min = t_p_min.reshape((1, 1, -1))
 
-    t_p = t_p / t_p_max
+    t_p = (t_p - t_p_mean)/ (t_p_max - t_p_min)
 
     composition = composition[:,:,2:]
     n_composition = n_composition - 2
@@ -55,11 +59,14 @@ def load_data(file_name, n_channels):
     composition = np.concatenate([composition,mass_coordinate,lwp,iwp],axis=2)
     n_composition = n_composition + 3
 
-    #composition_max = np.array([7.7611343e+01, 5.3109238e-03, 1.6498107e+00, 1.3430286e-03, 7.7891685e-03, 4.0832031e+03, 2.1337291e+02, 1.9692310e+02])
+    composition_max = np.array([7.9141545e+00, 5.4156350e-04, 1.6823387e-01, 1.3695081e-04, 7.9427415e-04, 4.1637085e+02, 2.1337292e-01, 1.9692309e-01])
 
-    #composition_max = composition_max.reshape((1,1,-1))
 
-    #composition = composition / composition_max
+    zero = np.array([0.0, 0.0, 0.0, 0.0,0.0, 0.0,100.0, 0.0,])
+    zero = np.reshape(zero, (1, 1, -1))
+    composition_max = composition_max.reshape((1,1,-1))
+
+    composition = composition / composition_max
 
     null_lw = np.zeros((n_samples, n_layers, 0))
     null_iw = np.zeros((n_samples, n_layers, 0))
@@ -67,8 +74,6 @@ def load_data(file_name, n_channels):
     mu = data.variables['mu0'][:].data 
     mu = np.reshape(mu,(n_samples,1,1))
     mu = np.repeat(mu,axis=1,repeats=n_layers)
-
-
 
     null_mu_bar = np.zeros((n_samples,0))
 
@@ -133,6 +138,32 @@ def load_data_2(file_name, n_channels):
     o = [outputs[0]]
     return i, o
 
+def load_data_lwp(file_name):
+    data = xr.open_dataset(file_name)
+    composition = data.variables['rrtmgp_sw_input'][:].data
+    (n_exp,n_col,n_layers,n_composition) = composition.shape
+    n_levels = n_layers + 1
+    n_samples = n_exp * n_col 
+    mu = data.variables['mu0'][:].data 
+    mu = np.reshape(mu,(n_samples,1,1))
+    mu = np.repeat(mu,axis=1,repeats=n_layers)
+
+    rsd = data.variables['rsd'][:].data
+    rsd     = rsd.reshape((n_samples,n_levels, 1))
+    rsd_direct = data.variables['rsd_dir'][:].data
+    rsd_direct     = rsd_direct.reshape((n_samples,n_levels, 1))
+
+
+    toa = np.copy(rsd[:,0:1,:])
+    rsd_direct = rsd_direct / toa
+
+    lwp = data.variables['cloud_lwp'][:].data / 2.1337292e-03
+
+    inputs = (mu, lwp)
+    outputs = (rsd_direct)
+
+    return inputs, outputs
+
 def get_max():
 
     datadir     = "/home/hws/tmp/"
@@ -142,12 +173,13 @@ def get_max():
 
     inputs, _ = load_data(filename_training, n_channels=29)
 
-    t_p, composition, null_mu_bar, mu, surface, null_toa, \
-    toa, delta_pressure = inputs
+    t_p, composition, null_lw, null_iw, null_mu_bar, mu, *surface, null_toa, \
+    toa, flux_down_above_diffuse, delta_pressure = inputs
 
     max = np.amax (t_p, axis=(0, 1))
     min = np.amin (t_p, axis=(0, 1))
-    print(f"t_p shape: {t_p.shape}   min = {min}    max = {max}")
+    mean = np.mean (t_p, axis=(0, 1))
+    print(f"t_p shape: {t_p.shape}   min = {min}    max = {max}   mean = {mean}")
 
     max = np.amax (composition, axis=(0, 1))
     min = np.amin (composition, axis=(0, 1))
@@ -159,8 +191,8 @@ def get_max():
     #print(f'h2o ^ 0.25 = {max[0]**0.25}')
     #print(f'o3 ^ 0.25 = {max[1]**0.25}')
 
-"""
+""" 
 if __name__ == "__main__":
     print(tf.__version__)
-    get_max()
-"""
+    get_max()  
+ """
