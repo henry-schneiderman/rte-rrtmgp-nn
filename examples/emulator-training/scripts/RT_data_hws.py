@@ -66,7 +66,7 @@ def load_data(file_name, n_channels):
     zero = np.reshape(zero, (1, 1, -1))
     composition_max = composition_max.reshape((1,1,-1))
 
-    composition = composition / composition_max
+    composition = zero * composition / composition_max
 
     null_lw = np.zeros((n_samples, n_layers, 0))
     null_iw = np.zeros((n_samples, n_layers, 0))
@@ -138,12 +138,30 @@ def load_data_2(file_name, n_channels):
     o = [outputs[0]]
     return i, o
 
-def load_data_lwp(file_name):
+def load_data_lwp(file_name, n_channels):
     data = xr.open_dataset(file_name)
     composition = data.variables['rrtmgp_sw_input'][:].data
     (n_exp,n_col,n_layers,n_composition) = composition.shape
     n_levels = n_layers + 1
     n_samples = n_exp * n_col 
+
+
+    composition = np.reshape(composition, (n_samples,n_layers,n_composition))
+    t_p = composition[:,:,0:2].data
+
+    t_p_mean = np.array([248.6, 35043.8])
+    t_p_min = np.array([176.0, 0.0])
+    t_p_max = np.array([320.10498, 105420.29])
+
+    t_p_mean = t_p_mean.reshape((1, 1, -1))
+    t_p_max = t_p_max.reshape((1, 1, -1))
+    t_p_min = t_p_min.reshape((1, 1, -1))
+
+    t_p = (t_p - t_p_mean)/ (t_p_max - t_p_min)
+
+    h2o = composition[:,:,3:4].data / np.array([7.9141545e+00])
+    o3 = composition[:,:,4:5].data / np.array([5.4156350e-03])     #  np.array([5.4156350e-04])
+
     mu = data.variables['mu0'][:].data 
     mu = np.reshape(mu,(n_samples,1,1))
     mu = np.repeat(mu,axis=1,repeats=n_layers)
@@ -157,9 +175,32 @@ def load_data_lwp(file_name):
     toa = np.copy(rsd[:,0:1,:])
     rsd_direct = rsd_direct / toa
 
-    lwp = data.variables['cloud_lwp'][:].data / 2.1337292e-03
+    #lwp = data.variables['cloud_lwp'][:].data / 2.1337292e-03  #original
 
-    inputs = (mu, lwp)
+    lwp = data.variables['cloud_lwp'][:].data / 2.1337292e-01
+    lwp     = np.reshape(lwp,  (n_samples,n_layers,1))   
+
+    iwp = data.variables['cloud_iwp'][:].data / 1.9692309e-01
+    iwp     = np.reshape(iwp,  (n_samples,n_layers,1))  
+
+    lwp = np.concatenate([lwp, iwp], axis=2) 
+    #lwp = np.expand_dims(lwp, axis=3)
+
+    #flux_down_above_down = np.ones([n_samples,n_channels,1],dtype='float32') / n_channels
+
+    flux_down_above_direct = np.ones([n_samples,1],dtype='float32') 
+
+    constant_flux_down_above_down = np.ones([n_samples, n_channels, 1],dtype='float32') 
+
+    rsd_direct = tf.squeeze(rsd_direct, axis=2)
+    rsd_direct = rsd_direct[:,:]
+
+    pressure = data.variables['pres_level'][:,:,:].data 
+    pressure = np.reshape(pressure,(n_samples,n_levels))
+
+    delta_pressure = pressure[:,1:] - pressure[:,:-1]
+
+    inputs = (mu, lwp, h2o, o3, t_p, flux_down_above_direct, constant_flux_down_above_down, toa[:,:,0], rsd_direct, delta_pressure)
     outputs = (rsd_direct)
 
     return inputs, outputs

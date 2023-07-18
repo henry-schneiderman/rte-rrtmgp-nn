@@ -867,14 +867,14 @@ def train():
     if False:
         n_epochs = 30
         model.load_weights((filename_model + 'TEMP.3.' + str(n_epochs)))
-    writer = tf.summary.create_file_writer(log_dir)
-    tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=log_dir, histogram_freq=1, write_images=False, profile_batch=(4, 10))
+        writer = tf.summary.create_file_writer(log_dir)
+        tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=log_dir, histogram_freq=1, write_images=False, profile_batch=(4, 10))
     while n_epochs < epochs:
         history = model.fit(x=training_inputs, y=training_outputs,
                 epochs = epochs_period, batch_size=batch_size,
                 shuffle=True, verbose=1,
                 validation_data=(validation_inputs, validation_outputs),
-                callbacks = [tensorboard_callback])
+                callbacks = []) #[tensorboard_callback])
                 
         #,callbacks = [EarlyStopping(monitor='heating_rate',  patience=patience, verbose=1, \
         #                  mode='min',restore_best_weights=True),])

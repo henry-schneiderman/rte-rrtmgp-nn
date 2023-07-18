@@ -18,6 +18,65 @@ mu = data.variables["mu0"]
 pres = data.variables["pres_level"]
 lwp = data.variables["cloud_lwp"]
 iwp = data.variables["cloud_iwp"]
+h20 = data.variables['rrtmgp_sw_input'][:,:,:,2]
+o2 = data.variables['rrtmgp_sw_input'][:,:,:,3]
+clwp = data.variables['cloud_lwp']
+ciwp = data.variables['cloud_iwp']
+
+n = rsd.data / rsd[:,:,0:1].data
+print(f"rsd mean = {np.mean(n,axis=(0,1))}")
+print ("")
+n = rsd_direct.data / rsd_direct[:,:,0:1].data
+print(f"rsd_direct mean = {np.mean(n,axis=(0,1))}")
+print ("")
+print("T-direct 1,200,41:61 = " + str(rsd_direct[1,200,41:61].data / (rsd_direct[1,200,40:60].data + 0.00001)))
+print (" ")
+
+print("T-direct 19,340,51:61 = " + str(rsd_direct[19,340,51:61].data / (rsd_direct[19,340,50:60].data + 0.00001)))
+print (" ")
+
+
+print("T-direct 60,540,41:61 = " + str(rsd_direct[60,540,41:61].data / (rsd_direct[60,540,40:60].data + 0.00001)))
+print (" ")
+
+print("h20 60,540,41:61 = " + str(h20[60,540,41:61].data))
+print (" ")
+
+print("clwp 60,540,41:61 = " + str(clwp[60,540,41:61].data))
+print (" ")
+
+print("ciwp 60,540,41:61 = " + str(ciwp[60,540,41:61].data))
+print (" ")
+
+
+print (" ")
+
+total = np.sum(h20[60,:,0:40].data, axis=(0,))
+print(f'Sum(h20[60,:,0:40]) = {total} ')
+print (" ")
+
+total = np.sum(o2[60,:,0:40].data, axis=(0,))
+print(f'Sum(o2[60,:,0:40]) = {total} ')
+print (" ")
+
+print (" ")
+
+total = np.sum(clwp[60,:,20:40].data, axis=(0,))
+print(f'Sum(clwp[60,:,20:40]) = {total} ')
+print (" ")
+
+total = np.sum(ciwp[60,:,20:40].data, axis=(0,))
+print(f'Sum(ciwp[60,:,20:40]) = {total} ')
+print (" ")
+
+print("T-direct 60,900,20:40 = " + str(np.sum(rsd_direct[60,:,21:41].data, axis = (0,)) / (np.sum(rsd_direct[60,:,20:40].data, axis=(0,)) + 0.00001)))
+print (" ")
+
+print("clwp 60,900,0:10 = " + str(clwp[60,900,0:10].data))
+print (" ")
+
+print("ciwp 60,900,0:10 = " + str(ciwp[60,900,0:10].data))
+print (" ")
 
 print("mu  = " + str(mu[0:7,200].data))
 print("412.0 * mu  = " + str(1412.0 * mu[0:7,200].data))

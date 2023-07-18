@@ -523,7 +523,7 @@ class DownwardPropagationCell(Layer):
         super().__init__(**kwargs)
         self.n_channels = n_channels
         self.state_size = [tf.TensorShape([self.n_channels, 1]), tf.TensorShape([self.n_channels, 1])]
-        self.output_size = tf.TensorShape([self.n_channels, 4])
+        self.output_size = tf.TensorShaA        pe([self.n_channels, 4])
 
 
     def call(self, input_at_i, states_at_i):
