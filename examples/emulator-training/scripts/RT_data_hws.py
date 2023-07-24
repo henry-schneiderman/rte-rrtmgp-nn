@@ -59,14 +59,15 @@ def load_data(file_name, n_channels):
     composition = np.concatenate([composition,mass_coordinate,lwp,iwp],axis=2)
     n_composition = n_composition + 3
 
+    # h2o o3 co2 n2o ch4 mass lwp iwp
     composition_max = np.array([7.9141545e+00, 5.4156350e-04, 1.6823387e-01, 1.3695081e-04, 7.9427415e-04, 4.1637085e+02, 2.1337292e-01, 1.9692309e-01])
 
 
-    zero = np.array([0.0, 0.0, 0.0, 0.0,0.0, 0.0,100.0, 0.0,])
-    zero = np.reshape(zero, (1, 1, -1))
+    #zero = np.array([0.0, 0.0, 0.0, 0.0,0.0, 0.0,100.0, 0.0,])
+    #zero = np.reshape(zero, (1, 1, -1))
     composition_max = composition_max.reshape((1,1,-1))
 
-    composition = zero * composition / composition_max
+    composition = composition / composition_max
 
     null_lw = np.zeros((n_samples, n_layers, 0))
     null_iw = np.zeros((n_samples, n_layers, 0))
@@ -145,7 +146,7 @@ def load_data_lwp(file_name, n_channels):
     n_levels = n_layers + 1
     n_samples = n_exp * n_col 
 
-
+    # h2o o3 co2 n2o ch4 mass lwp iwp
     composition = np.reshape(composition, (n_samples,n_layers,n_composition))
     t_p = composition[:,:,0:2].data
 
@@ -160,7 +161,9 @@ def load_data_lwp(file_name, n_channels):
     t_p = (t_p - t_p_mean)/ (t_p_max - t_p_min)
 
     h2o = composition[:,:,3:4].data / np.array([7.9141545e+00])
-    o3 = composition[:,:,4:5].data / np.array([5.4156350e-03])     #  np.array([5.4156350e-04])
+    o3 = composition[:,:,4:5].data / np.array([5.4156350e-02])     #  np.array([5.4156350e-04])
+    co2 = composition[:,:,5:6].data / np.array([1.6823387e-01])     # 1.6823387e-01
+    #u = composition[:,:,8:9].data / np.array([4.1637085e+02])     # 4.1637085e+02
 
     mu = data.variables['mu0'][:].data 
     mu = np.reshape(mu,(n_samples,1,1))
@@ -170,7 +173,6 @@ def load_data_lwp(file_name, n_channels):
     rsd     = rsd.reshape((n_samples,n_levels, 1))
     rsd_direct = data.variables['rsd_dir'][:].data
     rsd_direct     = rsd_direct.reshape((n_samples,n_levels, 1))
-
 
     toa = np.copy(rsd[:,0:1,:])
     rsd_direct = rsd_direct / toa
@@ -199,8 +201,13 @@ def load_data_lwp(file_name, n_channels):
     pressure = np.reshape(pressure,(n_samples,n_levels))
 
     delta_pressure = pressure[:,1:] - pressure[:,:-1]
+    delta_pressure_2 = np.reshape(np.copy(delta_pressure),(n_samples,n_layers, 1))
 
-    inputs = (mu, lwp, h2o, o3, t_p, flux_down_above_direct, constant_flux_down_above_down, toa[:,:,0], rsd_direct, delta_pressure)
+    # Deriving mass coordinate from pressure difference: mass per area
+    # kg / m^2
+    u = (delta_pressure_2 / g) / 4.1637085e+02     #4.1637085e+02
+
+    inputs = (mu, lwp, h2o, o3, co2, u, t_p, flux_down_above_direct, constant_flux_down_above_down, toa[:,:,0], rsd_direct, delta_pressure)
     outputs = (rsd_direct)
 
     return inputs, outputs
