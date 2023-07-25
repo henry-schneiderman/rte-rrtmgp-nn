@@ -160,11 +160,11 @@ def load_data_lwp(file_name, n_channels):
 
     t_p = (t_p - t_p_mean)/ (t_p_max - t_p_min)
 
-    h2o = composition[:,:,3:4].data / np.array([7.9141545e+00])
-    o3 = composition[:,:,4:5].data / np.array([5.4156350e-02])     #  np.array([5.4156350e-04])
-    co2 = composition[:,:,5:6].data / np.array([1.6823387e-01]) 
-    n2o = composition[:,:,6:7].data / np.array([1.3695081e-04])    # 1.3695081e-04
-    ch4 = composition[:,:,7:8].data / np.array([7.9427415e-04])    # 7.9427415e-04
+    h2o = composition[:,:,2:3].data / np.array([7.9141545e+00])
+    o3 = composition[:,:,3:4].data / np.array([5.4156350e-02])     #  np.array([5.4156350e-04])
+    co2 = composition[:,:,4:5].data / np.array([1.6823387e-01]) 
+    n2o = composition[:,:,5:6].data / np.array([1.3695081e-04])    # 1.3695081e-04
+    ch4 = composition[:,:,6:7].data / np.array([7.9427415e-04])    # 7.9427415e-04
     #u = composition[:,:,8:9].data / np.array([4.1637085e+02])     # 4.1637085e+02
 
     mu = data.variables['mu0'][:].data 
@@ -207,7 +207,7 @@ def load_data_lwp(file_name, n_channels):
     # kg / m^2
     u = (delta_pressure_2 / g) / 4.1637085e+02     #4.1637085e+02
 
-    inputs = (mu, lwp, h2o, o3, co2, u, n2o, ch4, t_p, flux_down_above_direct, toa[:,:,0], rsd_direct, delta_pressure)
+    inputs = (mu, lwp, h2o, o3, co2, u, n2o, ch4, t_p, flux_down_above_direct,  toa[:,:,0], rsd_direct, delta_pressure)
     outputs = (rsd_direct)
 
     return inputs, outputs

@@ -1,6 +1,4 @@
-# Same as #6 except can use twice the channels
-# Also stripped out everything except direct down path
-# And Renormalized inputs to be between 0.0 and 1.0 (changes mostly in RT_net_data.py)
+# Based on RT_net_hws_9.py but adds functionality for scattering and absorption
 
 import os
 import datetime
@@ -180,14 +178,17 @@ class OpticalDepth(Layer):
         paddings_c = tf.constant([[0,0],[0, self.n_channels - 2]])
         tau_ch4_3 = tf.pad(tau_ch4[:,7:], paddings_c, "CONSTANT")
 
-        tau = tau_lw + tau_iw + tau_h2o + tau_o3 + tau_co2 + tau_u_1 + tau_u_2 + tau_ch4_1 + tau_ch4_2 + tau_ch4_3
+        tau_u = tau_u_1 + tau_u_2
+        tau_ch4 = tau_ch4_1 + tau_ch4_2 + tau_ch4_3
+        tau = tau_lw + tau_iw + tau_h2o + tau_o3 + tau_co2 + tau_u + tau_ch4
 
         t_direct = tf.math.exp(-tau / (mu + 0.0000001))
         t_direct = tf.expand_dims(t_direct, axis=2)
 
         #print(f"OptficalFlow: shape of tau = {tau.shape}")
 
-        return t_direct
+        #    return t_direct
+        return tau_lw, tau_iw, tau_h2o, tau_o3, tau_co2, tau_u, tau_ch4
 
     
     def compute_output_shape(self, input_shape):
