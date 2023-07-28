@@ -25,10 +25,12 @@ def load_data(file_name, n_channels):
 
     composition = np.reshape(composition, (n_samples,n_layers,n_composition))
     t_p = composition[:,:,0:2]
+    log_p = np.log(composition[:,:,1:2])
+    t_p = np.concatenate([t_p, log_p],axis=2)
 
-    t_p_mean = np.array([248.6, 35043.8])
-    t_p_min = np.array([176.0, 0.0])
-    t_p_max = np.array([320.10498, 105420.29])
+    t_p_mean = np.array([248.6, 35043.8, 8.8])
+    t_p_min = np.array([176.0, 0.0, 0.0])
+    t_p_max = np.array([320.10498, 105420.29, 11.56])
 
     t_p_mean = t_p_mean.reshape((1, 1, -1))
     t_p_max = t_p_max.reshape((1, 1, -1))
@@ -150,9 +152,13 @@ def load_data_lwp(file_name, n_channels):
     composition = np.reshape(composition, (n_samples,n_layers,n_composition))
     t_p = composition[:,:,0:2].data
 
-    t_p_mean = np.array([248.6, 35043.8])
-    t_p_min = np.array([176.0, 0.0])
-    t_p_max = np.array([320.10498, 105420.29])
+
+    log_p = np.log(composition[:,:,1:2].data)
+    t_p = np.concatenate([t_p, log_p],axis=2)
+
+    t_p_mean = np.array([248.6, 35043.8, 8.8])
+    t_p_min = np.array([176.0, 0.0, 0.0])
+    t_p_max = np.array([320.10498, 105420.29, 11.56])
 
     t_p_mean = t_p_mean.reshape((1, 1, -1))
     t_p_max = t_p_max.reshape((1, 1, -1))
@@ -160,10 +166,10 @@ def load_data_lwp(file_name, n_channels):
 
     t_p = (t_p - t_p_mean)/ (t_p_max - t_p_min)
 
-    h2o = composition[:,:,2:3].data / np.array([7.9141545e+00])
-    o3 = composition[:,:,3:4].data / np.array([5.4156350e-02])     #  np.array([5.4156350e-04])
-    co2 = composition[:,:,4:5].data / np.array([1.6823387e-01]) 
-    n2o = composition[:,:,5:6].data / np.array([1.3695081e-04])    # 1.3695081e-04
+    h2o = composition[:,:,2:3].data / np.array([7.9141545e+02])    # 7.9141545e+00
+    o3 = composition[:,:,3:4].data / np.array([5.4156350])     #  np.array([5.4156350e-04])
+    co2 = composition[:,:,4:5].data / np.array([1.6823387e-01])    # 1.6823387e-01
+    n2o = composition[:,:,5:6].data / np.array([1.3695081e-05])    # 1.3695081e-04
     ch4 = composition[:,:,6:7].data / np.array([7.9427415e-04])    # 7.9427415e-04
     #u = composition[:,:,8:9].data / np.array([4.1637085e+02])     # 4.1637085e+02
 
@@ -205,7 +211,7 @@ def load_data_lwp(file_name, n_channels):
 
     # Deriving mass coordinate from pressure difference: mass per area
     # kg / m^2
-    u = (delta_pressure_2 / g) / 4.1637085e+02     #4.1637085e+02
+    u = (delta_pressure_2 / g) / 4.1637085e+03     #4.1637085e+02
 
     inputs = (mu, lwp, h2o, o3, co2, u, n2o, ch4, t_p, flux_down_above_direct,  toa[:,:,0], rsd_direct, delta_pressure)
     outputs = (rsd_direct)
@@ -239,8 +245,8 @@ def get_max():
     #print(f'h2o ^ 0.25 = {max[0]**0.25}')
     #print(f'o3 ^ 0.25 = {max[1]**0.25}')
 
-""" 
+"""
 if __name__ == "__main__":
     print(tf.__version__)
     get_max()  
- """
+"""

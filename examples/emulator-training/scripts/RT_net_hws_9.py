@@ -25,6 +25,23 @@ from tensorflow.python.framework.ops import disable_eager_execution
 
 from RT_data_hws import load_data_lwp, absorbed_flux_to_heating_rate
 
+class DenseFFN(Layer):
+    """
+    n_hidden[n_layers]: array of the number of nodes per layer
+    Last layer has RELU activation insuring non-negative output
+    """
+    def __init__(self, n_hidden, n_outputs, minval, maxval, **kwargs):
+        super().__init__(**kwargs)
+        self.hidden = [Dense(units=n, activation='elu',kernel_initializer=initializers.RandomUniform(minval=minval, maxval=maxval), bias_initializer=initializers.RandomNormal(mean=1.0, stddev=0.05)) for n in n_hidden]
+        # RELU insures that absorption coefficient is non-negative
+        # Sigmoid with input of 0.0 gives output of 0.5
+        self.out = Dense(units=n_outputs, activation='sigmoid',kernel_initializer=initializers.RandomUniform(minval=minval, maxval=maxval), bias_initializer=initializers.RandomNormal(mean=0.0, stddev=0.05)) 
+
+    def call(self, X):
+        for hidden in self.hidden:
+            X = hidden(X)
+        return self.out(X)
+
 class OpticalDepth(Layer):
     def __init__(self, n_channels, **kwargs):
         super().__init__(**kwargs)
@@ -36,86 +53,96 @@ class OpticalDepth(Layer):
         self.n_ch4 = 9
 
         self.net_lw = Dense(units=self.n_channels,
-                        activation=tf.keras.activations.relu,                           
-                        kernel_initializer=initializers.RandomUniform(minval=0.10, maxval=1.0),use_bias=False)
+                        activation=tf.keras.activations.relu,  
+                        name = 'net_lw',                         
+                        kernel_initializer=initializers.RandomUniform(minval=0.38, maxval=0.62),use_bias=False)
+                        #kernel_initializer=initializers.RandomUniform(minval=0.10, maxval=1.0),use_bias=False)
 
         self.net_iw = Dense(units=self.n_channels,
-                        activation=tf.keras.activations.relu,                             
-                        kernel_initializer=initializers.RandomUniform(minval=0.10, maxval=1.0),use_bias=False)
+                        activation=tf.keras.activations.relu,
+                        name = 'net_iw',                                      
+                        kernel_initializer=initializers.RandomUniform(minval=0.38, maxval=0.62),use_bias=False)
 
         self.net_h2o = Dense(units=self.n_channels,
-                        activation=tf.keras.activations.relu,                            
-                        kernel_initializer=initializers.RandomUniform(minval=0.10, maxval=1.0),use_bias=False)
-        
-        self.net_o3 = Dense(units=self.n_o3,
-                        activation=tf.keras.activations.relu,                          
-                        kernel_initializer=initializers.RandomUniform(minval=0.10, maxval=1.0),use_bias=False)
-
-        self.net_co2 = Dense(units=self.n_co2,
-                        activation=tf.keras.activations.relu,                             
-                        kernel_initializer=initializers.RandomUniform(minval=0.10, maxval=1.0),use_bias=False)
-
-        self.net_u = Dense(units=self.n_u,
-                        activation=tf.keras.activations.relu,                              
-                        kernel_initializer=initializers.RandomUniform(minval=0.10, maxval=1.0),use_bias=False)
-
-                
-        self.net_ke_h2o = Dense(units=1,
-                        activation=tf.keras.activations.relu,
-                        #activation=tf.keras.activations.sigmoid,
+                        activation=tf.keras.activations.relu,   
+                        name = 'net_h2o',                                  
+                        kernel_initializer=initializers.RandomUniform(minval=0.38, maxval=0.62),use_bias=False)
+        """
+        self.net_ke_h2o = Dense(units=self.n_channels, # 1,
+                        #activation=tf.keras.activations.relu,
+                        activation=tf.keras.activations.sigmoid,
+                        name = 'net_ke_h2o',         
                         use_bias=True,                  
                         kernel_initializer='zeros',
-                        bias_initializer='ones')
+                        bias_initializer='zeros')
+        """
+
+        self.net_ke_h2o = DenseFFN(n_hidden=(4,4), n_outputs=self.n_channels, minval=-0.1, maxval=0.1, name='net_ke_h2o')
+        
+        self.net_o3 = Dense(units=self.n_o3,
+                        activation=tf.keras.activations.relu,  
+                        name = 'net_o3',                                 
+                        kernel_initializer=initializers.RandomUniform(minval=0.38, maxval=0.62),use_bias=False)
+
+        self.net_ke_o3 = Dense(units=self.n_o3,  #1,
+                        #activation=tf.keras.activations.relu,
+                        activation=tf.keras.activations.sigmoid,                     
+                        #kernel_initializer=initializers.RandomUniform(minval=0.0001, maxval=1.0),use_bias=True)
+                        name = 'net_ke_o3',     
+                        use_bias=True,
+                        kernel_initializer='zeros', bias_initializer='zeros')
+
+        self.net_co2 = Dense(units=self.n_co2,
+                        activation=tf.keras.activations.relu, 
+                        name = 'net_co2',                                     
+                        kernel_initializer=initializers.RandomUniform(minval=0.38, maxval=0.62),use_bias=False)
+        
+        self.net_ke_co2 = Dense(units=self.n_co2,  #1,
+                        #activation=tf.keras.activations.relu,
+                        activation=tf.keras.activations.sigmoid,                     
+                        #kernel_initializer=initializers.RandomUniform(minval=0.0001, maxval=1.0),use_bias=True)
+                        name = 'net_ke_co2',     
+                        use_bias=True,
+                        kernel_initializer='zeros', bias_initializer='zeros')
+
+        self.net_u = Dense(units=self.n_u,
+                        activation=tf.keras.activations.relu,    
+                        name = 'net_u',                                   
+                        kernel_initializer=initializers.RandomUniform(minval=0.38, maxval=0.62),use_bias=False)
+        
+        self.net_ke_u = Dense(units=self.n_u,   #1,
+                        #activation=tf.keras.activations.relu,
+                        activation=tf.keras.activations.sigmoid,                     
+                        #kernel_initializer=initializers.RandomUniform(minval=0.0001, maxval=1.0),use_bias=True)
+                        name = 'net_ke_u',     
+                        use_bias=True,
+                        kernel_initializer='zeros', bias_initializer='zeros')
 
         self.net_n2o = Dense(units=self.n_n2o,
-                        activation=tf.keras.activations.relu,                          
-                        kernel_initializer=initializers.RandomUniform(minval=0.10, maxval=1.0),use_bias=False)
+                        activation=tf.keras.activations.relu,       
+                        name = 'net_n2o',                                      
+                        kernel_initializer=initializers.RandomUniform(minval=0.38, maxval=0.62),use_bias=False)
+
+        self.net_ke_n2o = Dense(units=self.n_n2o,   #1,
+                        #activation=tf.keras.activations.relu,
+                        activation=tf.keras.activations.sigmoid,                     
+                        #kernel_initializer=initializers.RandomUniform(minval=0.0001, maxval=1.0),use_bias=True)
+                        name = 'net_ke_n2o',     
+                        use_bias=True,
+                        kernel_initializer='zeros', bias_initializer='zeros')
 
         self.net_ch4 = Dense(units=self.n_ch4,
-                        activation=tf.keras.activations.relu,                          
-                        kernel_initializer=initializers.RandomUniform(minval=0.10, maxval=1.0),use_bias=False)
-        """ 
-        self.net_ke_all = Dense(units=1,
-                        activation=tf.keras.activations.relu,
-                        #activation=tf.keras.activations.sigmoid,                     
+                        activation=tf.keras.activations.relu, 
+                        name = 'net_ch4',                                            
+                        kernel_initializer=initializers.RandomUniform(minval=0.38, maxval=0.62),use_bias=False)
+        
+        self.net_ke_ch4 = Dense(units=self.n_ch4, #1,
+                        #activation=tf.keras.activations.relu,
+                        activation=tf.keras.activations.sigmoid,                     
                         #kernel_initializer=initializers.RandomUniform(minval=0.0001, maxval=1.0),use_bias=True)
+                        name = 'net_ke_ch4',     
                         use_bias=True,
-                        kernel_initializer='zeros', bias_initializer='ones')
-        """
-        self.net_ke_o3 = Dense(units=1,
-                        activation=tf.keras.activations.relu,
-                        #activation=tf.keras.activations.sigmoid,                     
-                        #kernel_initializer=initializers.RandomUniform(minval=0.0001, maxval=1.0),use_bias=True)
-                        use_bias=True,
-                        kernel_initializer='zeros', bias_initializer='ones')
-
-        self.net_ke_u = Dense(units=1,
-                        activation=tf.keras.activations.relu,
-                        #activation=tf.keras.activations.sigmoid,                     
-                        #kernel_initializer=initializers.RandomUniform(minval=0.0001, maxval=1.0),use_bias=True)
-                        use_bias=True,
-                        kernel_initializer='zeros', bias_initializer='ones')
-
-        self.net_ke_co2 = Dense(units=1,
-                        activation=tf.keras.activations.relu,
-                        #activation=tf.keras.activations.sigmoid,                     
-                        #kernel_initializer=initializers.RandomUniform(minval=0.0001, maxval=1.0),use_bias=True)
-                        use_bias=True,
-                        kernel_initializer='zeros', bias_initializer='ones')
-
-        self.net_ke_n2o = Dense(units=1,
-                        activation=tf.keras.activations.relu,
-                        #activation=tf.keras.activations.sigmoid,                     
-                        #kernel_initializer=initializers.RandomUniform(minval=0.0001, maxval=1.0),use_bias=True)
-                        use_bias=True,
-                        kernel_initializer='zeros', bias_initializer='ones')
-
-        self.net_ke_ch4 = Dense(units=1,
-                        activation=tf.keras.activations.relu,
-                        #activation=tf.keras.activations.sigmoid,                     
-                        #kernel_initializer=initializers.RandomUniform(minval=0.0001, maxval=1.0),use_bias=True)
-                        use_bias=True,
-                        kernel_initializer='zeros', bias_initializer='ones')
+                        kernel_initializer='zeros', bias_initializer='zeros')
 
 
     def call(self, input):
@@ -125,49 +152,45 @@ class OpticalDepth(Layer):
         tau_lw = self.net_lw(lw[:,0:1])
         tau_iw = self.net_iw(lw[:,1:2])
 
-        tau_h2o = self.net_h2o(h2o[:,:])
-
-        ke_h2o = self.net_ke_h2o(t_p)
-        tau_h2o = tau_h2o * ke_h2o
+        ke_h2o = self.net_ke_h2o(t_p) 
+        tau_h2o = ke_h2o * self.net_h2o(h2o)
 
         ke_o3 = self.net_ke_o3(t_p)
-
+        tau_o3 = ke_o3 * self.net_o3(o3)
         #self.n_o3 = 13 
-        #self.n_co2 = 9 
-        #self.n_u = 13
-        #self.n_n2o = 3
-        #self.n_ch4 = 9
-
-        tau_o3 = self.net_o3(o3[:,:]) * ke_o3
         # amount of padding on each side
         paddings = tf.constant([[0,0],[0,self.n_channels - self.n_o3]])
         tau_o3 = tf.pad(tau_o3, paddings, "CONSTANT")
 
         ke_co2 = self.net_ke_co2(t_p)
-        tau_co2 = self.net_co2(co2[:,:]) * ke_co2
+        tau_co2 = ke_co2 * self.net_co2(co2) 
+        #self.n_co2 = 9 
         #overlaps o3 by 3 and no-overlap for 6
         paddings = tf.constant([[0,0],[self.n_o3 - 3, self.n_channels - ((self.n_o3 - 3) + self.n_co2)]])
         tau_co2 = tf.pad(tau_co2, paddings, "CONSTANT")
 
         ke_u = self.net_ke_u(t_p)
-        tau_u = self.net_u(u[:,:]) * ke_u
+        tau_u = ke_u * self.net_u(u) 
+        # self.n_u = 13
         # 5 channels
         # overlap with o3 only (2) and o3 + co2 (3)
         paddings_1 = tf.constant([[0,0],[self.n_o3 - 5, self.n_channels - ((self.n_o3 - 5) + 5)]])
         tau_u_1 = tf.pad(tau_u[:,:5], paddings_1, "CONSTANT")
-
         # Remaining 8 channels: no overlap with o3 or co2
         paddings_2 = tf.constant([[0,0],[(self.n_o3 - 3) + self.n_co2, self.n_channels - ((self.n_o3 - 3) + self.n_co2 + 8)]])
         tau_u_2 = tf.pad(tau_u[:,5:], paddings_2, "CONSTANT")
+        tau_u = tau_u_1 + tau_u_2
 
         ke_n2o = self.net_ke_n2o(t_p)
-        tau_n2o = self.net_n2o(n2o[:,:]) * ke_n2o
-        #overlaps o3 by 3 and no-overlap for 6
+        tau_n2o = ke_n2o * self.net_n2o(n2o) 
+        #self.n_n2o = 3
+        #overlaps everything by 3
         paddings = tf.constant([[0,0],[self.n_o3 - 3, self.n_channels - ((self.n_o3 - 3) + self.n_n2o)]])
         tau_n2o = tf.pad(tau_n2o, paddings, "CONSTANT")
 
         ke_ch4 = self.net_ke_ch4(t_p)
-        tau_ch4 = self.net_ch4(ch4[:,:]) * ke_ch4
+        tau_ch4 = ke_ch4 * self.net_ch4(ch4) 
+        #self.n_ch4 = 9
         #overlaps everything by 3
         paddings_a = tf.constant([[0,0],[self.n_o3 - 3, self.n_channels - ((self.n_o3 - 3) + 3)]])
         tau_ch4_1 = tf.pad(tau_ch4[:,:3], paddings_a, "CONSTANT")
@@ -179,8 +202,9 @@ class OpticalDepth(Layer):
         #overlap o3 by 2
         paddings_c = tf.constant([[0,0],[0, self.n_channels - 2]])
         tau_ch4_3 = tf.pad(tau_ch4[:,7:], paddings_c, "CONSTANT")
+        tau_ch4 = tau_ch4_1 + tau_ch4_2 + tau_ch4_3
 
-        tau = tau_lw + tau_iw + tau_h2o + tau_o3 + tau_co2 + tau_u_1 + tau_u_2 + tau_ch4_1 + tau_ch4_2 + tau_ch4_3
+        tau = tau_lw + tau_iw + tau_h2o + tau_o3 + tau_co2 + tau_u + tau_n2o + tau_ch4
 
         t_direct = tf.math.exp(-tau / (mu + 0.0000001))
         t_direct = tf.expand_dims(t_direct, axis=2)
@@ -188,6 +212,17 @@ class OpticalDepth(Layer):
         #print(f"OptficalFlow: shape of tau = {tau.shape}")
 
         return t_direct
+
+        #tau_gases = tau_h2o + tau_o3 + tau_co2 + tau_u + tau_n2o + tau_ch4
+        #tau_gases = tf.expand_dims(tau_gases, axis=2)
+        #tau_lw = tf.expand_dims(tau_lw, axis=2)
+        #tau_iw = tf.expand_dims(tau_iw, axis=2)
+        #tau = tf.concat((tau_lw, tau_iw, tau_gases), axis=2)
+
+        # tau = tf.concat((tau_lw, tau_iw, tau_h2o, tau_o3, tau_co2, tau_u, tau_n_o2, tau_ch4), axis=1)
+        # return tau
+
+
 
     
     def compute_output_shape(self, input_shape):
@@ -202,6 +237,321 @@ class OpticalDepth(Layer):
     @classmethod
     def from_config(cls, config):
         return cls(**config)
+
+class LayerProperties(Layer):
+    """ Computes split of extinguished radiation into absorbed, diffuse transmitted, and
+    diffuse reflected """
+    def __init__(self, n_channels):
+        super().__init__()
+        self.n_hidden = [5, 4, 4]
+        self.input_net = Dense(units=self.n_hidden[0],
+                        activation=tf.keras.activations.elu,  
+                        kernel_initializer=tf.keras.initializers.glorot_uniform())
+        
+        self.hidden_net = [Dense(n_hidden,activation=tf.keras.activations.elu,  
+                        kernel_initializer=tf.keras.initializers.glorot_uniform()) for n_hidden in self.n_hidden[1:]]
+        
+        self.output_net = Dense(units=3, activation=tf.keras.activations.softmax,  
+                        kernel_initializer=tf.keras.initializers.glorot_uniform())
+
+    def call(self, input):
+
+        # tau.shape = (n, 29, n_constituents)
+        tau, mu, mu_bar = input
+
+        print(f"LayerProperties(): shape of taus = {tau.shape}")
+
+        mu = tf.expand_dims(mu, axis=2)
+        mu_bar = tf.expand_dims(mu_bar, axis=2)
+
+        x_direct = self.input_net(tau / mu)
+        x_diffuse = self.input_net(tau / mu_bar)
+
+        for net in self.hidden_net:
+            x_direct = net(x_direct)
+            x_diffuse = net(x_diffuse)
+
+        e_split_direct = self.output_net(x_direct)
+        e_split_diffuse = self.output_net(x_diffuse)
+
+
+        print(f'Shape of e_split_diffuse = {e_split_diffuse.shape}')
+        print(" ")
+
+        # Coefficients of direct transmission of radiation. 
+        # Note that diffuse radiation can be directly transmitted
+
+        tau_total = tf.sum(tau, axis=-1, keepdims=True)
+
+        print(f'Shape of mu = {mu.shape}')
+        print(" ")
+
+        print(f'Shape of mu_bar = {mu_bar.shape}')
+        print(" ")
+
+
+        t_direct = tf.math.exp(-tau_total / (mu + 0.0000001))
+        t_diffuse = tf.math.exp(-tau_total / (mu_bar + 0.0000001))
+
+        print(f'Shape of t_direct = {t_direct.shape}')
+        print(" ")
+
+        #e_split_direct = tf.transpose(e_split_direct,perm=[1,0,2])
+        #e_split_diffuse = tf.transpose(e_split_diffuse,perm=[1,0,2])
+
+        print(f'Shape of e_split_diffuse = {e_split_diffuse.shape}')
+        print(" ")
+
+        layer_properties = tf.concat([t_direct, t_diffuse, e_split_direct, e_split_diffuse], axis=2)
+
+        return layer_properties
+
+
+@tf.function
+def propagate_layer_up (t_direct, t_diffuse, e_split_direct, e_split_diffuse, r_bottom_direct, r_bottom_diffuse, a_bottom_direct, a_bottom_diffuse):
+    """
+    Combines the properties of two atmospheric layers within a column: 
+    a shallow "top layer" and a thicker "bottom layer" spanning all the 
+    layers beneath the top layer including the surface. Computes the impact of multi-reflection between these layers.
+
+    Naming conventions:
+     
+    The prefixes -- t, e, r, a -- correspond respectively to absorption,
+    extinction, reflection, absorption.
+
+    The suffixes "_direct" and "_diffuse" specify the type of input radiation. 
+    Note, however, that an input of direct radiation may produce diffuse output,
+    e.g., t_multi_direct (transmission of direct radiation through multi-reflection) 
+    
+    Input and Output Shape:
+        Tensor with shape (n_batches, n_channels)
+
+    Arguments:
+
+        t_direct, t_diffuse - Direct transmission coefficient for 
+            the top layer. (Note that diffuse radiation can be directly 
+            transmitted)
+
+        e_split_direct, e_split_diffuse - The split of extinguised  
+            radiation into diffusely transmitted, reflected,
+            and absorbed components. These components sum to 1.0.
+            Has additional axis of length=3.
+            
+        r_bottom_direct, r_bottom_diffuse - The reflection 
+            coefficients for bottom layer.
+
+        a_bottom_direct, a_bottom_diffuse - The absorption coefficients
+            for the bottom layer. 
+            
+    Returns:
+
+        t_multi_direct, t_multi_diffuse - The transmission coefficients for 
+            radiation that is multi-reflected (as opposed to directly transmitted, 
+            e.g., t_direct, t_diffuse)
+
+        r_multi_direct, r_multi_diffuse - The reflection coefficients 
+            for the combined top and bottom layers including the surface
+
+        r_bottom_multi_direct, r_bottom_multi_diffuse - The reflection coefficients for
+            the bottom layer after accounting for multi-reflection with top layer
+
+        a_top_multi_direct, a_top_multi_diffuse - The absorption coefficients of 
+            the top layer after multi-reflection between the layers
+
+        a_bottom_multi_direct, a_bottom_multi_diffuse - The absorption coefficients 
+            of the bottom layer after multi-reflection between the layers
+
+    Notes:
+        Since the bottom layer includes the surface:
+                a_bottom_direct + r_bottom_direct = 1.0
+                a_bottom_diffuse + r_bottom_diffuse = 1.0
+
+        Consider two downward fluxes entering top layer: flux_direct, flux_diffuse
+
+            Downward Direct Flux Transmitted = flux_direct * t_direct
+            Downward Diffuse Flux Transmitted = flux_direct * t_multi_direct + 
+                                            flux_diffuse * (t_diffuse + t_multi_diffuse)
+
+            Upward Flux from Top Layer = flux_direct * r_multi_direct +
+                                     flux_diffuse * r_multi_diffuse
+
+            Upward Flux into Top Layer = flux_direct * r_bottom_multi_direct +
+                                        flux_diffuse * r_bottom_multi_diffuse
+
+            Both upward fluxes are diffuse since they are from radiation
+            that is scattered upwards
+
+        Conservation of energy:
+            a_bottom_multi_direct + a_top_multi_direct + r_multi_direct = 1.0
+            a_bottom_multi_diffuse + a_top_multi_diffuse + r_multi_diffuse = 1.0
+
+        The absorption at the top layer (after accounting for multi-reflection)
+        must equal the combined loss of flux for the downward and upward paths:
+         
+            a_top_multi_direct = (1 - t_direct - t_multi_direct) + 
+                                (r_bottom_multi_direct - r_multi_direct)
+            a_top_multi_diffuse = (1 - t_diffuse - t_multi_diffuse) + 
+                                (r_bottom_multi_diffuse - r_multi_diffuse)
+
+    """
+    # The top layer splits the direct beam into transmitted and extinguished components
+    e_direct = 1.0 - t_direct
+    
+    # The top layer also splits the downward diffuse flux into transmitted and extinguished components
+    e_diffuse = 1.0 - t_diffuse
+
+    # The top layer further splits each extinguished component into transmitted, reflected,
+    # and absorbed components
+    e_t_direct, e_r_direct, e_a_direct = e_split_direct[:,:,0:1], e_split_direct[:,:,1:2],e_split_direct[:,:,2:]
+    e_t_diffuse, e_r_diffuse, e_a_diffuse = e_split_diffuse[:,:,0:1], e_split_diffuse[:,:,1:2],e_split_diffuse[:,:,2:]
+
+    # Multi-reflection between the top layer and lower layer resolves 
+    # a direct beam into:
+    #   r_multi_direct - total effective reflection at the top layer
+    #   a_top_multi_direct - absorption at the top layer
+    #   a_bottom_multi_direct - absorption for the entire bottom layer
+
+    # The adding-doubling method computes these
+    # See p.418-424 of "A First Course in Atmospheric Radiation (2nd edition)"
+    # by Grant W. Petty
+    #
+    # Also see Shonk and Hogan, 2007
+
+    # pre-compute denominator. Add constant to avoid division by zero
+    eps = 1.0e-04
+    d = 1.0 / (1.0 - e_diffuse * e_r_diffuse * r_bottom_diffuse + eps)
+
+    t_multi_direct = t_direct * r_bottom_direct * e_diffuse * e_r_diffuse * d + \
+        e_direct * e_t_direct * d
+    
+    a_bottom_multi_direct = t_direct * a_bottom_direct + t_multi_direct * a_bottom_diffuse
+
+    r_bottom_multi_direct = t_direct * r_bottom_direct * d + e_direct * e_t_direct * r_bottom_diffuse * d
+
+    a_top_multi_direct = e_direct * e_a_direct + r_bottom_multi_direct * e_diffuse*e_a_diffuse
+
+    r_multi_direct = e_direct * e_r_direct + r_bottom_multi_direct * (t_diffuse + e_diffuse*e_t_diffuse)
+
+    # These should sum to 1.0
+    total_direct = a_bottom_multi_direct + a_top_multi_direct + r_multi_direct
+    #assert isclose(total_direct, 1.0, abs_tol=1e-5)
+    # Loss of flux should equal absorption
+    diff_flux = 1.0 - t_direct - t_multi_direct + r_bottom_multi_direct - r_multi_direct 
+    #assert isclose(diff_flux, a_top_multi_direct, abs_tol=1e-5)
+
+    # Multi-reflection for diffuse flux
+
+    t_multi_diffuse = \
+        t_diffuse * r_bottom_diffuse * e_diffuse * e_r_diffuse * d + \
+        e_diffuse * e_t_diffuse * d
+    
+    a_bottom_multi_diffuse = t_diffuse * a_bottom_diffuse + t_multi_diffuse * a_bottom_diffuse
+
+    r_bottom_multi_diffuse = t_diffuse * r_bottom_diffuse * d + e_diffuse * e_t_diffuse * r_bottom_diffuse * d
+    
+    a_top_multi_diffuse = e_diffuse * e_a_diffuse + r_bottom_multi_diffuse * e_diffuse*e_a_diffuse
+
+    r_multi_diffuse = e_diffuse * e_r_diffuse + r_bottom_multi_diffuse * (t_diffuse + e_diffuse*e_t_diffuse)
+
+    total_diffuse = a_bottom_multi_diffuse + a_top_multi_diffuse + r_multi_diffuse
+    #assert isclose(total_diffuse, 1.0, abs_tol=1e-5)
+    diff_flux = 1.0 - t_diffuse - t_multi_diffuse + r_bottom_multi_diffuse - r_multi_diffuse
+    #assert isclose(diff_flux, a_top_multi_diffuse, abs_tol=1e-5)
+
+    return t_multi_direct, t_multi_diffuse, \
+            r_multi_direct, r_multi_diffuse, \
+            r_bottom_multi_direct, r_bottom_multi_diffuse, \
+            a_top_multi_direct, a_top_multi_diffuse, \
+            a_bottom_multi_direct, a_bottom_multi_diffuse
+
+class UpwardPropagationCell(Layer):
+    def __init__(self, n_channels, **kwargs):
+        super().__init__(**kwargs)
+        #self.state_size = ((n_channels, 1), (n_channels,1), (n_channels, 1), (n_channels, 1))
+        #self.state_size = (n_channels * 4)
+        self.state_size = [tf.TensorShape([n_channels * 4])]
+        self.output_size = tf.TensorShape([n_channels, 8])
+        self._n_channels = n_channels
+
+    def call(self, input_at_i, states_at_i):
+        print("***")
+        t_direct, t_diffuse, e_split_direct, e_split_diffuse = input_at_i[:,:,0:1], input_at_i[:,:,1:2], input_at_i[:,:,2:5],input_at_i[:,:,5:]
+
+        print(f"Enter upward RNN, state.len = {len(states_at_i)} and state[0].shape = {states_at_i[0].shape}")
+        print(f"t_direct  = {tf.get_static_value(t_direct)}")
+
+        reshaped_state = tf.reshape(states_at_i[0], (-1,self._n_channels,4))
+
+        r_bottom_direct, r_bottom_diffuse, a_bottom_direct, a_bottom_diffuse = reshaped_state[:,:,0:1], reshaped_state[:,:,1:2], reshaped_state[:,:,1:2], reshaped_state[:,:,2:3]
+        
+        print(f"r_bottom_direct shape = {r_bottom_direct.shape}")
+
+        tmp = propagate_layer_up (t_direct, t_diffuse, e_split_direct, e_split_diffuse, r_bottom_direct, r_bottom_diffuse, a_bottom_direct, a_bottom_diffuse)
+
+        t_multi_direct, t_multi_diffuse, \
+            r_multi_direct, r_multi_diffuse, \
+            r_bottom_multi_direct, r_bottom_multi_diffuse, \
+            a_top_multi_direct, a_top_multi_diffuse, \
+            a_bottom_multi_direct, a_bottom_multi_diffuse= tmp
+
+        output_at_i = tf.concat([t_multi_direct, t_multi_diffuse, 
+                                 r_bottom_multi_direct, r_bottom_multi_diffuse,
+        a_top_multi_direct, a_top_multi_diffuse,  
+        a_bottom_multi_direct, a_bottom_multi_diffuse], axis=2)
+
+        print(f"Upward Prop, r_multi_direct.shape = {r_multi_direct.shape}")
+        
+        state_at_i_plus_1 = tf.concat([r_multi_direct, r_multi_diffuse, a_top_multi_direct, a_top_multi_diffuse], axis=2)
+
+
+
+        print("*")
+        state_at_i_plus_1 = tf.reshape(state_at_i_plus_1,(-1,self._n_channels * 4))
+        print("**")
+        print(" ")
+        return output_at_i, [state_at_i_plus_1]
+
+
+class DownwardPropagationCell_New(Layer):
+    def __init__(self,n_channels):
+        super().__init__()
+        self.state_size = (n_channels * 2)
+        self.output_size = (n_channels, 4)
+        self._n_channels = n_channels
+
+    def call(self, input_at_i, states_at_i):
+
+        s = tf.reshape(states_at_i[0],(-1,self._n_channels,2))
+        flux_down_above_direct, flux_down_above_diffuse = s[:,:,0:1], s[:,:,1:2]
+
+        i = input_at_i
+
+        t_direct, t_diffuse, \
+        t_multi_direct, t_multi_diffuse, \
+        r_bottom_multi_direct, r_bottom_multi_diffuse, \
+        a_top_multi_direct, a_top_multi_diffuse  = i[:,:,0:1], i[:,:,1:2],i[:,:,2:3], i[:,:,3:4],i[:,:,4:5], i[:,:,5:6],i[:,:,6:7], i[:,:,7:8]
+
+        absorbed_flux_top = flux_down_above_direct * a_top_multi_direct + \
+                        flux_down_above_diffuse * a_top_multi_diffuse
+
+        # Will want this later when incorporate surface interactions
+        #absorbed_flux_bottom = flux_down_above_direct * a_bottom_multi_direct + \
+        #flux_down_above_diffuse * a_bottom_multi_diffuse
+
+        flux_down_below_direct = flux_down_above_direct * t_direct
+        flux_down_below_diffuse = flux_down_above_direct * t_multi_direct + \
+                                flux_down_above_diffuse * (t_diffuse + t_multi_diffuse)
+        flux_up_below_diffuse = flux_down_above_direct * r_bottom_multi_direct + \
+                            flux_down_above_diffuse * r_bottom_multi_diffuse
+        
+        output_at_i = tf.concat([flux_down_below_direct, flux_down_below_diffuse, \
+            flux_up_below_diffuse, absorbed_flux_top], axis=2) #, #absorbed_flux_bottom
+         
+        #state_at_i_plus_1 = flux_down_below_direct, flux_down_below_diffuse
+        state_at_i_plus_1=tf.concat([flux_down_above_direct, flux_down_above_diffuse], axis=2)
+        state_at_i_plus_1=tf.reshape(state_at_i_plus_1,(-1,self._n_channels*2))
+
+        return output_at_i, state_at_i_plus_1
 
 class DownwardPropagationCell(Layer):
     def __init__(self,n_channels,**kwargs):
@@ -339,22 +689,23 @@ class OriginalLoss(tf.keras.losses.Loss):
         return cls(**config)
     
 def modify_weights_1(model):
-    factor_1 = 0.86  # decrease in original positive weights #0.92, 1.1, 0.86
-    factor_2 = 0.35  # Initial fraction of possible weight for negative weights #0.1, 0.2, 0.35
+    factor_1 = 0.9  # decrease in original positive weights #0.92, 1.1, 0.86; 0.9, 1.1
+    factor_2 = 0.3  # Initial fraction of possible weight for negative weights #0.1, 0.2, 0.35; 0.3, 0.2
     for layer in model.layers:
-        if layer.name == 'optical_depth_2':
+        if layer.name == 'optical_depth':
             layer_weights = layer.get_weights()
             new_weights = []
             for k, weights in enumerate(layer_weights):
                 positive_weights = [x for x in np.nditer(weights) if x > 0.0]
                 n_positive = len(positive_weights)
                 n_negative = weights.size - n_positive
-                if n_negative == 0 or k == 6 or k == 7 or k == 10 or k == 11:
+                if n_negative == 0 or k == 3 or k == 4 or k == 5 or k == 6 or k == 7 or k == 8 or k == 10 or k == 11 \
+                    or k == 13 or k == 14 or k == 16 or k == 17 or k == 19 or k == 20 or k > 21:
                     new_weights.append(weights)
                 elif n_positive == 0:
                     new_weights.append(np.full(shape=weights.shape, fill_value=2.0e-02))
                 else:
-                    new_positive_weight = factor_2 * sum(positive_weights) * (1.0 - factor_1) / n_positive
+                    new_positive_weight = factor_2 * sum(positive_weights) / n_positive
                     modified_weights = weights * factor_1
                     modified_weights = [x if x > 0.0 else new_positive_weight for x in np.nditer(modified_weights)]
                     np_modified_weights = np.reshape(np.array(modified_weights), weights.shape)
@@ -362,6 +713,21 @@ def modify_weights_1(model):
             layer.set_weights(new_weights)
     return model
 
+
+def modify_weights_2(model):
+    for layer in model.layers:
+        if layer.name == 'flux_down_above_direct':
+            layer_weights = layer.get_weights()
+            new_weights = []
+            for k, weights in enumerate(layer_weights):
+                if k > 0:
+                    new_weights.append(weights)
+                else:
+                    modified_weights = [np.sqrt(x) if x > 0.0 else -np.sqrt(-x) for x in np.nditer(weights)]
+                    modified_weights = np.reshape(np.array(modified_weights), weights.shape)
+                    new_weights.append(modified_weights)
+            layer.set_weights(new_weights)
+    return model
 
 def train():
 
@@ -374,7 +740,7 @@ def train():
     batch_size  = 2048
     epochs      = 100000
     n_epochs    = 0
-    epochs_period = 50
+    epochs_period = 100
     patience    = 1000 #25
 
     datadir     = "/home/hws/tmp/"
@@ -398,13 +764,13 @@ def train():
     co2_input = Input(shape=(n_layers, 1), batch_size=batch_size, name="co2_input") 
     u_input = Input(shape=(n_layers, 1), batch_size=batch_size, name="u_input") 
 
-    t_p_input = Input(shape=(n_layers, 2), batch_size=batch_size, name="t_p_input")
+    t_p_input = Input(shape=(n_layers, 3), batch_size=batch_size, name="t_p_input")
 
     n2o_input = Input(shape=(n_layers, 1), batch_size=batch_size, name="n2o_input") 
 
     ch4_input = Input(shape=(n_layers, 1), batch_size=batch_size, name="ch4_input") 
 
-    optical_depth = TimeDistributed(OpticalDepth(n_channels), name="optical_depth_2")([mu_input, lw_input, h2o_input, o3_input, co2_input, u_input, n2o_input, ch4_input, t_p_input])
+    optical_depth = TimeDistributed(OpticalDepth(n_channels), name="optical_depth")([mu_input, lw_input, h2o_input, o3_input, co2_input, u_input, n2o_input, ch4_input, t_p_input])
 
     # Layer coefficients: 
     # direct_transmission, scattered_transmission,
@@ -416,7 +782,8 @@ def train():
     flux_down_above_direct = Dense(units=n_channels,
                                    activation='softmax', 
                                    use_bias=False,
-                                   kernel_initializer=initializers.RandomUniform(minval=0.1, maxval=1.0),name='flux_down_above_direct')(flux_down_above_direct_input)
+                                   #kernel_initializer=initializers.RandomUniform(minval=0.1, maxval=1.0),
+                                    kernel_initializer=initializers.RandomUniform(minval=0.4, maxval=0.6),name='flux_down_above_direct')(flux_down_above_direct_input)
 
     flux_down_above_direct = tf.expand_dims(flux_down_above_direct, axis=2)
 
@@ -496,13 +863,13 @@ def train():
 
     #print(f"len of output = {len(output)}")
 
-    if False:
-        n_epochs = 200
+    if True:
+        n_epochs = 440
         model.load_weights((filename_model + model_name + str(n_epochs)))
         for layer in model.layers:
             if layer.name == 'flux_down_above_direct':
                 print(f'flux_down_above_direct.weights = {layer.weights}')
-            if layer.name == 'optical_depth_2':
+            if layer.name == 'optical_depth':
                 print("Optical Depth layers")
                 for k, weights in enumerate(layer.weights):
                     print(f'Weights {k}: {weights}')
@@ -536,7 +903,7 @@ def train():
             for layer in model.layers:
                 if layer.name == 'flux_down_above_direct':
                     print(f'flux_down_above_direct.weights = {layer.weights}')
-                if layer.name == 'optical_depth_2':
+                if layer.name == 'optical_depth':
                     if False:
                         print(f'optical_depth.weights = {layer.weights[0]}')
                         if n_epochs > epochs_period: #170: #epochs_period:
