@@ -371,7 +371,7 @@ class UpwardPropagationCell(Layer):
 
         reshaped_state = tf.reshape(states_at_i[0], (-1,self._n_channels,4))
 
-        r_bottom_direct, r_bottom_diffuse, a_bottom_direct, a_bottom_diffuse = reshaped_state[:,:,0:1], reshaped_state[:,:,1:2], reshaped_state[:,:,1:2], reshaped_state[:,:,2:3]
+        r_bottom_direct, r_bottom_diffuse, a_bottom_direct, a_bottom_diffuse = reshaped_state[:,:,0:1], reshaped_state[:,:,1:2], reshaped_state[:,:,2:3], reshaped_state[:,:,3:4]
         
         print(f"r_bottom_direct shape = {r_bottom_direct.shape}")
 
@@ -511,9 +511,22 @@ def train():
     # below the current layer)
 
     # absorption and reflection (albedo) of the surface
-    surface_input = Input(shape=(n_channels * 4), batch_size=batch_size, name="surface_input")
+    #surface_input = Input(shape=(n_channels * 4), batch_size=batch_size, name="surface_input")
+    
+    #surface_input = Input(shape=(n_channels, 4), batch_size=batch_size, name="surface_input")
 
-    upward_output, upward_state = RNN(UpwardPropagationCell(n_channels), return_sequences=True, return_state=True, go_backwards=True, time_major=False)(inputs=layer_properties, initial_state=surface_input)
+    surface_albedo_direct_input = Input(shape=(n_channels, 1), batch_size=batch_size, name="surface_albedo_direct_input")
+
+    surface_albedo_diffuse_input = Input(shape=(n_channels, 1), batch_size=batch_size, name="surface_albedo_diffuse_input")
+
+    surface_absorption_direct_input = Input(shape=(n_channels, 1), batch_size=batch_size, name="surface_absorption_direct_input")
+
+    surface_absorption_diffuse_input = Input(shape=(n_channels, 1), batch_size=batch_size, name="surface_absorption_diffuse_input")
+
+    initial_state=[surface_albedo_direct_input, surface_albedo_diffuse_input,
+                   surface_absorption_direct_input, surface_absorption_diffuse_input]
+
+    upward_output, upward_state = RNN(UpwardPropagationCell(n_channels), return_sequences=True, return_state=True, go_backwards=True, time_major=False)(inputs=layer_properties, initial_state = initial_state)
 
     print ("****")
     print(f"upward_state shape={tf.shape(upward_state)}")

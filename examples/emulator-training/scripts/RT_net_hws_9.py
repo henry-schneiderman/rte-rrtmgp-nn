@@ -204,22 +204,13 @@ class OpticalDepth(Layer):
         tau_ch4_3 = tf.pad(tau_ch4[:,7:], paddings_c, "CONSTANT")
         tau_ch4 = tau_ch4_1 + tau_ch4_2 + tau_ch4_3
 
-        tau = tau_lw + tau_iw + tau_h2o + tau_o3 + tau_co2 + tau_u + tau_n2o + tau_ch4
+        tau_gases = tau_h2o + tau_o3 + tau_co2 + tau_u + tau_n2o + tau_ch4
+        tau_gases = tf.expand_dims(tau_gases, axis=2)
+        tau_lw = tf.expand_dims(tau_lw, axis=2)
+        tau_iw = tf.expand_dims(tau_iw, axis=2)
+        tau = tf.concat((tau_lw, tau_iw, tau_gases), axis=2)
 
-        t_direct = tf.math.exp(-tau / (mu + 0.0000001))
-        t_direct = tf.expand_dims(t_direct, axis=2)
-
-        #print(f"OptficalFlow: shape of tau = {tau.shape}")
-
-        return t_direct
-
-        #tau_gases = tau_h2o + tau_o3 + tau_co2 + tau_u + tau_n2o + tau_ch4
-        #tau_gases = tf.expand_dims(tau_gases, axis=2)
-        #tau_lw = tf.expand_dims(tau_lw, axis=2)
-        #tau_iw = tf.expand_dims(tau_iw, axis=2)
-        #tau = tf.concat((tau_lw, tau_iw, tau_gases), axis=2)
-
-        # return tau
+        return tau
 
     
     def compute_output_shape(self, input_shape):
@@ -236,11 +227,35 @@ class OpticalDepth(Layer):
     def from_config(cls, config):
         return cls(**config)
 
+class LayerPropertiesDirect(Layer):
+    """ Only Comutes Direct Transmission Coefficient """
+    def __init__(self, **kargs):
+        super().__init__(**kargs)
+
+    def call(self, input):
+
+        tau, mu = input
+
+        print(f"LayerProperties(): shape of taus = {tau.shape}")
+
+        mu = tf.expand_dims(mu, axis=2)
+        tau_total = tf.sum(tau, axis=-1, keepdims=True)
+
+        print(f'Shape of mu = {mu.shape}')
+        print(" ")
+
+        t_direct = tf.math.exp(-tau_total / (mu + 0.0000001))
+
+        print(f'Shape of t_direct = {t_direct.shape}')
+        print(" ")
+
+        return t_direct
+
 class LayerProperties(Layer):
     """ Computes split of extinguished radiation into absorbed, diffuse transmitted, and
     diffuse reflected """
-    def __init__(self, n_channels):
-        super().__init__()
+    def __init__(self, **kargs):
+        super().__init__(**kargs)
         self.n_hidden = [5, 4, 4]
         self.input_net = Dense(units=self.n_hidden[0],
                         activation=tf.keras.activations.elu,  
@@ -303,7 +318,6 @@ class LayerProperties(Layer):
         layer_properties = tf.concat([t_direct, t_diffuse, e_split_direct, e_split_diffuse], axis=2)
 
         return layer_properties
-
 
 @tf.function
 def propagate_layer_up (t_direct, t_diffuse, e_split_direct, e_split_diffuse, r_bottom_direct, r_bottom_diffuse, a_bottom_direct, a_bottom_diffuse):
@@ -466,8 +480,8 @@ class UpwardPropagationCell(Layer):
     def __init__(self, n_channels, **kwargs):
         super().__init__(**kwargs)
         #self.state_size = ((n_channels, 1), (n_channels,1), (n_channels, 1), (n_channels, 1))
-        #self.state_size = (n_channels * 4)
-        self.state_size = [tf.TensorShape([n_channels * 4])]
+        #self.state_size = [tf.TensorShape([n_channels, 4])]
+        self.state_size = [tf.TensorShape([n_channels, 1]), tf.TensorShape([n_channels, 1]), tf.TensorShape([n_channels, 1]), tf.TensorShape([n_channels, 1])]
         self.output_size = tf.TensorShape([n_channels, 8])
         self._n_channels = n_channels
 
@@ -478,9 +492,7 @@ class UpwardPropagationCell(Layer):
         print(f"Enter upward RNN, state.len = {len(states_at_i)} and state[0].shape = {states_at_i[0].shape}")
         print(f"t_direct  = {tf.get_static_value(t_direct)}")
 
-        reshaped_state = tf.reshape(states_at_i[0], (-1,self._n_channels,4))
-
-        r_bottom_direct, r_bottom_diffuse, a_bottom_direct, a_bottom_diffuse = reshaped_state[:,:,0:1], reshaped_state[:,:,1:2], reshaped_state[:,:,1:2], reshaped_state[:,:,2:3]
+        r_bottom_direct, r_bottom_diffuse, a_bottom_direct, a_bottom_diffuse = states_at_i
         
         print(f"r_bottom_direct shape = {r_bottom_direct.shape}")
 
@@ -499,18 +511,58 @@ class UpwardPropagationCell(Layer):
 
         print(f"Upward Prop, r_multi_direct.shape = {r_multi_direct.shape}")
         
-        state_at_i_plus_1 = tf.concat([r_multi_direct, r_multi_diffuse, a_top_multi_direct, a_top_multi_diffuse], axis=2)
-
-
+        state_at_i_plus_1 = [r_multi_direct, r_multi_diffuse, a_top_multi_direct, a_top_multi_diffuse]
 
         print("*")
-        state_at_i_plus_1 = tf.reshape(state_at_i_plus_1,(-1,self._n_channels * 4))
-        print("**")
         print(" ")
         return output_at_i, [state_at_i_plus_1]
 
+class DownwardPropagationCellDirect(Layer):
+    def __init__(self,n_channels,**kwargs):
+        super().__init__(**kwargs)
+        self.n_channels = n_channels
+        self.state_size = [tf.TensorShape([self.n_channels, 1])]
+        self.output_size = tf.TensorShape([self.n_channels, 1])
 
-class DownwardPropagationCell_New(Layer):
+    def call(self, input_at_i, states_at_i):
+
+        flux_down_above_direct, = states_at_i
+
+        print(f"RNN: flux_down_above.shape= {flux_down_above_direct.shape}")
+
+        t_direct = input_at_i
+
+        print(f"RNN: t_direct.shape= {t_direct.shape}")
+
+        # Will want this later when incorporate surface interactions
+        #absorbed_flux_bottom = flux_down_above_direct * a_bottom_multi_direct + \
+        #flux_down_above_diffuse * a_bottom_multi_diffuse
+
+        flux_down_below_direct = flux_down_above_direct * t_direct
+        
+        output_at_i = flux_down_below_direct
+         
+        state_at_i_plus_1=[flux_down_below_direct,]
+
+        print ("Downward prop")
+        return output_at_i, state_at_i_plus_1
+
+    def compute_output_shape(self, input_shape):
+        return tf.TensorShape([input_shape[0],self.n_channels,1])
+
+    def get_config(self):
+        base_config = super(DownwardPropagationCellDirect, self).get_config()
+        config = {
+                'n_channels': self.n_channels,
+        }
+        return config.update(base_config)
+            
+    @classmethod
+    def from_config(cls, config):
+        return cls(**config)
+
+
+class DownwardPropagationCell(Layer):
     def __init__(self,n_channels):
         super().__init__()
         self.state_size = (n_channels * 2)
@@ -551,39 +603,6 @@ class DownwardPropagationCell_New(Layer):
 
         return output_at_i, state_at_i_plus_1
 
-class DownwardPropagationCell(Layer):
-    def __init__(self,n_channels,**kwargs):
-        super().__init__(**kwargs)
-        self.n_channels = n_channels
-        self.state_size = [tf.TensorShape([self.n_channels, 1])]
-        self.output_size = tf.TensorShape([self.n_channels, 1])
-
-    def call(self, input_at_i, states_at_i):
-
-        flux_down_above_direct, = states_at_i
-
-        print(f"RNN: flux_down_above.shape= {flux_down_above_direct.shape}")
-
-        t_direct = input_at_i
-
-        print(f"RNN: t_direct.shape= {t_direct.shape}")
-
-        # Will want this later when incorporate surface interactions
-        #absorbed_flux_bottom = flux_down_above_direct * a_bottom_multi_direct + \
-        #flux_down_above_diffuse * a_bottom_multi_diffuse
-
-        flux_down_below_direct = flux_down_above_direct * t_direct
-        
-        output_at_i = flux_down_below_direct
-         
-        state_at_i_plus_1=[flux_down_below_direct,]
-
-        print ("Downward prop")
-        return output_at_i, state_at_i_plus_1
-
-    def compute_output_shape(self, input_shape):
-        return tf.TensorShape([input_shape[0],self.n_channels,1])
-
     def get_config(self):
         base_config = super(DownwardPropagationCell, self).get_config()
         config = {
@@ -595,7 +614,8 @@ class DownwardPropagationCell(Layer):
     def from_config(cls, config):
         return cls(**config)
 
-class ConsolidateFlux(Layer):
+
+class ConsolidateFluxDirect(Layer):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
     def call(self, input):
@@ -612,14 +632,62 @@ class ConsolidateFlux(Layer):
         # Sum across channels
 
         flux_down_direct = tf.math.reduce_sum(flux_down_direct, axis=2)
-        flux_down_direct = tf.squeeze(flux_down_direct,axis=2)      
-        flux_down_direct = flux_down_direct[:,:]
-
+        flux_down_direct = tf.squeeze(flux_down_direct,axis=2)     
 
         return flux_down_direct
 
     def compute_output_shape(self, input_shape):
         return [tf.TensorShape([input_shape[0][0],input_shape[2][1] + 1]),]
+
+
+class ConsolidateFlux(Layer):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+    def call(self, input):
+        print("starting: consolidated flux")
+        flux_down_above_direct, flux_down_above_diffuse, \
+        flux_down_below_direct, flux_down_below_diffuse, \
+        flux_up_above_diffuse, flux_up_below_diffuse, \
+        absorbed_flux_top = input
+
+        # Add layers dimension
+        flux_down_above_direct = tf.expand_dims(flux_down_above_direct, axis=1)
+        flux_down_above_diffuse = tf.expand_dims(flux_down_above_diffuse, axis=1)
+        flux_up_above_diffuse = tf.expand_dims(flux_up_above_diffuse, axis=1)
+
+        flux_down_direct = tf.concat([flux_down_above_direct,flux_down_below_direct], axis=1)
+        flux_down_diffuse = tf.concat([flux_down_above_diffuse,flux_down_below_diffuse], axis=1)
+        flux_up_diffuse = tf.concat([flux_up_above_diffuse, flux_up_below_diffuse], axis=1)
+
+        # Sum across channels
+        flux_down_direct = tf.math.reduce_sum(flux_down_direct, axis=2)
+        flux_down_diffuse = tf.math.reduce_sum(flux_down_diffuse, axis=2)
+        flux_up = tf.math.reduce_sum(flux_up_diffuse, axis=2)
+
+        flux_down = flux_down_direct + flux_down_diffuse
+        flux_down = tf.squeeze(flux_down,axis=2)
+        flux_down_direct = tf.squeeze(flux_down_direct,axis=2)
+        flux_up = tf.squeeze(flux_up,axis=2)
+
+        print(f"Consolidation: absorbed_flux_top = {absorbed_flux_top.shape}")
+
+        absorbed_flux = tf.math.reduce_sum(absorbed_flux_top, axis=2)
+        absorbed_flux = tf.squeeze(absorbed_flux,axis=2)
+
+        print(f"Consolidation: direct_down = {flux_down_direct.shape}")
+        print(f"Consolidation: direct = {flux_down.shape}")
+        print(f"Consolidation: up = {flux_up.shape}")
+        print(f"Consolidation: absorbed_flux = {absorbed_flux.shape}")
+
+        print("consolidated flux")
+        return flux_down_direct, flux_down, flux_up, absorbed_flux
+
+    def compute_output_shape(self, input_shape):
+        return [tf.TensorShape([input_shape[0][0],input_shape[2][1] + 1]),
+                tf.TensorShape([input_shape[0][0],input_shape[2][1] + 1]), 
+                tf.TensorShape([input_shape[0][0],input_shape[2][1] + 1]), 
+                tf.TensorShape([input_shape[0][0],input_shape[2][1]])]
+
 
 class VerificationLayer(Layer):
     def __init__(self, **kwargs):
@@ -749,9 +817,7 @@ def train():
     filename_model = datadir + "/Model-"
     model_name = "Direct_Trans.2."
 
-    # Optical Depth
-
-    mu_input = Input(shape=(n_layers, 1), batch_size=batch_size, name="mu_input") 
+    # Computing optical depth for each layer
 
     lw_input = Input(shape=(n_layers, 2), batch_size=batch_size, name="lw_input")
 
@@ -768,12 +834,43 @@ def train():
 
     ch4_input = Input(shape=(n_layers, 1), batch_size=batch_size, name="ch4_input") 
 
-    optical_depth = TimeDistributed(OpticalDepth(n_channels), name="optical_depth")([mu_input, lw_input, h2o_input, o3_input, co2_input, u_input, n2o_input, ch4_input, t_p_input])
+    tau = TimeDistributed(OpticalDepth(n_channels), name="optical_depth")([mu_input, lw_input, h2o_input, o3_input, co2_input, u_input, n2o_input, ch4_input, t_p_input])
 
-    # Layer coefficients: 
-    # direct_transmission, scattered_transmission,
-    # scattered_reflection, scattered_absorption
+    # If only running direct transmission model, compute direct transmission 
+    # coefficient for each layer
 
+    mu_input = Input(shape=(n_layers, 1), batch_size=batch_size, name="mu_input") 
+    t_direct = TimeDistributed(LayerPropertiesDirect(), name="layer_properties")([tau, mu_input])
+
+    # If running full model compute layer coefficients: 
+    #   direct_transmission, scattered_transmission,
+    #   scattered_reflection, scattered_absorption
+
+    null_mu_bar_input = Input(shape=(0), batch_size=batch_size, name="null_mu_bar_input") 
+    mu_bar = Dense(units=1,bias_initializer=tf.constant_initializer(0.5),activation="sigmoid",name="mu_bar")(null_mu_bar_input)
+    mu_bar = tf.repeat(tf.expand_dims(mu_bar,axis=1),repeats=n_layers,axis=1)
+
+    layer_properties = TimeDistributed(LayerProperties(), name="layer_properties")([tau, mu_input, mu_bar])
+
+    # If running full model, compute the effect of multireflection by
+    # upward propagation of absorption (a) and reflection (r) layer by layer
+
+    surface_albedo_direct_input = Input(shape=(n_channels, 1), batch_size=batch_size, name="surface_albedo_direct_input")
+
+    surface_albedo_diffuse_input = Input(shape=(n_channels, 1), batch_size=batch_size, name="surface_albedo_diffuse_input")
+
+    surface_absorption_direct_input = Input(shape=(n_channels, 1), batch_size=batch_size, name="surface_absorption_direct_input")
+
+    surface_absorption_diffuse_input = Input(shape=(n_channels, 1), batch_size=batch_size, name="surface_absorption_diffuse_input")
+
+    initial_state=[surface_albedo_direct_input, surface_albedo_diffuse_input,
+                   surface_absorption_direct_input, surface_absorption_diffuse_input]
+
+    multireflection_layer_parameters, upward_state = RNN(UpwardPropagationCell(n_channels), return_sequences=True, return_state=True, go_backwards=True, time_major=False)(inputs=layer_properties, initial_state = initial_state)
+
+    r_multi_direct = upward_state[:,:,0:1]  # reflection at top of atmosphere
+
+    # Initializing downwelling flux
 
     flux_down_above_direct_input = Input(shape=(1), batch_size=batch_size, name="flux_down_above_direct_input")
 
@@ -783,16 +880,41 @@ def train():
                                    #kernel_initializer=initializers.RandomUniform(minval=0.1, maxval=1.0),
                                     kernel_initializer=initializers.RandomUniform(minval=0.4, maxval=0.6),name='flux_down_above_direct')(flux_down_above_direct_input)
 
-    flux_down_above_direct = tf.expand_dims(flux_down_above_direct, axis=2)
+    flux_down_above_direct = tf.expand_dims(flux_down_above_direct, axis=2) # Need to add additional dimension since each channel is independent.
 
-    initial_state_down=[flux_down_above_direct,]
+    # Downward propagation of direct radiative flux only
 
-    downward_input = optical_depth
+    flux_down_below_direct = RNN(DownwardPropagationCellDirect(n_channels), return_sequences=True, return_state=False, go_backwards=False, time_major=False)(inputs=tau, initial_state=[flux_down_above_direct,])
+
+    flux_down_direct = ConsolidateFluxDirect()((flux_down_above_direct, flux_down_below_direct))
+
+    # Downward propagation of full model including direct and diffuse flux
+    flux_down_above_diffuse = Input(shape=(n_channels, 1), batch_size=batch_size, name="flux_down_above_diffuse")
+
+    flux_up_above_diffuse = tf.multiply(flux_down_above_direct,r_multi_direct)
+
+    initial_state_down=tf.concat([flux_down_above_direct, flux_down_above_diffuse], axis=1)
+
+    initial_state_down=tf.reshape(initial_state_down,(-1,n_channels*2))
 
     # Downward propagation: t and a
-    flux_down_below_direct = RNN(DownwardPropagationCell(n_channels), return_sequences=True, return_state=False, go_backwards=False, time_major=False)(inputs=downward_input, initial_state=initial_state_down)
+    output = RNN(DownwardPropagationCell(n_channels), return_sequences=True, return_state=False, go_backwards=True, time_major=False)(inputs=multireflection_layer_parameters, initial_state=initial_state_down)
 
-    flux_down_direct = ConsolidateFlux()((flux_down_above_direct, flux_down_below_direct))
+    print(f"downward output shape = {output.shape}")
+
+    flux_down_below_direct, flux_down_below_diffuse, \
+    flux_up_below_diffuse, absorbed_flux_top = output[:,:,:,0:1],output[:,:,:,1:2],output[:,:,:,2:3],output[:,:,:,3:4]
+
+    flux_inputs = (flux_down_above_direct, flux_down_above_diffuse,
+        flux_down_below_direct, flux_down_below_diffuse, 
+        flux_up_above_diffuse, flux_up_below_diffuse,
+        absorbed_flux_top)
+
+    #model_error = VerificationLayer()([flux_down_above_direct, layer_properties[:,:,:,0:1], flux_down_below_direct])
+
+    #print(f"model error = {model_error}")
+        
+    flux_down_direct, flux_down, flux_up, absorbed_flux = ConsolidateFlux()(flux_inputs)
 
     toa_input = Input(shape=(1), batch_size=batch_size, name="toa_input")
     target_input = Input(shape=(n_levels), batch_size=batch_size, name="target_input")
@@ -802,10 +924,12 @@ def train():
     # This is just to force the VerificationLayer to run
     #heating_rate = heating_rate + tf.expand_dims(model_error, axis=1)
 
-    model = Model(inputs=[mu_input, lw_input, h2o_input, o3_input, co2_input, u_input, n2o_input, ch4_input, t_p_input, flux_down_above_direct_input, toa_input, target_input, delta_pressure_input], 
+    direct_model = Model(inputs=[mu_input, lw_input, h2o_input, o3_input, co2_input, u_input, n2o_input, ch4_input, t_p_input, flux_down_above_direct_input, toa_input, target_input, delta_pressure_input], 
     outputs=[flux_down_direct])
-    #outputs=[flux_down_direct, flux_down, flux_up,heating_rate, optical_depth])
-    #outputs={'flux_down_direct': flux_down_direct, 'flux_down': flux_down, 'flux_up': flux_up, 'heating_rate' : heating_rate})
+
+    full_model = Model(inputs=[mu_input, lw_input, h2o_input, o3_input, co2_input, u_input, n2o_input, ch4_input, t_p_input, flux_down_above_direct_input, toa_input, target_input, delta_pressure_input], 
+    outputs=[flux_down_direct, flux_down, flux_up,heating_rate])
+
 
     training_inputs, training_outputs = load_data_lwp(filename_training, n_channels)
     validation_inputs, validation_outputs = load_data_lwp(filename_validation, n_channels)
