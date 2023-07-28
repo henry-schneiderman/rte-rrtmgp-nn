@@ -219,15 +219,13 @@ class OpticalDepth(Layer):
         #tau_iw = tf.expand_dims(tau_iw, axis=2)
         #tau = tf.concat((tau_lw, tau_iw, tau_gases), axis=2)
 
-        # tau = tf.concat((tau_lw, tau_iw, tau_h2o, tau_o3, tau_co2, tau_u, tau_n_o2, tau_ch4), axis=1)
         # return tau
-
-
 
     
     def compute_output_shape(self, input_shape):
         return [tf.TensorShape([input_shape[0][0],self.n_channels,1])]
-
+        #return [tf.TensorShape([input_shape[0][0],self.n_channels,1]), tf.TensorShape([input_shape[0][0],self.n_channels,1]), tf.TensorShape([input_shape[0][0],self.n_channels,1])]
+        
     def get_config(self):
         base_config = super(OpticalDepth, self).get_config()
         config = {
