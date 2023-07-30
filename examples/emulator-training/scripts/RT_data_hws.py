@@ -141,7 +141,7 @@ def load_data_2(file_name, n_channels):
     o = [outputs[0]]
     return i, o
 
-def load_data_lwp(file_name, n_channels):
+def load_data_full(file_name, n_channels):
     data = xr.open_dataset(file_name)
     composition = data.variables['rrtmgp_sw_input'][:].data
     (n_exp,n_col,n_layers,n_composition) = composition.shape
@@ -177,13 +177,22 @@ def load_data_lwp(file_name, n_channels):
     mu = np.reshape(mu,(n_samples,1,1))
     mu = np.repeat(mu,axis=1,repeats=n_layers)
 
+    mu_bar = np.zeros((n_samples,1))
+
     rsd = data.variables['rsd'][:].data
     rsd     = rsd.reshape((n_samples,n_levels, 1))
     rsd_direct = data.variables['rsd_dir'][:].data
     rsd_direct     = rsd_direct.reshape((n_samples,n_levels, 1))
 
     toa = np.copy(rsd[:,0:1,:])
+    rsd = rsd / toa
     rsd_direct = rsd_direct / toa
+
+    rsu = data.variables['rsu'][:].data
+    rsu     = rsu.reshape((n_samples,n_levels, 1))
+    rsu = rsu / toa
+
+    absorbed_flux = rsd[:,:-1,:] - rsd[:,1:,:] + rsu[:,1:,:] - rsu[:,:-1,:]
 
     #lwp = data.variables['cloud_lwp'][:].data / 2.1337292e-03  #original
 
@@ -199,9 +208,11 @@ def load_data_lwp(file_name, n_channels):
     #flux_down_above_down = np.ones([n_samples,n_channels,1],dtype='float32') / n_channels
 
     flux_down_above_direct = np.ones([n_samples,1],dtype='float32') 
+    flux_down_above_diffuse = np.zeros((n_samples, n_channels, 1))
 
     rsd_direct = tf.squeeze(rsd_direct, axis=2)
-    rsd_direct = rsd_direct[:,:]
+    rsd = tf.squeeze(rsd, axis=2)
+    rsu = tf.squeeze(rsu, axis=2)
 
     pressure = data.variables['pres_level'][:,:,:].data 
     pressure = np.reshape(pressure,(n_samples,n_levels))
@@ -213,8 +224,31 @@ def load_data_lwp(file_name, n_channels):
     # kg / m^2
     u = (delta_pressure_2 / g) / 4.1637085e+03     #4.1637085e+02
 
-    inputs = (mu, lwp, h2o, o3, co2, u, n2o, ch4, t_p, flux_down_above_direct,  toa[:,:,0], rsd_direct, delta_pressure)
-    outputs = (rsd_direct)
+    surface_albedo = data.variables['sfc_alb'][:].data
+    surface_albedo = surface_albedo[:,:,0]
+    surface_albedo = np.reshape(surface_albedo,(n_samples,1,1))
+
+    surface_absorption = np.ones(shape=(n_samples,1,1)) - surface_albedo
+
+    surface_albedo = np.repeat(np.expand_dims(surface_albedo,axis=1),repeats=n_channels,axis=1)
+
+    surface_absorption = np.repeat(np.expand_dims(surface_absorption,axis=1),repeats=n_channels,axis=1)
+
+    surface = [surface_albedo, surface_albedo, surface_absorption, surface_absorption]
+
+    inputs = (mu, mu_bar, lwp, h2o, o3, co2, u, n2o, ch4, t_p, *surface, flux_down_above_direct, flux_down_above_diffuse, toa[:,:,0], rsd_direct, 
+              rsd, rsu, absorbed_flux, delta_pressure)
+    outputs = (rsd_direct, rsd, rsu, absorbed_flux)
+
+    return inputs, outputs
+
+def load_data_direct(file_name, n_channels):
+    tmp_inputs, tmp_outputs = load_data_full(file_name, n_channels)
+    mu, mu_bar, lwp, h2o, o3, co2, u, n2o, ch4, t_p,s1, s2, \
+        s3, s4,flux_down_above_direct, flux_down_above_diffuse, \
+            toa, rsd_direct, rsd, rsu, absorbed_flux, delta_pressure = tmp_inputs
+    inputs = (mu,lwp, h2o, o3, co2, u, n2o, ch4, t_p, flux_down_above_direct,  toa, rsd_direct, delta_pressure)
+    outputs = (tmp_outputs[0])
 
     return inputs, outputs
 
