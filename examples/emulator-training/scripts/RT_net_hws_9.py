@@ -417,6 +417,8 @@ def propagate_layer_up (t_direct, t_diffuse, e_split_direct, e_split_diffuse, r_
     e_t_direct, e_r_direct, e_a_direct = e_split_direct[:,:,0:1], e_split_direct[:,:,1:2],e_split_direct[:,:,2:]
     e_t_diffuse, e_r_diffuse, e_a_diffuse = e_split_diffuse[:,:,0:1], e_split_diffuse[:,:,1:2],e_split_diffuse[:,:,2:]
 
+    print(f"e_a_diffuse.shape = {e_a_diffuse.shape}")
+
     # Multi-reflection between the top layer and lower layer resolves 
     # a direct beam into:
     #   r_multi_direct - total effective reflection at the top layer
@@ -491,6 +493,8 @@ class UpwardPropagationCell(Layer):
 
         print(f"Enter upward RNN, state.len = {len(states_at_i)} and state[0].shape = {states_at_i[0].shape}")
         print(f"t_direct  = {tf.get_static_value(t_direct)}")
+        print(f't_direct shape = {t_direct.shape}')
+        print(f'e_split_diffuse shape = {e_split_diffuse.shape}')
 
         #r_bottom_direct, r_bottom_diffuse, a_bottom_direct, a_bottom_diffuse = states_at_i
 
@@ -502,6 +506,8 @@ class UpwardPropagationCell(Layer):
 
         tmp = propagate_layer_up (t_direct, t_diffuse, e_split_direct, e_split_diffuse, r_bottom_direct, r_bottom_diffuse, a_bottom_direct, a_bottom_diffuse)
 
+        print(f"tmp = {tmp}")
+
         t_multi_direct, t_multi_diffuse, \
             r_multi_direct, r_multi_diffuse, \
             r_bottom_multi_direct, r_bottom_multi_diffuse, \
@@ -509,11 +515,11 @@ class UpwardPropagationCell(Layer):
             a_bottom_multi_direct, a_bottom_multi_diffuse= tmp
 
         output_at_i = tf.concat([t_multi_direct, t_multi_diffuse, 
-                                #r_multi_direct, r_multi_diffuse, \
-                                 r_bottom_multi_direct, r_bottom_multi_diffuse,
-        a_top_multi_direct, a_top_multi_diffuse], axis=2)
+                                 r_bottom_multi_direct, r_bottom_multi_diffuse, a_top_multi_direct, a_top_multi_diffuse], axis=2)
         #a_bottom_multi_direct, a_bottom_multi_diffuse], axis=2)
 
+        print(" ")
+        print(f"Upward Prop, output.shape = {output_at_i.shape}")
         print(f"Upward Prop, r_multi_direct.shape = {r_multi_direct.shape}")
         
         #state_at_i_plus_1 = [r_multi_direct, r_multi_diffuse, a_top_multi_direct, a_top_multi_diffuse]
@@ -590,6 +596,9 @@ class DownwardPropagationCell(Layer):
         r_bottom_multi_direct, r_bottom_multi_diffuse, \
         a_top_multi_direct, a_top_multi_diffuse  = i[:,:,0:1], i[:,:,1:2],i[:,:,2:3], i[:,:,3:4],i[:,:,4:5], i[:,:,5:6],i[:,:,6:7], i[:,:,7:8]
 
+        print(f"Downward: a_top_multi_direct shape = {a_top_multi_direct.shape}")
+        print(f"Downward: a_top_multi_diffuse shape = {a_top_multi_diffuse.shape}")
+
         absorbed_flux_top = flux_down_above_direct * a_top_multi_direct + \
                         flux_down_above_diffuse * a_top_multi_diffuse
 
@@ -605,9 +614,13 @@ class DownwardPropagationCell(Layer):
         
         output_at_i = tf.concat([flux_down_below_direct, flux_down_below_diffuse, \
             flux_up_below_diffuse, absorbed_flux_top], axis=2) #, #absorbed_flux_bottom
+
+        print(f"Downward: absorbed_flux_top shape = {absorbed_flux_top.shape}")
+
+        print(f"Downward output shape = {output_at_i.shape}")
          
         #state_at_i_plus_1 = flux_down_below_direct, flux_down_below_diffuse
-        state_at_i_plus_1=tf.concat([flux_down_above_direct, flux_down_above_diffuse], axis=2)
+        state_at_i_plus_1=tf.concat([flux_down_below_direct, flux_down_below_diffuse], axis=2)
         state_at_i_plus_1=tf.reshape(state_at_i_plus_1,(-1,self._n_channels*2))
 
         return output_at_i, state_at_i_plus_1
@@ -980,7 +993,7 @@ def train():
 
     multireflection_layer_parameters, upward_state = RNN(UpwardPropagationCell(n_channels), return_sequences=True, return_state=True, go_backwards=True, time_major=False)(inputs=layer_properties, initial_state = initial_state)
 
-    upward_state = tf.reshape(upward_state[0],(-1,n_channels,4))
+    upward_state = tf.reshape(upward_state,(-1,n_channels,4))
     r_multi_direct = upward_state[:,:,0:1]  # reflection at top of atmosphere
 
     # Downward propagation of full model including direct and diffuse flux
