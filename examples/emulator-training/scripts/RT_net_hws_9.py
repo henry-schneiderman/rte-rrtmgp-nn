@@ -1005,7 +1005,7 @@ def train():
 
     flux_up_above_diffuse = tf.multiply(flux_down_above_direct,r_multi_direct)
 
-    initial_state_down=tf.concat([flux_down_above_direct, flux_down_above_diffuse], axis=1)
+    initial_state_down=tf.concat([flux_down_above_direct, flux_down_above_diffuse], axis=2)
 
     initial_state_down=tf.reshape(initial_state_down,(-1,n_channels*2))
 
