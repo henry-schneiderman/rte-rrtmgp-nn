@@ -234,7 +234,7 @@ def load_data_full(file_name, n_channels):
 
     surface_absorption = np.repeat(np.expand_dims(surface_absorption,axis=1),repeats=n_channels,axis=1)
 
-    surface = [surface_albedo, surface_albedo, surface_absorption, surface_absorption]
+    surface = [surface_albedo, np.copy(surface_albedo), surface_absorption, np.copy(surface_absorption)]
 
     inputs = (mu, mu_bar, lwp, h2o, o3, co2, u, n2o, ch4, t_p, *surface, flux_down_above_direct, flux_down_above_diffuse, toa[:,:,0], rsd_direct, 
               rsd, rsu, absorbed_flux, delta_pressure)
