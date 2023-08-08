@@ -37,14 +37,20 @@ class DenseFFN(Layer):
         self.minval = minval
         self.maxval = maxval
 
-        self.hidden = [Dense(units=n, activation='elu',kernel_initializer=initializers.RandomUniform(minval=minval, maxval=maxval), bias_initializer=initializers.RandomNormal(mean=1.0, stddev=0.05)) for n in n_hidden]
+        self.hidden = [Dense(units=n, activation='relu',kernel_initializer=initializers.RandomUniform(minval=minval, maxval=maxval), bias_initializer=initializers.RandomNormal(mean=1.0, stddev=0.05)) for n in n_hidden]
+        
+        #self.batch_normalization = [tf.keras.layers.BatchNormalization(**kwargs) for _ in n_hidden]
+
+        self.dropout = [tf.keras.layers.Dropout(0.0, **kwargs) for _ in n_hidden]  #0.15, 0.075, 0.0375
         # Sigmoid insures that output is non-negative
         # Sigmoid with input of 0.0 gives output of 0.5
         self.out = Dense(units=n_outputs, activation='sigmoid',kernel_initializer=initializers.RandomUniform(minval=minval, maxval=maxval), bias_initializer=initializers.RandomNormal(mean=0.0, stddev=0.05)) 
 
-    def call(self, X):
-        for hidden in self.hidden:
+    def call(self, X, training=False):
+        for k, hidden in enumerate(self.hidden):
             X = hidden(X)
+            X = self.dropout[k](X,training=training)
+            #X = tf.nn.relu(self.batch_normalization[k](X, training=training))
         return self.out(X)
     
             
@@ -86,6 +92,11 @@ class OpticalDepth(Layer):
                         activation=tf.keras.activations.relu,   
                         name = 'net_h2o',                                  
                         kernel_initializer=initializers.RandomUniform(minval=0.38, maxval=0.62),use_bias=False)
+
+        self.net_h2o_sq = Dense(units=1, #self.n_channels,
+                        activation=tf.keras.activations.relu,   
+                        name = 'net_h2o_sq',                                  
+                        kernel_initializer=initializers.RandomUniform(minval=0.38, maxval=0.62),use_bias=False)
         """
         self.net_ke_h2o = Dense(units=self.n_channels, # 1,
                         #activation=tf.keras.activations.relu,
@@ -98,7 +109,9 @@ class OpticalDepth(Layer):
 
 
         #self.n_channels, 
-        self.net_ke_h2o = DenseFFN(n_hidden=(4,4), n_outputs=1, minval=-0.1, maxval=0.1, name='net_ke_h2o')
+        self.net_ke_h2o = DenseFFN(n_hidden=(6,4,4), n_outputs=1, minval=-0.1, maxval=0.1, name='net_ke_h2o')
+
+        self.net_ke_h2o_sq = DenseFFN(n_hidden=(6,4,4), n_outputs=1, minval=-0.1, maxval=0.1, name='net_ke_h2o_sq')
         
         self.net_o3 = Dense(units=self.n_o3,
                         activation=tf.keras.activations.relu,  
@@ -114,7 +127,7 @@ class OpticalDepth(Layer):
                         kernel_initializer='zeros', bias_initializer='zeros')
         """
 
-        self.net_ke_o3 = DenseFFN(n_hidden=(4,4), n_outputs=1, minval=-0.1, maxval=0.1, name='net_ke_o3')
+        self.net_ke_o3 = DenseFFN(n_hidden=(6,4,4), n_outputs=1, minval=-0.1, maxval=0.1, name='net_ke_o3')
 
         self.net_co2 = Dense(units=self.n_co2,
                         activation=tf.keras.activations.relu, 
@@ -131,7 +144,7 @@ class OpticalDepth(Layer):
                         kernel_initializer='zeros', bias_initializer='zeros')
         """
 
-        self.net_ke_co2 = DenseFFN(n_hidden=(4,4), n_outputs=1, minval=-0.1, maxval=0.1, name='net_ke_co2')
+        self.net_ke_co2 = DenseFFN(n_hidden=(6, 4,4), n_outputs=1, minval=-0.1, maxval=0.1, name='net_ke_co2')
 
         self.net_u = Dense(units=self.n_u,
                         activation=tf.keras.activations.relu,    
@@ -148,7 +161,7 @@ class OpticalDepth(Layer):
                         kernel_initializer='zeros', bias_initializer='zeros')
         """
 
-        self.net_ke_u = DenseFFN(n_hidden=(4,4), n_outputs=1, minval=-0.1, maxval=0.1, name='net_ke_u')
+        self.net_ke_u = DenseFFN(n_hidden=(6, 4,4), n_outputs=1, minval=-0.1, maxval=0.1, name='net_ke_u')
 
         self.net_n2o = Dense(units=self.n_n2o,
                         activation=tf.keras.activations.relu,       
@@ -165,7 +178,7 @@ class OpticalDepth(Layer):
                         kernel_initializer='zeros', bias_initializer='zeros')
         """
 
-        self.net_ke_n2o = DenseFFN(n_hidden=(4,4), n_outputs=1, minval=-0.1, maxval=0.1, name='net_ke_n2o')
+        self.net_ke_n2o = DenseFFN(n_hidden=(6, 4,4), n_outputs=1, minval=-0.1, maxval=0.1, name='net_ke_n2o')
 
         self.net_ch4 = Dense(units=self.n_ch4,
                         activation=tf.keras.activations.relu, 
@@ -182,35 +195,38 @@ class OpticalDepth(Layer):
                         kernel_initializer='zeros', bias_initializer='zeros')
         """
 
-        self.net_ke_ch4 = DenseFFN(n_hidden=(4,4), n_outputs=1, minval=-0.1, maxval=0.1, name='net_ke_ch4')
+        self.net_ke_ch4 = DenseFFN(n_hidden=(6, 4,4), n_outputs=1, minval=-0.1, maxval=0.1, name='net_ke_ch4')
 
 
-    def call(self, input):
+    def call(self, input, training=False):
 
-        lw, h2o, o3, co2, u, n2o, ch4, t_p = input
+        lw, h2o, o3, co2, u, n2o, ch4, h2o_sq, t_p = input
 
-        tau_lw = self.net_lw(lw[:,0:1])
-        tau_iw = self.net_iw(lw[:,1:2])
+        tau_lw = self.net_lw(lw[:,0:1], training=training)
+        tau_iw = self.net_iw(lw[:,1:2], training=training)
 
-        ke_h2o = self.net_ke_h2o(t_p) 
-        tau_h2o = ke_h2o * self.net_h2o(h2o)
+        ke_h2o = self.net_ke_h2o(t_p, training=training) 
+        tau_h2o = ke_h2o * self.net_h2o(h2o, training=training)
 
-        ke_o3 = self.net_ke_o3(t_p)
-        tau_o3 = ke_o3 * self.net_o3(o3)
+        ke_h2o_sq = self.net_ke_h2o_sq(t_p, training=training) 
+        tau_h2o_sq = ke_h2o_sq * self.net_h2o_sq(h2o_sq, training=training)
+
+        ke_o3 = self.net_ke_o3(t_p, training=training)
+        tau_o3 = ke_o3 * self.net_o3(o3, training=training)
         #self.n_o3 = 13 
         # amount of padding on each side
         paddings = tf.constant([[0,0],[0,self.n_channels - self.n_o3]])
         tau_o3 = tf.pad(tau_o3, paddings, "CONSTANT")
 
-        ke_co2 = self.net_ke_co2(t_p)
-        tau_co2 = ke_co2 * self.net_co2(co2) 
+        ke_co2 = self.net_ke_co2(t_p, training=training)
+        tau_co2 = ke_co2 * self.net_co2(co2, training=training) 
         #self.n_co2 = 9 
         #overlaps o3 by 3 and no-overlap for 6
         paddings = tf.constant([[0,0],[self.n_o3 - 3, self.n_channels - ((self.n_o3 - 3) + self.n_co2)]])
         tau_co2 = tf.pad(tau_co2, paddings, "CONSTANT")
 
-        ke_u = self.net_ke_u(t_p)
-        tau_u = ke_u * self.net_u(u) 
+        ke_u = self.net_ke_u(t_p, training=training)
+        tau_u = ke_u * self.net_u(u, training=training) 
         # self.n_u = 13
         # 5 channels
         # overlap with o3 only (2) and o3 + co2 (3)
@@ -221,15 +237,15 @@ class OpticalDepth(Layer):
         tau_u_2 = tf.pad(tau_u[:,5:], paddings_2, "CONSTANT")
         tau_u = tau_u_1 + tau_u_2
 
-        ke_n2o = self.net_ke_n2o(t_p)
-        tau_n2o = ke_n2o * self.net_n2o(n2o) 
+        ke_n2o = self.net_ke_n2o(t_p, training=training)
+        tau_n2o = ke_n2o * self.net_n2o(n2o, training=training) 
         #self.n_n2o = 3
         #overlaps everything by 3
         paddings = tf.constant([[0,0],[self.n_o3 - 3, self.n_channels - ((self.n_o3 - 3) + self.n_n2o)]])
         tau_n2o = tf.pad(tau_n2o, paddings, "CONSTANT")
 
-        ke_ch4 = self.net_ke_ch4(t_p)
-        tau_ch4 = ke_ch4 * self.net_ch4(ch4) 
+        ke_ch4 = self.net_ke_ch4(t_p, training=training)
+        tau_ch4 = ke_ch4 * self.net_ch4(ch4, training=training) 
         #self.n_ch4 = 9
         #overlaps everything by 3
         paddings_a = tf.constant([[0,0],[self.n_o3 - 3, self.n_channels - ((self.n_o3 - 3) + 3)]])
@@ -244,7 +260,7 @@ class OpticalDepth(Layer):
         tau_ch4_3 = tf.pad(tau_ch4[:,7:], paddings_c, "CONSTANT")
         tau_ch4 = tau_ch4_1 + tau_ch4_2 + tau_ch4_3
 
-        tau_gases = tau_h2o + tau_o3 + tau_co2 + tau_u + tau_n2o + tau_ch4
+        tau_gases = tau_h2o + tau_o3 + tau_co2 + tau_u + tau_n2o + tau_ch4 + tau_h2o_sq
         tau_gases = tf.expand_dims(tau_gases, axis=2)
         tau_lw = tf.expand_dims(tau_lw, axis=2)
         tau_iw = tf.expand_dims(tau_iw, axis=2)
@@ -272,7 +288,7 @@ class LayerPropertiesDirect(Layer):
     def __init__(self, **kargs):
         super().__init__(**kargs)
 
-    def call(self, input):
+    def call(self, input, **kargs):
 
         tau, mu = input
 
@@ -326,7 +342,7 @@ class LayerProperties(Layer):
         self.output_net_diffuse = Dense(units=3, 
                                 activation=tf.keras.activations.softmax,kernel_initializer=tf.keras.initializers.glorot_uniform())
 
-    def call(self, input):
+    def call(self, input, **kargs):
 
         # tau.shape = (n, 29, n_constituents)
         tau, mu, mu_bar = input
@@ -340,13 +356,13 @@ class LayerProperties(Layer):
         x_diffuse = self.input_net_diffuse(tau / mu_bar)
 
         for net in self.hidden_net_direct:
-            x_direct = net(x_direct)
+            x_direct = net(x_direct, **kargs)
 
         for net in self.hidden_net_diffuse:
-            x_diffuse = net(x_diffuse)
+            x_diffuse = net(x_diffuse, **kargs)
 
-        e_split_direct = self.output_net_direct(x_direct)
-        e_split_diffuse = self.output_net_diffuse(x_diffuse)
+        e_split_direct = self.output_net_direct(x_direct, **kargs)
+        e_split_diffuse = self.output_net_diffuse(x_diffuse, **kargs)
 
         #print(f'Shape of e_split_diffuse = {e_split_diffuse.shape}')
         #print(" ")
@@ -907,8 +923,9 @@ class OriginalLoss(tf.keras.losses.Loss):
         return cls(**config)
     
 def modify_weights_1(model):
-    factor_1 = 0.9  # decrease in original positive weights #0.92, 1.1, 0.86; 0.9, 1.1
+    factor_1 = 0.85  # decrease in original positive weights #0.92, 1.1, 0.86; 0.9, 1.1
     factor_2 = 0.3  # Initial fraction of possible weight for negative weights #0.1, 0.2, 0.35; 0.3, 0.2
+    ke_index_list = [0, 1, 2, 11, 20, 29, 38, 47]
     for layer in model.layers:
         if layer.name == 'optical_depth':
             layer_weights = layer.get_weights()
@@ -917,8 +934,7 @@ def modify_weights_1(model):
                 positive_weights = [x for x in np.nditer(weights) if x > 0.0]
                 n_positive = len(positive_weights)
                 n_negative = weights.size - n_positive
-                if n_negative == 0 or k == 3 or k == 4 or k == 5 or k == 6 or k == 7 or k == 8 or k == 10 or k == 11 \
-                    or k == 13 or k == 14 or k == 16 or k == 17 or k == 19 or k == 20 or k > 21:
+                if n_negative == 0 or k not in ke_index_list:
                     new_weights.append(weights)
                 elif n_positive == 0:
                     new_weights.append(np.full(shape=weights.shape, fill_value=2.0e-02))
@@ -958,7 +974,7 @@ def train():
     batch_size  = 2048
     epochs      = 100000
     n_epochs    = 0
-    epochs_period = 10
+    epochs_period = 100
     patience    = 1000 #25
 
     datadir     = "/home/hws/tmp/"
@@ -968,7 +984,7 @@ def train():
     log_dir = datadir + "/logs/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     filename_direct_model = datadir + "/Direct_Model-"
     filename_full_model = datadir + "/Full_Model-"
-    model_name = "2."
+    model_name = "2.h2o_sq." #"2.Dropout."
 
     # Computing optical depth for each layer
 
@@ -987,7 +1003,9 @@ def train():
 
     ch4 = Input(shape=(n_layers, 1), batch_size=batch_size, name="ch4_input") 
 
-    tau = TimeDistributed(OpticalDepth(n_channels), name="optical_depth")([lw, h2o, o3, co2, u, n2o, ch4, t_p])
+    h2o_sq = Input(shape=(n_layers, 1), batch_size=batch_size, name="h2o_sq_input") 
+
+    tau = TimeDistributed(OpticalDepth(n_channels), name="optical_depth")([lw, h2o, o3, co2, u, n2o, ch4, h2o_sq, t_p])
 
     # If only running direct transmission model, compute direct transmission 
     # coefficient for each layer
@@ -1001,10 +1019,13 @@ def train():
     total_flux_down_above_direct = Input(shape=(1), batch_size=batch_size, name="flux_down_above_direct_input")
 
     flux_down_above_direct = Dense(units=n_channels,
-                                   activation='softmax', 
+                                   activation=None, #'softmax', 
                                    use_bias=False,
                                    #kernel_initializer=initializers.RandomUniform(minval=0.1, maxval=1.0),
                                     kernel_initializer=initializers.RandomUniform(minval=0.4, maxval=0.6),name='flux_down_above_direct')(total_flux_down_above_direct)
+    
+    flux_down_above_direct = tf.keras.layers.Dropout(0.0)(flux_down_above_direct) # 0.15, 0.075, # 0.0375
+    flux_down_above_direct = tf.nn.softmax(flux_down_above_direct)
 
     flux_down_above_direct = tf.expand_dims(flux_down_above_direct, axis=2) # Need to add additional dimension since each channel is independent.
 
@@ -1021,15 +1042,15 @@ def train():
 
     weight_profile_direct = 1.0 / tf.reduce_mean(target_flux_down_direct, axis=0, keepdims=True)
 
-    if False:
-        direct_model = Model(inputs=[mu, lw, h2o, o3, co2, u, n2o, ch4, t_p, total_flux_down_above_direct, toa, target_flux_down_direct, delta_pressure], 
+    if True:
+        direct_model = Model(inputs=[mu, lw, h2o, o3, co2, u, n2o, ch4, h2o_sq, t_p, total_flux_down_above_direct, toa, target_flux_down_direct, delta_pressure], 
         outputs=[flux_down_direct])
 
         direct_model.add_metric(heating_rate_loss_direct(target_flux_down_direct, flux_down_direct, toa, delta_pressure),name="hr")
 
         direct_model.add_metric(flux_rmse(target_flux_down_direct, flux_down_direct, toa),name="flux_rmse")
         
-        direct_model.add_loss(ukkonen_loss_direct(target_flux_down_direct, flux_down_direct, weight_profile_direct,toa, delta_pressure))
+        direct_model.add_loss(ukkonen_loss_direct(target_flux_down_direct, flux_down_direct, weight_profile_direct,toa, delta_pressure)) #,name="ukk_loss")
 
         direct_model.compile(
             optimizer=optimizers.Adam(),
@@ -1038,8 +1059,8 @@ def train():
         )
         direct_model.summary()
 
-    if False:
-        n_epochs = 75
+    if True:
+        n_epochs = 900
         direct_model.load_weights((filename_direct_model + model_name + str(n_epochs)))
         for layer in direct_model.layers:
             if layer.name == 'flux_down_above_direct':
@@ -1049,11 +1070,11 @@ def train():
                 for k, weights in enumerate(layer.weights):
                     print(f'Weights {k}: {weights}')
 
-        #model = modify_weights_1(model)
+        #model = modify_weights_1(direct_model)
         #writer = tf.summary.create_file_writer(log_dir)
         #tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=log_dir, histogram_freq=1, write_images=False, profile_batch=(2, 4))
 
-    if False:
+    if True:
         training_inputs, training_outputs = load_data_direct(filename_training, n_channels)
         validation_inputs, validation_outputs = load_data_direct(filename_validation, n_channels)
         while n_epochs < epochs:
@@ -1080,270 +1101,279 @@ def train():
     # Connect graph for full model
 
     # Learn coefficient for diffuse mu (effective cosine of zenith angle)
+    if False:
+        mu_bar_input = Input(shape=(1), batch_size=batch_size, name="mu_bar_input") 
+        mu_bar = Dense(units=1,kernel_initializer='zeros', use_bias=False, activation="sigmoid",name="mu_bar")(mu_bar_input)
+        mu_bar = tf.repeat(tf.expand_dims(mu_bar,axis=1),repeats=n_layers,axis=1)
 
-    mu_bar_input = Input(shape=(1), batch_size=batch_size, name="mu_bar_input") 
-    mu_bar = Dense(units=1,kernel_initializer='zeros', use_bias=False, activation="sigmoid",name="mu_bar")(mu_bar_input)
-    mu_bar = tf.repeat(tf.expand_dims(mu_bar,axis=1),repeats=n_layers,axis=1)
+        # Compute properties of each layer:
+        #   Direct and diffuse transmission coefficients
+        #   Split of extinguished radiation into transmitted, 
+        #         reflected, absorbed components
 
-    # Compute properties of each layer:
-    #   Direct and diffuse transmission coefficients
-    #   Split of extinguished radiation into transmitted, 
-    #         reflected, absorbed components
+        layer_properties = TimeDistributed(LayerProperties(), name="layer_properties")([tau, mu, mu_bar])
 
-    layer_properties = TimeDistributed(LayerProperties(), name="layer_properties")([tau, mu, mu_bar])
+        # Compute multireflection among layers. For each layer, resolve into
+        # absorption (a) and reflection (r) where these describe 
+        # the cumulative effect for downward radiation on the current layer 
+        # and all the layers beneath it including the surface
+        # Note: computes two sets of coefficients corresponding
+        # to direct and diffuse radiation
 
-    # Compute multireflection among layers. For each layer, resolve into
-    # absorption (a) and reflection (r) where these describe 
-    # the cumulative effect for downward radiation on the current layer 
-    # and all the layers beneath it including the surface
-    # Note: computes two sets of coefficients corresponding
-    # to direct and diffuse radiation
+        surface_albedo_direct = Input(shape=(n_channels, 1), batch_size=batch_size, name="surface_albedo_direct_input")
 
-    surface_albedo_direct = Input(shape=(n_channels, 1), batch_size=batch_size, name="surface_albedo_direct_input")
+        surface_albedo_diffuse = Input(shape=(n_channels, 1), batch_size=batch_size, name="surface_albedo_diffuse_input")
 
-    surface_albedo_diffuse = Input(shape=(n_channels, 1), batch_size=batch_size, name="surface_albedo_diffuse_input")
+        surface_absorption_direct = Input(shape=(n_channels, 1), batch_size=batch_size, name="surface_absorption_direct_input")
 
-    surface_absorption_direct = Input(shape=(n_channels, 1), batch_size=batch_size, name="surface_absorption_direct_input")
+        surface_absorption_diffuse = Input(shape=(n_channels, 1), batch_size=batch_size, name="surface_absorption_diffuse_input")
 
-    surface_absorption_diffuse = Input(shape=(n_channels, 1), batch_size=batch_size, name="surface_absorption_diffuse_input")
-
-    initial_state=tf.concat([surface_albedo_direct, surface_albedo_diffuse,
-                   surface_absorption_direct, surface_absorption_diffuse], axis=2)
-    
-    initial_state = tf.reshape(initial_state,(-1, n_channels * 4))
-
-    #t_direct_1 = tf.identity(layer_properties[:,0,0:3,0:1])
-
-    multireflection_layer_parameters, upward_state = RNN(UpwardPropagationCell(n_channels), return_sequences=True, return_state=True, go_backwards=True, time_major=False)(inputs=layer_properties, initial_state = initial_state)
-
-    #t_direct_2 = tf.identity(layer_properties[:,0,0:3,0:1])
-
-    upward_state = tf.reshape(upward_state,(-1,n_channels,4))
-    r_multi_direct = upward_state[:,:,0:1]  # reflection at top of atmosphere
-
-    # Downward propagation of full model including direct and diffuse flux
-    flux_down_above_diffuse = Input(shape=(n_channels, 1), batch_size=batch_size, name="flux_down_above_diffuse_input") # initialized to zero
-
-    flux_up_above_diffuse = tf.multiply(flux_down_above_direct,r_multi_direct)
-
-    initial_state_down=tf.concat([flux_down_above_direct, flux_down_above_diffuse], axis=2)
-
-    initial_state_down=tf.reshape(initial_state_down,(-1,n_channels*2))
-
-    multireflection_layer_parameters = tf.reverse(multireflection_layer_parameters, axis=[1])
-
-    """
-    multireflection_layer_parameters = tf.concat([tf.reverse(layer_properties[:,:,:,0:1], axis=[1]), tf.reverse(layer_properties[:,:,:,1:2], axis=[1]),tmp_tensor],axis=3)
-    """
-    # Downward propagation for flux
-    # Computes transmitted and reflected flux and absorbed flux at each layer
-    output = RNN(DownwardPropagationCell(n_channels), return_sequences=True, return_state=False, go_backwards=False, time_major=False)(inputs=multireflection_layer_parameters, initial_state=initial_state_down)
-
-    #print(f"downward output shape = {output.shape}")
-
-    flux_down_below_direct, flux_down_below_diffuse, \
-    flux_up_below_diffuse, absorbed_flux_top = output[:,:,:,0:1],output[:,:,:,1:2],output[:,:,:,2:3],output[:,:,:,3:4]
-
-    flux_inputs = (flux_down_above_direct, flux_down_above_diffuse,
-        flux_down_below_direct, flux_down_below_diffuse, 
-        flux_up_above_diffuse, flux_up_below_diffuse,
-        absorbed_flux_top)
-
-    #model_error = VerificationLayer()([flux_down_above_direct, layer_properties[:,:,:,0:1], flux_down_below_direct])
-
-    ##print(f"model error = {model_error}")
+        initial_state=tf.concat([surface_albedo_direct, surface_albedo_diffuse,
+                    surface_absorption_direct, surface_absorption_diffuse], axis=2)
         
-    flux_down_direct, flux_down, flux_up, absorbed_flux = ConsolidateFlux()(flux_inputs)
+        initial_state = tf.reshape(initial_state,(-1, n_channels * 4))
+
+        #t_direct_1 = tf.identity(layer_properties[:,0,0:3,0:1])
+
+        multireflection_layer_parameters, upward_state = RNN(UpwardPropagationCell(n_channels), return_sequences=True, return_state=True, go_backwards=True, time_major=False)(inputs=layer_properties, initial_state = initial_state)
+
+        #t_direct_2 = tf.identity(layer_properties[:,0,0:3,0:1])
+
+        upward_state = tf.reshape(upward_state,(-1,n_channels,4))
+        r_multi_direct = upward_state[:,:,0:1]  # reflection at top of atmosphere
+
+        # Downward propagation of full model including direct and diffuse flux
+        flux_down_above_diffuse = Input(shape=(n_channels, 1), batch_size=batch_size, name="flux_down_above_diffuse_input") # initialized to zero
+
+        flux_up_above_diffuse = tf.multiply(flux_down_above_direct,r_multi_direct)
+
+        initial_state_down=tf.concat([flux_down_above_direct, flux_down_above_diffuse], axis=2)
+
+        initial_state_down=tf.reshape(initial_state_down,(-1,n_channels*2))
+
+        multireflection_layer_parameters = tf.reverse(multireflection_layer_parameters, axis=[1])
+
+        """
+        multireflection_layer_parameters = tf.concat([tf.reverse(layer_properties[:,:,:,0:1], axis=[1]), tf.reverse(layer_properties[:,:,:,1:2], axis=[1]),tmp_tensor],axis=3)
+        """
+        # Downward propagation for flux
+        # Computes transmitted and reflected flux and absorbed flux at each layer
+        output = RNN(DownwardPropagationCell(n_channels), return_sequences=True, return_state=False, go_backwards=False, time_major=False)(inputs=multireflection_layer_parameters, initial_state=initial_state_down)
+
+        #print(f"downward output shape = {output.shape}")
+
+        flux_down_below_direct, flux_down_below_diffuse, \
+        flux_up_below_diffuse, absorbed_flux_top = output[:,:,:,0:1],output[:,:,:,1:2],output[:,:,:,2:3],output[:,:,:,3:4]
+
+        flux_inputs = (flux_down_above_direct, flux_down_above_diffuse,
+            flux_down_below_direct, flux_down_below_diffuse, 
+            flux_up_above_diffuse, flux_up_below_diffuse,
+            absorbed_flux_top)
+
+        #model_error = VerificationLayer()([flux_down_above_direct, layer_properties[:,:,:,0:1], flux_down_below_direct])
+
+        ##print(f"model error = {model_error}")
+            
+        flux_down_direct, flux_down, flux_up, absorbed_flux = ConsolidateFlux()(flux_inputs)
 
 
-    # This is just to force the VerificationLayer to run
-    #heating_rate = heating_rate + tf.expand_dims(model_error, axis=1)
+        # This is just to force the VerificationLayer to run
+        #heating_rate = heating_rate + tf.expand_dims(model_error, axis=1)
 
-    target_flux_down = Input(shape=(n_levels), batch_size=batch_size, name="target_flux_down_input")
+        target_flux_down = Input(shape=(n_levels), batch_size=batch_size, name="target_flux_down_input")
 
-    target_flux_up = Input(shape=(n_levels), batch_size=batch_size, name="target_flux_up_input")
-    
-    target_absorbed_flux = Input(shape=(n_layers), batch_size=batch_size, name="target_absorbed_flux_input")
+        target_flux_up = Input(shape=(n_levels), batch_size=batch_size, name="target_flux_up_input")
+        
+        target_absorbed_flux = Input(shape=(n_layers), batch_size=batch_size, name="target_absorbed_flux_input")
 
-    full_model = Model(inputs=[mu, mu_bar_input, lw, h2o, o3, co2, u, n2o, ch4, t_p, 
-                               surface_albedo_direct, surface_albedo_diffuse,
-                               surface_absorption_direct, surface_absorption_diffuse,
-                               total_flux_down_above_direct,
-                                flux_down_above_diffuse, toa, target_flux_down_direct,
-                                target_flux_down,
-                                target_flux_up,
-                                 target_absorbed_flux, delta_pressure], 
-    outputs=[flux_down_direct, flux_down, flux_up, absorbed_flux])
-
-
-    full_model.add_metric(heating_rate_loss(target_absorbed_flux, absorbed_flux, toa, delta_pressure),name="hr")
-
-    full_model.add_metric(heating_rate_loss_direct(target_flux_down_direct, flux_down_direct, toa, delta_pressure),name="hr_direct")
-
-    predicted_flux = tf.concat([flux_down, flux_up], axis=-1)
-    target_flux  = tf.concat([target_flux_down, target_flux_up], axis=-1)
-
-    weight_profile_full = 1.0 / tf.reduce_mean(target_flux, axis=0, keepdims=True)
-
-    full_model.add_metric(flux_rmse(target_flux, predicted_flux, toa),name="flux_rmse")
-    
-    #full_model.add_loss(ukkonen_loss(target_flux, predicted_flux, target_absorbed_flux, absorbed_flux, weight_profile_full, toa, delta_pressure))
-
-    full_model.add_loss(henry_loss(target_flux, predicted_flux, target_flux_down_direct, flux_down_direct, target_absorbed_flux, absorbed_flux, weight_profile_full, toa, delta_pressure))
-
-    full_model.compile(
-        #optimizer=optimizers.Adam(learning_rate=0.1),
-        optimizer=optimizers.Adam(),
-        #loss={flux_down_direct_name: 'mse',flux_down_name:'mse', flux_up_name:'mse', heating_rate_name: 'mse'},
-        #loss=['mse', 'mse', 'mse', 'mse'],
-        #loss=[OriginalLoss(toa), OriginalLoss(toa), OriginalLoss(toa), OriginalLoss(toa)],
-        #loss=[OriginalLoss(1400.0),],  ****
-
-        #loss={flux_down.name:'mse', flux_up.name : 'mse', heating_rate.name: 'mse'},
-        #loss_weights={flux_down_direct_name: 0.1,flux_down_name:0.5, flux_up_name:0.5, heating_rate_name: 0.2},
-        #loss_weights= [0.1,0.5,0.5,0.2],
-        #loss_weights= [0.1,0.5,0.5,0.8], #TEMP.
-        loss_weights= [1.0], #TEMP.4.
-        #loss_weights={flux_down.name:0.5, flux_up.name: 0.5, heating_rate.name: 1.0e-4},
-        #experimental_run_tf_function=False,
-        #metrics={flux_down_direct_name: ['mse'],flux_down_name:['mse'], flux_up_name:['mse'], heating_rate_name: ['mse']},
-        #metrics=[['mse'],['mse'],['mse'],['mse']],
-        #metrics=[[OriginalLoss(toa)],[OriginalLoss(toa)],[OriginalLoss(toa)],[OriginalLoss(toa)]],
-        #metrics=[[AvgWeightLoss(weight_profile)]],  **
-        #metrics=[[OriginalLoss(1400)]],
-    #{flux_down.name:'mse', flux_up.name : 'mse', heating_rate.name: 'mse'},
-    )
-    full_model.summary()
-
-    print(f"full_model.metrics_names = {full_model.metrics_names}")
-
-    
-    #output = model(inputs=validation_inputs)
-
-    #print(f"len of output = {len(output)}")
+        full_model = Model(inputs=[mu, mu_bar_input, lw, h2o, o3, co2, u, n2o, ch4, h2o_sq,t_p, 
+                                surface_albedo_direct, surface_albedo_diffuse,
+                                surface_absorption_direct, surface_absorption_diffuse,
+                                total_flux_down_above_direct,
+                                    flux_down_above_diffuse, toa, target_flux_down_direct,
+                                    target_flux_down,
+                                    target_flux_up,
+                                    target_absorbed_flux, delta_pressure], 
+        outputs=[flux_down_direct, flux_down, flux_up, absorbed_flux])
 
 
-    if False:
-        n_epochs_full = 100
-        n_epochs = n_epochs_full
-        full_model.load_weights((filename_full_model + model_name + str(n_epochs_full)))
+        full_model.add_metric(heating_rate_loss(target_absorbed_flux, absorbed_flux, toa, delta_pressure),name="hr")
 
+        full_model.add_metric(heating_rate_loss_direct(target_flux_down_direct, flux_down_direct, toa, delta_pressure),name="hr_direct")
 
-        full_model = modify_weights_1(full_model)
+        predicted_flux = tf.concat([flux_down, flux_up], axis=-1)
+        target_flux  = tf.concat([target_flux_down, target_flux_up], axis=-1)
 
-        for layer in full_model.layers:
-            if layer.name == 'flux_down_above_direct':
-                print(f'flux_down_above_direct.weights = {layer.weights}')
-            if layer.name == 'optical_depth':
-                print("Optical Depth layers")
-                for k, weights in enumerate(layer.weights):
-                    print(f'Weights {k}: {weights}')
-            if layer.name == 'mu_bar':
-                print(f"mu bar.weights = {layer.weights}")
-                for k, weights in enumerate(layer.weights):
-                    print(f'Weights {k}: {weights}')
+        weight_profile_full = 1.0 / tf.reduce_mean(target_flux, axis=0, keepdims=True)
 
-    if False:
-        n_epochs_full = 7
-        n_epochs = n_epochs_full
-        n_epochs_direct = 75
-        full_model.load_weights((filename_full_model + model_name + str(n_epochs_full)))
+        full_model.add_metric(flux_rmse(target_flux, predicted_flux, toa),name="flux_rmse")
+        
+        #full_model.add_loss(ukkonen_loss(target_flux, predicted_flux, target_absorbed_flux, absorbed_flux, weight_profile_full, toa, delta_pressure))
 
-        direct_model.load_weights((filename_direct_model + model_name + str(n_epochs_direct)))
+        full_model.add_loss(henry_loss(target_flux, predicted_flux, target_flux_down_direct, flux_down_direct, target_absorbed_flux, absorbed_flux, weight_profile_full, toa, delta_pressure))
 
-        for layer in full_model.layers:
-            if layer.name == 'flux_down_above_direct':
-                for direct_layer in direct_model.layers:
-                    if direct_layer.name == layer.name:
-                        layer.set_weights(direct_layer.get_weights())
-                        layer.trainable = False
-
-            if layer.name == 'optical_depth':
-                for direct_layer in direct_model.layers:
-                    if direct_layer.name == layer.name:
-                        layer.set_weights(direct_layer.get_weights())
-                        layer.trainable = False
-
-        for layer in full_model.layers:
-            if layer.name == 'flux_down_above_direct':
-                print(f'flux_down_above_direct.weights = {layer.weights}')
-            if layer.name == 'optical_depth':
-                print("Optical Depth layers")
-                for k, weights in enumerate(layer.weights):
-                    print(f'Weights {k}: {weights}')
-        # Need to call compile 2nd time for change to 'trainable' to take effect
         full_model.compile(
+            #optimizer=optimizers.Adam(learning_rate=0.1),
             optimizer=optimizers.Adam(),
-            loss_weights= [1.0],
-        )
+            #loss={flux_down_direct_name: 'mse',flux_down_name:'mse', flux_up_name:'mse', heating_rate_name: 'mse'},
+            #loss=['mse', 'mse', 'mse', 'mse'],
+            #loss=[OriginalLoss(toa), OriginalLoss(toa), OriginalLoss(toa), OriginalLoss(toa)],
+            #loss=[OriginalLoss(1400.0),],  ****
 
+            #loss={flux_down.name:'mse', flux_up.name : 'mse', heating_rate.name: 'mse'},
+            #loss_weights={flux_down_direct_name: 0.1,flux_down_name:0.5, flux_up_name:0.5, heating_rate_name: 0.2},
+            #loss_weights= [0.1,0.5,0.5,0.2],
+            #loss_weights= [0.1,0.5,0.5,0.8], #TEMP.
+            loss_weights= [1.0], #TEMP.4.
+            #loss_weights={flux_down.name:0.5, flux_up.name: 0.5, heating_rate.name: 1.0e-4},
+            #experimental_run_tf_function=False,
+            #metrics={flux_down_direct_name: ['mse'],flux_down_name:['mse'], flux_up_name:['mse'], heating_rate_name: ['mse']},
+            #metrics=[['mse'],['mse'],['mse'],['mse']],
+            #metrics=[[OriginalLoss(toa)],[OriginalLoss(toa)],[OriginalLoss(toa)],[OriginalLoss(toa)]],
+            #metrics=[[AvgWeightLoss(weight_profile)]],  **
+            #metrics=[[OriginalLoss(1400)]],
+        #{flux_down.name:'mse', flux_up.name : 'mse', heating_rate.name: 'mse'},
+        )
         full_model.summary()
 
+        print(f"full_model.metrics_names = {full_model.metrics_names}")
 
-    if True:
-        n_epochs = 172
-        full_model.load_weights((filename_full_model + model_name + str(n_epochs)))
-        for layer in full_model.layers:
-            if layer.name == 'flux_down_above_direct':
-                print(f'flux_down_above_direct.weights = {layer.weights}')
-            if layer.name == 'optical_depth':
-                print("Optical Depth layers")
-                for k, weights in enumerate(layer.weights):
-                    print(f'Weights {k}: {weights}')
+        
+        #output = model(inputs=validation_inputs)
 
-        #full_model = modify_weights_1(full_model)
-        writer = tf.summary.create_file_writer(log_dir)
-        tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=log_dir, histogram_freq=1, write_images=False) # profile_batch=('2,4'))
+        #print(f"len of output = {len(output)}")
 
-    if True:
-        training_inputs, training_outputs = load_data_full(filename_training, n_channels)
-        validation_inputs, validation_outputs = load_data_full(filename_validation, n_channels)
-        while n_epochs < epochs:
-            history = full_model.fit(x=training_inputs, y=training_outputs,
-                    epochs = epochs_period, batch_size=batch_size,
-                    shuffle=True, verbose=1,
-                    validation_data=(validation_inputs, validation_outputs),
-                    callbacks = [tensorboard_callback])
-                    
-            #,callbacks = [EarlyStopping(monitor='heating_rate',  patience=patience, verbose=1, \
-            #                  mode='min',restore_best_weights=True),])
-            
-            print (" ")
 
-            print (" ")
-            n_epochs = n_epochs + epochs_period
+        if False:
+            n_epochs_full = 100
+            n_epochs = n_epochs_full
+            full_model.load_weights((filename_full_model + model_name + str(n_epochs_full)))
+
+
+            full_model = modify_weights_1(full_model)
 
             for layer in full_model.layers:
                 if layer.name == 'flux_down_above_direct':
                     print(f'flux_down_above_direct.weights = {layer.weights}')
                 if layer.name == 'optical_depth':
-                    if False:
-                        print(f'optical_depth.weights = {layer.weights[0]}')
-                        if n_epochs > epochs_period: #170: #epochs_period:
-                            print(f'diff = {tf.convert_to_tensor(last_weights) - tf.convert_to_tensor(layer.weights[0])}')
-                        last_weights = tf.identity(layer.weights[0])
-                        print("")
-                    print("")
+                    print("Optical Depth layers")
+                    for k, weights in enumerate(layer.weights):
+                        print(f'Weights {k}: {weights}')
+                if layer.name == 'mu_bar':
+                    print(f"mu bar.weights = {layer.weights}")
                     for k, weights in enumerate(layer.weights):
                         print(f'Weights {k}: {weights}')
 
+        if False:
+            n_epochs_full = 7
+            n_epochs = n_epochs_full
+            n_epochs_direct = 75
+            full_model.load_weights((filename_full_model + model_name + str(n_epochs_full)))
 
-            print(f"Writing model weights {n_epochs}")
-            full_model.save_weights(filename_full_model + model_name + str(n_epochs)) #, save_traces=True)
-            #model = modify_weights_1(model)
-            #del model
+            direct_model.load_weights((filename_direct_model + model_name + str(n_epochs_direct)))
 
-            #model.load_weights((filename_full_model + 'TEMP.4.' + str(n_epochs))) 
+            for layer in full_model.layers:
+                if layer.name == 'flux_down_above_direct':
+                    for direct_layer in direct_model.layers:
+                        if direct_layer.name == layer.name:
+                            layer.set_weights(direct_layer.get_weights())
+                            layer.trainable = False
+
+                if layer.name == 'optical_depth':
+                    for direct_layer in direct_model.layers:
+                        if direct_layer.name == layer.name:
+                            layer.set_weights(direct_layer.get_weights())
+                            layer.trainable = False
+
+            for layer in full_model.layers:
+                if layer.name == 'flux_down_above_direct':
+                    print(f'flux_down_above_direct.weights = {layer.weights}')
+                if layer.name == 'optical_depth':
+                    print("Optical Depth layers")
+                    for k, weights in enumerate(layer.weights):
+                        print(f'Weights {k}: {weights}')
+            # Need to call compile 2nd time for change to 'trainable' to take effect
+            full_model.compile(
+                optimizer=optimizers.Adam(),
+                loss_weights= [1.0],
+            )
+
+            full_model.summary()
 
 
-            
-    """ model = tf.keras.models.load_model(filename_full_model + 'TEMP.' + str(n_epochs),
-                                            custom_objects={'OpticalDepth': OpticalDepth,
-                                                            'LayerProperties': LayerProperties,
-                                                            'UpwardPropagationCell' : UpwardPropagationCell,
-                                                            'DownwardPropagationCell' : DownwardPropagationCell,
-                                                            'DenseFFN' : DenseFFN,
-                                                            }) """
+        if True:
+            n_epochs = 272
+            full_model.load_weights((filename_full_model + model_name + str(n_epochs)))
+            for layer in full_model.layers:
+                if layer.name == 'flux_down_above_direct':
+                    print(f'flux_down_above_direct.weights = {layer.weights}')
+                if layer.name == 'optical_depth':
+                    print("Optical Depth layers")
+                    for k, weights in enumerate(layer.weights):
+                        print(f'Weights {k}: {weights}')
+
+            full_model = modify_weights_1(full_model)
+
+            for layer in full_model.layers:
+                if layer.name == 'flux_down_above_direct':
+                    print(f'flux_down_above_direct.weights = {layer.weights}')
+                if layer.name == 'optical_depth':
+                    print("Optical Depth layers")
+                    for k, weights in enumerate(layer.weights):
+                        print(f'Weights {k}: {weights}')
+
+            #writer = tf.summary.create_file_writer(log_dir)
+            #tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=log_dir, histogram_freq=1, write_images=False) # profile_batch=('2,4'))
+
+        if True:
+            training_inputs, training_outputs = load_data_full(filename_training, n_channels)
+            validation_inputs, validation_outputs = load_data_full(filename_validation, n_channels)
+            while n_epochs < epochs:
+                history = full_model.fit(x=training_inputs, y=training_outputs,
+                        epochs = epochs_period, batch_size=batch_size,
+                        shuffle=True, verbose=1,
+                        validation_data=(validation_inputs, validation_outputs))
+                        #callbacks = [tensorboard_callback])
+                        
+                #,callbacks = [EarlyStopping(monitor='heating_rate',  patience=patience, verbose=1, \
+                #                  mode='min',restore_best_weights=True),])
+                
+                print (" ")
+
+                print (" ")
+                n_epochs = n_epochs + epochs_period
+
+                for layer in full_model.layers:
+                    if layer.name == 'flux_down_above_direct':
+                        print(f'flux_down_above_direct.weights = {layer.weights}')
+                    if layer.name == 'optical_depth':
+                        if False:
+                            print(f'optical_depth.weights = {layer.weights[0]}')
+                            if n_epochs > epochs_period: #170: #epochs_period:
+                                print(f'diff = {tf.convert_to_tensor(last_weights) - tf.convert_to_tensor(layer.weights[0])}')
+                            last_weights = tf.identity(layer.weights[0])
+                            print("")
+                        print("")
+                        for k, weights in enumerate(layer.weights):
+                            print(f'Weights {k}: {weights}')
+
+
+                print(f"Writing model weights {n_epochs}")
+                full_model.save_weights(filename_full_model + model_name + str(n_epochs)) #, save_traces=True)
+                #model = modify_weights_1(model)
+                #del model
+
+                #model.load_weights((filename_full_model + 'TEMP.4.' + str(n_epochs))) 
+
+
+                
+        """ model = tf.keras.models.load_model(filename_full_model + 'TEMP.' + str(n_epochs),
+                                                custom_objects={'OpticalDepth': OpticalDepth,
+                                                                'LayerProperties': LayerProperties,
+                                                                'UpwardPropagationCell' : UpwardPropagationCell,
+                                                                'DownwardPropagationCell' : DownwardPropagationCell,
+                                                                'DenseFFN' : DenseFFN,
+                                                                }) """
 
 if __name__ == "__main__":
     train()
