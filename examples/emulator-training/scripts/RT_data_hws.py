@@ -11,9 +11,9 @@ g = 9.80665
 def absorbed_flux_to_heating_rate(absorbed_flux, delta_pressure):
 
     # Note cp varies with temp and pressure: https://www.ohio.edu/mechanical/thermo/property_tables/air/air_Cp_Cv.html#:~:text=The%20nominal%20values%20used%20for,v%20%3D%200.718%20kJ%2Fkg.
-    cp = 1004 # J K-1  kg-1 
+    cp = 1004.0 # J K-1  kg-1 
     flux_div_delta_pressure = absorbed_flux / delta_pressure
-    return -(g/cp) * 24 * 3600 * flux_div_delta_pressure
+    return -(g/cp) * 24.0 * 3600.0 * flux_div_delta_pressure
 
 def load_data(file_name, n_channels):
     data = xr.open_dataset(file_name)
@@ -166,14 +166,46 @@ def load_data_full(file_name, n_channels):
 
     t_p = (t_p - t_p_mean)/ (t_p_max - t_p_min)
 
-    h2o = composition[:,:,2:3].data / np.array([7.9141545e+02],dtype=np.float32)    # 7.9141545e+00
+    pressure = data.variables['pres_level'][:,:,:].data 
+    pressure = np.reshape(pressure,(n_samples,n_levels))
+
+    delta_pressure = pressure[:,1:] - pressure[:,:-1]
+    delta_pressure_2 = np.reshape(np.copy(delta_pressure),(n_samples,n_layers, 1))
+
+    # Deriving mass coordinate from pressure difference: mass per area
+    # kg / m^2:
+
+    vmr_h2o = np.copy(composition[:,:,2])
+    m_dry = 28.964
+    m_h2o =  18.016
+
+    # assumes gases are given in MOLE FRACTIONS wrt to total air (dry + water vapor)
+    # There will be more total moles if water vapor is present since
+    # water weights less than air
+    correction_factor_mf = m_dry / (((1.0 - vmr_h2o) * m_dry) + m_h2o * vmr_h2o)
+
+    # Alternatively:
+    # assume gases are given as VOLUMENTRIC MIXING RATIOS, ie. in terms of moles
+    # wrt to total air (dry + wet)
+    # Ukkonen seems to follow this by naming as "vmr"
+    correction_factor_vmr = m_dry * (1.0 + vmr_h2o) / (m_dry + m_h2o * vmr_h2o)
+
+    u = np.expand_dims(correction_factor_vmr,axis=2) * (delta_pressure_2 / g) / 4.1637085e+03     #4.1637085e+02
+
+    ####
+
+    composition = composition[:,:,2:].data * u 
+
+    ####
+
+    h2o = composition[:,:,:1] / np.array([7.9141545e+02],dtype=np.float32)    # 7.9141545e+00
 
     h2o_sq = np.square(h2o * 10.0)
 
-    o3 = composition[:,:,3:4].data / np.array([5.4156350],dtype=np.float32)     #  np.array([5.4156350e-04])
-    co2 = composition[:,:,4:5].data / np.array([1.6823387e-01],dtype=np.float32)    # 1.6823387e-01
-    n2o = composition[:,:,5:6].data / np.array([1.3695081e-05],dtype=np.float32)    # 1.3695081e-04
-    ch4 = composition[:,:,6:7].data / np.array([7.9427415e-04],dtype=np.float32)    # 7.9427415e-04
+    o3 = composition[:,:,1:2] / np.array([5.4156350],dtype=np.float32)     #  np.array([5.4156350e-04])
+    co2 = composition[:,:,2:3] / np.array([1.6823387e-01],dtype=np.float32)    # 1.6823387e-01
+    n2o = composition[:,:,3:4] / np.array([1.3695081e-05],dtype=np.float32)    # 1.3695081e-04
+    ch4 = composition[:,:,4:5] / np.array([7.9427415e-04],dtype=np.float32)    # 7.9427415e-04
     #u = composition[:,:,8:9].data / np.array([4.1637085e+02], ,dtype=np.float32)     # 4.1637085e+02
 
     mu = data.variables['mu0'][:].data 
@@ -216,16 +248,6 @@ def load_data_full(file_name, n_channels):
     rsd_direct = tf.squeeze(rsd_direct, axis=2)
     rsd = tf.squeeze(rsd, axis=2)
     rsu = tf.squeeze(rsu, axis=2)
-
-    pressure = data.variables['pres_level'][:,:,:].data 
-    pressure = np.reshape(pressure,(n_samples,n_levels))
-
-    delta_pressure = pressure[:,1:] - pressure[:,:-1]
-    delta_pressure_2 = np.reshape(np.copy(delta_pressure),(n_samples,n_layers, 1))
-
-    # Deriving mass coordinate from pressure difference: mass per area
-    # kg / m^2
-    u = (delta_pressure_2 / g) / 4.1637085e+03     #4.1637085e+02
 
     surface_albedo = data.variables['sfc_alb'][:].data
     surface_albedo = surface_albedo[:,:,0]

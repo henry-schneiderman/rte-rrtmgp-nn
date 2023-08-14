@@ -4,26 +4,34 @@ import xarray as xr
 
 data_dir       = "/home/hws/tmp/"
 #file_name_in   = data_dir + "CAMS_2014_RFMIPstyle.nc"
-#file_name_in   = data_dir + "CAMS_2009-2018_sans_2014-2015_RFMIPstyle.nc"
+file_name_in   = data_dir + "CAMS_2009-2018_sans_2014-2015_RFMIPstyle.nc"
 #file_name_out  = data_dir + "RADSCHEME_data_g224_CAMS_2014.nc"
 #file_name_out  = data_dir + "RADSCHEME_data_g224_CAMS_2009-2018_sans_2014-2015.nc"
 #file_name_out2  = data_dir + "RADSCHEME_data_g224_CAMS_2014.2.nc"
 file_name_out2  = data_dir + "RADSCHEME_data_g224_CAMS_2009-2018_sans_2014-2015.2.nc"
-data = xr.open_dataset(file_name_out2) #Dataset(file_name_in)
+data_in = xr.open_dataset(file_name_in)
+data_out = xr.open_dataset(file_name_out2) #Dataset(file_name_in)
 
-rsd_direct = data.variables["rsd_dir"]
-rsd = data.variables["rsd"]
-rsu = data.variables["rsu"]
-mu = data.variables["mu0"]
-pres = data.variables["pres_level"]
-lwp = data.variables["cloud_lwp"]
-iwp = data.variables["cloud_iwp"]
-h20 = data.variables['rrtmgp_sw_input'][:,:,:,2]
-o2 = data.variables['rrtmgp_sw_input'][:,:,:,3]
-pres_layer = data.variables['rrtmgp_sw_input'][:,:,:,1]
-temp_layer = data.variables['rrtmgp_sw_input'][:,:,:,0]
-clwp = data.variables['cloud_lwp']
-ciwp = data.variables['cloud_iwp']
+rsd_direct = data_out.variables["rsd_dir"]
+rsd = data_out.variables["rsd"]
+rsu = data_out.variables["rsu"]
+mu = data_out.variables["mu0"]
+pres_level = data_out.variables["pres_level"]
+orig_pres_level = data_in.variables["pres_level"].data
+orig_co2 = data_in.variables['carbon_dioxide'].data
+lwp = data_out.variables["cloud_lwp"]
+iwp = data_out.variables["cloud_iwp"]
+h20 = data_out.variables['rrtmgp_sw_input'][:,:,:,2]
+orig_h20 = data_in.variables['water_vapor'][:,:,:].data
+orig_o2 = data_in.variables['oxygen_GM'][:].data
+orig_n2 = data_in.variables['nitrogen_GM'][:].data
+orig_level = data_in.variables['lev'][:].data
+o3 = data_out.variables['rrtmgp_sw_input'][:,:,:,3]
+c2o = data_out.variables['rrtmgp_sw_input'][:,:,:,4]
+pres_layer = data_out.variables['rrtmgp_sw_input'][:,:,:,1]
+temp_layer = data_out.variables['rrtmgp_sw_input'][:,:,:,0]
+clwp = data_out.variables['cloud_lwp']
+ciwp = data_out.variables['cloud_iwp']
 
 n = rsd.data / rsd[:,:,0:1].data
 print(f"rsd mean = {np.mean(n,axis=(0,1))}")
@@ -57,8 +65,8 @@ total = np.sum(h20[60,:,0:40].data, axis=(0,))
 print(f'Sum(h20[60,:,0:40]) = {total} ')
 print (" ")
 
-total = np.sum(o2[60,:,0:40].data, axis=(0,))
-print(f'Sum(o2[60,:,0:40]) = {total} ')
+total = np.sum(o3[60,:,0:40].data, axis=(0,))
+print(f'Sum(o3[60,:,0:40]) = {total} ')
 print (" ")
 
 print (" ")
@@ -127,13 +135,54 @@ print("rsu bottom = " + str(rsu[7,200,-5:].data))
 print("rsu tops = " + str(rsu[7,200:209,0].data))
 print("rsu bottoms = " + str(rsu[7,200:209,-1].data))
 print(" ")
-print("Pressure level: ")
-print(str(pres[0,200,:].data))
-print(str(pres[0,201,:].data))
 print("Pressure layer: ")
 print(str(pres_layer[0,200,:].data))
+print("Pressure level: ")
+print(str(pres_level[0,200,:].data))
+print(f'half pressure layers = {0.5 * (pres_layer[0,200,1:].data + pres_layer[0,200,:-1].data)}')
 
-print("temp layer: ")
-print(str(temp_layer[0,200,:].data))
+print(f'levels in terms of layers = {orig_level[:]}')
 
+if False:
+    print("temp layer: ")
+    print(str(temp_layer[0,200,:].data))
+
+    print("h20 60,540,41:61 = " + str(h20[60,540,41:61].data))
+    print (" ")
+
+    print("original h20 60,540,41:61 = " + str(orig_h20[60,540,41:61]))
+    print (" ")
+
+    delta_p = orig_pres_level[:,:,1:] - orig_pres_level[:,:,:-1]
+    print(f"delta_p mean = {np.mean(delta_p,axis=(0,1))}")
+    delta_delta_p = delta_p[:,:,1:] / delta_p[:,:,:-1]
+    print(f"delta_delta_p mean = {np.mean(delta_delta_p,axis=(0,1))}")
+    delta_co2 = orig_co2[:,:,1:] / orig_co2[:,:,:-1]
+    print(f"delta_co2 mean = {np.mean(delta_co2,axis=(0,1))}")
+
+    orig_h20 = orig_h20.reshape((-1))
+
+    sorted_h2o = np.sort(orig_h20)
+    n = sorted_h2o.shape[0]
+    k = n - 1
+    print(f'sorted 0 = {sorted_h2o[k]}')
+    k = n - n // 1000
+    print(f'sorted 0.01% = {sorted_h2o[k]}')
+    k = n - n // 200
+    print(f'sorted 0.5% = {sorted_h2o[k]}')
+    k = n - n // 100
+    print(f'sorted 1% = {sorted_h2o[k]}')
+    k = n - n // 50
+    print(f'sorted 2% = {sorted_h2o[k]}')
+    k = n - n // 10
+    print(f'sorted 10% = {sorted_h2o[k]}')
+    print("")
+    print("c2o 60,540,41:61 = " + str(10000.0 * c2o[60,540,41:61].data))
+    print (" ")
+
+    print("original c2o 60,540,41:61 = " + str(orig_co2[60,540,41:61] / 100.0))
+    print (" ")
+
+    print(f"original o2 = {orig_o2[:]}")
+    print(f"original n2 = {orig_n2[:]}")
 

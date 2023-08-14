@@ -3,6 +3,9 @@
 """
 Adapted from ml_train_radscheme_brnn2.py by Henry Schneiderman
 
+Modifies original Ukkonen approach by shifting downward radiation and
+handling boundary conditions (surface and upper atmosphere) differently
+
 Python framework for developing neural networks to replace radiative
 transfer computations, either fully or just one component
 
@@ -27,7 +30,12 @@ from ml_loaddata_hws import load_radscheme_rnn, preproc_divbymax
 
 import matplotlib.pyplot as plt
 
-        
+# nneur = 64 
+nneur = 16  
+# nneur = 24
+# nneur = 32 
+# neur  = 128
+# nneur = 12
 
 def calc_heatingrate(F, p):
     dF = F[:,1:] - F[:,0:-1] 
@@ -148,33 +156,33 @@ reverse_sequence = True
 
 # Load data
 if include_coldry:
-    x_tr_raw, y_tr_raw, rsd0_tr, rsu0_tr, rsd_tr, rsu_tr, pres_tr, coldry_tr = \
-        load_radscheme_rnn(fpath,  scale_p_h2o_o3 = scale_inputs, return_p=True, return_coldry=True, hws_option_1=hws_option_1,
+    x_tr_raw, y_tr_raw, rsd0_tr, rsu0_tr, rsd_tr, rsu_tr, pres_tr, coldry_tr, zero_albedo_tr, initial_state_tr, top_output_tr = \
+        load_radscheme_rnn(fpath, nneur, scale_p_h2o_o3 = scale_inputs, return_p=True, return_coldry=True, hws_option_1=hws_option_1,
         hws_option_2=hws_option_2)
     
-    x_val_raw, y_val_raw, rsd0_val, rsu0_val,rsd_val,rsu_val,  pres_val, coldry_val = \
-        load_radscheme_rnn(fpath_val, scale_p_h2o_o3 = scale_inputs, return_p=True, return_coldry=True, 
+    x_val_raw, y_val_raw, rsd0_val, rsu0_val,rsd_val,rsu_val,  pres_val, coldry_val, zero_albedo_val, initial_state_val, top_output_val = \
+        load_radscheme_rnn(fpath_val, nneur, scale_p_h2o_o3 = scale_inputs, return_p=True, return_coldry=True, 
         hws_option_1=hws_option_1,
         hws_option_2=hws_option_2)
 
-    x_test_raw, y_test_raw, rsd0_test, rsu0_test, rsd_test, rsu_test, pres_test, coldry_test = \
-        load_radscheme_rnn(fpath_test,  scale_p_h2o_o3 = scale_inputs, return_p=True, return_coldry=True, 
+    x_test_raw, y_test_raw, rsd0_test, rsu0_test, rsd_test, rsu_test, pres_test, coldry_test, zero_albedo_test, initial_state_test, top_output_test = \
+        load_radscheme_rnn(fpath_test, nneur, scale_p_h2o_o3 = scale_inputs, return_p=True, return_coldry=True, 
         hws_option_1=hws_option_1,
         hws_option_2=hws_option_2)
 else: 
 
-    x_tr_raw, y_tr_raw, rsd0_tr, rsu0_tr, rsd_tr, rsu_tr, pres_tr = \
-        load_radscheme_rnn(fpath,  scale_p_h2o_o3 = scale_inputs, return_p=True, 
+    x_tr_raw, y_tr_raw, rsd0_tr, rsu0_tr, rsd_tr, rsu_tr, pres_tr, zero_albedo_tr, initial_state_tr, top_output_tr = \
+        load_radscheme_rnn(fpath, nneur, scale_p_h2o_o3 = scale_inputs, return_p=True, 
         hws_option_1=hws_option_1,
         hws_option_2=hws_option_2)
         
-    x_val_raw, y_val_raw, rsd0_val, rsu0_val,rsd_val,rsu_val,  pres_val = \
-        load_radscheme_rnn(fpath_val, scale_p_h2o_o3 = scale_inputs, return_p=True,
+    x_val_raw, y_val_raw, rsd0_val, rsu0_val,rsd_val,rsu_val,  pres_val, zero_albedo_val, initial_state_val, top_output_val = \
+        load_radscheme_rnn(fpath_val, nneur, scale_p_h2o_o3 = scale_inputs, return_p=True,
         hws_option_1=hws_option_1,
         hws_option_2=hws_option_2) 
     
-    x_test_raw, y_test_raw, rsd0_test, rsu0_test, rsd_test, rsu_test, pres_test = \
-        load_radscheme_rnn(fpath_test,  scale_p_h2o_o3 = scale_inputs, return_p=True, 
+    x_test_raw, y_test_raw, rsd0_test, rsu0_test, rsd_test, rsu_test, pres_test, zero_albedo_test, initial_state_test, top_output_test = \
+        load_radscheme_rnn(fpath_test, nneur, scale_p_h2o_o3 = scale_inputs, return_p=True, 
         hws_option_1=hws_option_1,
         hws_option_2=hws_option_2)
 
@@ -410,12 +418,7 @@ if not final_evaluation:
     batch_size  = 1024
     batch_size  = 2048
     
-    # nneur = 64 
-    nneur = 16  
-    # nneur = 24
-    # nneur = 32 
-    # neur  = 128
-    # nneur = 12
+
     # Input for variable-length sequences of integers
     # inputs = Input(shape=(None,nlay,nx))
     
@@ -442,8 +445,11 @@ if not final_evaluation:
     # Optionally, use auxiliary inputs that do not dependend on sequence?
     
     # if use_auxinputs:  # commented out cos I need albedo for the loss function, easier to have it separate
-    inp_aux_albedo = Input(shape=(nx_aux),batch_size=batch_size,name='inputs_aux_albedo') # sfc_albedo
-    if mu0_and_albedo_as_auxinput: inp_aux_mu = Input(shape=(nx_aux),batch_size=batch_size,name='inputs_aux_mu0') # mu0
+    input_aux_albedo = Input(shape=(nx_aux),batch_size=batch_size,name='inputs_aux_albedo') # sfc_albedo
+
+    input_zero_albedo = Input(shape=(nx_aux),batch_size=batch_size,name='inputs_zero_albedo')
+
+    if mu0_and_albedo_as_auxinput: input_aux_mu = Input(shape=(nx_aux),batch_size=batch_size,name='inputs_aux_mu0') # mu0
     
     # Target outputs: these are fed as part of the input to avoid problem with 
     # validation data where TF complained about wrong shape
@@ -453,25 +459,28 @@ if not final_evaluation:
     # other inputs required to compute heating rate
     dpres   = Input((nlay,), batch_size=batch_size,name="dpres")
     incflux = Input((nlay+1), batch_size=batch_size,name="incflux")
+
+    initial_state = Input((nneur), batch_size=batch_size,name="initial_state")
     
             
-    # hidden0,last_state = layers.SimpleRNN(nneur,return_sequences=True,return_state=True)(inputs)
-    hidden0,last_state = layers.GRU(nneur,return_sequences=True,return_state=True)(inputs)
+    # hidden0,last_state_0 = layers.SimpleRNN(nneur,return_sequences=True,return_state=True)(inputs)
+    hidden0,last_state_0 = layers.GRU(nneur,return_sequences=True,return_state=True)(inputs)
     
-    last_state_plus_albedo =  tf.concat([last_state,inp_aux_albedo],axis=1)
+    last_state_0_plus_albedo =  tf.concat([last_state_0,input_aux_albedo],axis=1)
     
-    if hws_option_3:
-        mlp_surface_outp = Dense(nneur,name='dense_surface')(last_state_plus_albedo)
-        norm_1 = layers.BatchNormalization()(mlp_surface_outp)
-        norm_1_act = layers.Activation(activation=activ0)(norm_1)           
-        hidden0_lev = tf.concat([hidden0,tf.reshape(norm_1_act,[-1,1,nneur])],axis=1)
-    else:
-        mlp_surface_outp = Dense(nneur, activation=activ0,name='dense_surface')(last_state_plus_albedo)
+    boundary_net = Dense(nneur, activation=activ0,name='boundary_net')
     
-        hidden0_lev = tf.concat([hidden0,tf.reshape(mlp_surface_outp,[-1,1,nneur])],axis=1)
+    mlp_surface_output_0 = boundary_net(last_state_0_plus_albedo)
+
+    upward_flux_from_surface = Dense(1, activation=activ0,name='upward_surface_flux')(last_state_0_plus_albedo)
+
+    #hidden0_lev = tf.concat([hidden0,tf.reshape(mlp_surface_outp,[-1,1,nneur])],axis=1)
     
-    hidden1 = layers.GRU(nneur,return_sequences=True,go_backwards=True)(hidden0_lev)
+    hidden1, last_state_1 = layers.GRU(nneur,return_sequences=True,go_backwards=True, return_state=True)(hidden0, initial_state=mlp_surface_output_0)
     # hidden1 = layers.SimpleRNN(nneur,return_sequences=True,go_backwards=True)(hidden0_lev)
+
+    last_state_1_plus_albedo =  tf.concat([last_state_1,input_zero_albedo],axis=1)
+    mlp_surface_output_1 = boundary_net(last_state_1_plus_albedo)
 
     print("hidden1 shape: " + str(hidden1.shape))
     print("hidden1 type: " + str(hidden1))
@@ -480,34 +489,44 @@ if not final_evaluation:
         hidden1 = tf.reverse(hidden1, [1])
     
     # try concatinating hidden0 and hidden 1 instead
-    hidden_concat  = tf.concat([hidden0_lev,hidden1],axis=2)
+    hidden_concat  = tf.concat([hidden0,hidden1],axis=2)
 
     
     if third_rnn:
-        hidden2 = layers.GRU(nneur,return_sequences=True)(hidden_concat)
+        hidden2, final_state = layers.GRU(nneur,return_sequences=True, return_state=True)(hidden_concat, initial_state=mlp_surface_output_1)
         # hidden2 = layers.SimpleRNN(nneur,return_sequences=True)(hidden_concat)
-    
+        #final_state_plus_albedo =  tf.concat([final_state,input_aux_albedo],axis=1)
+
         outputs = TimeDistributed(layers.Dense(ny, activation=activ_last),name='dense_output')(hidden2)
     else:
         outputs = TimeDistributed(layers.Dense(ny, activation=activ_last),name='dense_output')(hidden_concat)
     
+    outputs_downward = outputs[:,:,0:1]
+    outputs_upward = outputs[:,:,1:]
+
+    top_output = Input((1),batch_size=batch_size,name="top_output")
     
+    outputs_downward = tf.concat([tf.reshape(top_output, (-1,1,1)),outputs_downward], axis=1)
+    outputs_upward = tf.concat([outputs_upward, tf.reshape(upward_flux_from_surface, (-1,1,1))], axis=1)
+
+    outputs = tf.concat([outputs_downward, outputs_upward],axis=2)
+
     # if use_auxinputs:
     #     if only_albedo_as_auxinput:
-    #         model = Model(inputs=[inputs, inp_aux_albedo, target, dpres, incflux], outputs=outputs)
+    #         model = Model(inputs=[inputs, input_aux_albedo, target, dpres, incflux], outputs=outputs)
     #     else:
-    #         model = Model(inputs=[inputs, inp_aux_mu, inp_aux_albedo, target, dpres, incflux], outputs=outputs)
+    #         model = Model(inputs=[inputs, input_aux_mu, input_aux_albedo, target, dpres, incflux], outputs=outputs)
     # else:
     #     model = Model(inputs=[inputs, target, dpres, incflux], outputs=outputs)
     if mu0_and_albedo_as_auxinput:
-        model = Model(inputs=[inputs, inp_aux_mu, inp_aux_albedo, target, dpres, incflux], outputs=outputs)
+        model = Model(inputs=[inputs, input_aux_mu, input_aux_albedo, input_zero_albedo, target, dpres, incflux, initial_state, top_output], outputs=outputs)
     else:
-        model = Model(inputs=[inputs, inp_aux_albedo, target, dpres, incflux], outputs=outputs)
+        model = Model(inputs=[inputs, input_aux_albedo, input_zero_albedo, target, dpres, incflux, initial_state, top_output], outputs=outputs)
     
     model.add_metric(rmse_hr(target,outputs,dpres,incflux),'rmse_hr')
     
-    # model.add_metric(rmse_hr(target,outputs,inp_aux_albedo,dpres,incflux),'rmse_hr')
-    # model.add_metric(rmse_flux(target,outputs,inp_aux,incflux),'rmse_flux')
+    # model.add_metric(rmse_hr(target,outputs,input_aux_albedo,dpres,incflux),'rmse_hr')
+    # model.add_metric(rmse_flux(target,outputs,input_aux,incflux),'rmse_flux')
     
     model.add_loss(CustomLoss(target,outputs,dpres, incflux))
     # model.add_loss(losses.mean_squared_error(target,outputs))
@@ -579,16 +598,16 @@ if not final_evaluation:
     if False:
         n_epochs = 6800
         del model
-        model = tf.keras.models.load_model(fpath + 'TEMP.' + str(n_epochs))
+        model = tf.keras.models.load_model(fpath + 'FULL_TEMP.' + str(n_epochs))
     while n_epochs < epochs:
         if not mu0_and_albedo_as_auxinput:
-            history = model.fit(x=[x_tr_m, x_tr_aux1, y_tr, dp_tr, rsd0_tr_big], y=None, \
+            history = model.fit(x=[x_tr_m, x_tr_aux1, zero_albedo_tr, y_tr, dp_tr, rsd0_tr_big, initial_state_tr, top_output_tr], y=None, \
             epochs=epoch_period, batch_size=batch_size, shuffle=True, verbose=1,  \
-            validation_data=[x_val_m, x_val_aux1, y_val, dp_val, rsd0_val_big], callbacks=callbacks)
+            validation_data=[x_val_m, x_val_aux1, zero_albedo_val, y_val, dp_val, rsd0_val_big, initial_state_val, top_output_val], callbacks=callbacks)
         else:
-            history = model.fit(x=[x_tr_m, x_tr_aux1, x_tr_aux2, y_tr, dp_tr, rsd0_tr_big], y=None, \
+            history = model.fit(x=[x_tr_m, x_tr_aux1, x_tr_aux2, zero_albedo_tr, y_tr, dp_tr, rsd0_tr_big, initial_state_tr, top_output_tr], y=None, \
                 epochs=epoch_period, batch_size=batch_size, shuffle=True, verbose=1,  \
-                validation_data=[x_val_m, x_val_aux1, x_val_aux2, y_val, dp_val, rsd0_val_big], callbacks=callbacks)  
+                validation_data=[x_val_m, x_val_aux1, x_val_aux2, zero_albedo_val, y_val, dp_val, rsd0_val_big, initial_state_val, top_output_val], callbacks=callbacks)  
         
         #print(history.history.keys())
         #print("number of epochs = " + str(history.history['epoch']))
@@ -601,11 +620,11 @@ if not final_evaluation:
             break
         else:
             n_epochs = n_epochs + epoch_period
-            model.save(fpath + 'TEMP.' + str(n_epochs))
+            model.save(fpath + 'FULL_TEMP.' + str(n_epochs))
             print("Writing model " + str(n_epochs))
 
         del model
-        model = tf.keras.models.load_model(fpath + 'TEMP.' + str(n_epochs))
+        model = tf.keras.models.load_model(fpath + 'FULL_TEMP.' + str(n_epochs))
 
     # extract weights to save as simpler model without custom functions
     # layers 2,3,4,5,9 have weights
@@ -621,13 +640,13 @@ if not final_evaluation:
     
     # make a new model without the functions
     # inputs = Input(shape=(None,nx_main),name='inputs_main')
-    # if not only_albedo_as_auxinput: inp_aux_mu = Input(shape=(nx_aux),name='inputs_aux1') # mu0
-    # inp_aux_albedo = Input(shape=(nx_aux),name='inputs_aux2') # sfc_albedo
+    # if not only_albedo_as_auxinput: input_aux_mu = Input(shape=(nx_aux),name='inputs_aux1') # mu0
+    # input_aux_albedo = Input(shape=(nx_aux),name='inputs_aux2') # sfc_albedo
     # if only_albedo_as_auxinput:
-    #     mlp_dense_inp1 = Dense(nneur, activation=activ0,name='dense_inputs_alb')(inp_aux_albedo)
+    #     mlp_dense_inp1 = Dense(nneur, activation=activ0,name='dense_inputs_alb')(input_aux_albedo)
     # else:
-    #     mlp_dense_inp1 = Dense(nneur, activation=activ0,name='dense_inputs_alb')(inp_aux_mu)
-    # mlp_dense_inp2 = Dense(nneur, activation=activ0,name='dense_inputs_mu')(inp_aux_albedo)
+    #     mlp_dense_inp1 = Dense(nneur, activation=activ0,name='dense_inputs_alb')(input_aux_mu)
+    # mlp_dense_inp2 = Dense(nneur, activation=activ0,name='dense_inputs_mu')(input_aux_albedo)
     # layer_rnn = layers.GRU(nneur,return_sequences=True)
     # layer_rnn2 = layers.GRU(nneur,return_sequences=True)
     # hidden = layers.Bidirectional(layer_rnn, merge_mode=mergemode, name ='bidirectional')\
@@ -635,9 +654,9 @@ if not final_evaluation:
     # hidden2 = layer_rnn2(hidden)
     # outputs = TimeDistributed(layers.Dense(ny, activation=activ_last),name='dense_output')(hidden2)
     if only_albedo_as_auxinput:
-        newmodel = Model(inputs=[inputs, inp_aux_albedo], outputs=outputs)
+        newmodel = Model(inputs=[inputs, input_aux_albedo], outputs=outputs)
     else:
-        newmodel = Model(inputs=[inputs, inp_aux_mu, inp_aux_albedo], outputs=outputs)
+        newmodel = Model(inputs=[inputs, input_aux_mu, input_aux_albedo], outputs=outputs)
     newmodel.compile()
     newmodel.summary()
     # add weights

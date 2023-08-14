@@ -128,7 +128,7 @@ ysigma_sw_ray = np.repeat(0.00019679657,224)
 
 
     
-def load_radscheme_rnn(fname, predictand='rsu_rsd', scale_p_h2o_o3=True, \
+def load_radscheme_rnn(fname, nneur, predictand='rsu_rsd', scale_p_h2o_o3=True, \
                                 return_p=False, return_coldry=False,
                                 hws_option_1=False,
                                 hws_option_2=False):
@@ -193,6 +193,9 @@ def load_radscheme_rnn(fname, predictand='rsu_rsd', scale_p_h2o_o3=True, \
     sfc_alb = np.repeat(sfc_alb.reshape(ns,1,1),nlay,axis=1)
 
 
+    zero_alb = np.zeros((ns,1), dtype=np.float32)
+    initial_state = np.ones((ns,nneur), dtype=np.float32)
+
     pres = dat.variables['pres_level'][:,:,:].data       # (nexp,ncol, nlev)
     pres = np.reshape(pres,(ns,nlev))
 
@@ -228,7 +231,7 @@ def load_radscheme_rnn(fname, predictand='rsu_rsd', scale_p_h2o_o3=True, \
     rsu     = rsu.reshape((ns,nlay,1))
     rsd     = rsd.reshape((ns,nlay,1))
 
-
+    top_output = np.ones((ns,1),dtype=np.float32)
 
     # Concatenate inputs and outputs...
     if hws_option_1:
@@ -246,15 +249,152 @@ def load_radscheme_rnn(fname, predictand='rsu_rsd', scale_p_h2o_o3=True, \
     dat.close()
     if return_p:
         if return_coldry:
-            return x,y,rsd0,rsu0,rsd_raw,rsu_raw,pres,coldry
+            return x,y,rsd0,rsu0,rsd_raw,rsu_raw,pres,coldry, zero_alb, initial_state, top_output
         else:
-            return x,y,rsd0,rsu0,rsd_raw,rsu_raw,pres
+            return x,y,rsd0,rsu0,rsd_raw,rsu_raw,pres, zero_alb, initial_state, top_output
     
     else:
         if return_coldry:
-            return x,y,rsd0,rsu0,rsd_raw,rsu_raw, coldry
+            return x,y,rsd0,rsu0,rsd_raw,rsu_raw, coldry, zero_alb, initial_state, top_output
         else:
-            return x,y,rsd0,rsu0,rsd_raw,rsu_raw
+            return x,y,rsd0,rsu0,rsd_raw,rsu_raw, zero_alb, initial_state, top_output
+
+def load_radscheme_rnn_direct(fname, predictand='rsu_rsd', scale_p_h2o_o3=True, \
+                                return_p=False, return_coldry=False,
+                                hws_option_1=False,
+                                hws_option_2=False,
+                                use_mass_coord=False):
+    # Load data for training a RADIATION SCHEME (RTE+RRTMGP) emulator,
+    # where inputs are vertical PROFILES of atmospheric conditions (T,p, gas concentrations)
+    # and outputs (predictand) are PROFILES of broadband fluxes (upwelling and downwelling)
+    # argument scale_p_h2o_o3 determines whether specific gas optics inputs
+    # (pressure, H2O and O3 )  are power-scaled similarly to Ukkonen 2020 paper
+    # for a more normal distribution
+    
+    dat = Dataset(fname)
+    
+    if predictand not in ['rsu_rsd']:
+        sys.exit("Supported predictands (second argument) : rsu_rsd..")
+            
+    # temperature, pressure, and gas concentrations...
+    x_gas = dat.variables['rrtmgp_sw_input'][:].data  # (nexp,ncol,nlay,ngas+2)
+    (nexp,ncol,nlay,nx) = x_gas.shape
+    nlev = nlay+1
+    ns = nexp*ncol # number of samples (profiles)
+
+    # plus surface albedo, which !!!FOR THIS DATA!!! is spectrally constant
+    sfc_alb = dat.variables['sfc_alb'][:].data # (nexp,ncol,ngpt)
+    sfc_alb = sfc_alb[:,:,0] # (nexp,ncol)
+    # plus by cosine of solar angle..
+    mu0 = dat.variables['mu0'][:].data           # (nexp,ncol)
+    # # ..multiplied by incoming flux
+    # #  (ASSUMED CONSTANT)
+    # toa_flux = dat.variables['toa_flux'][:].data # (nexp,ncol,ngpt)
+    # ngpt = toa_flux.shape[-1]
+    # for iexp in range(nexp):
+    #     for icol in range(ncol):
+    #         toa_flux[iexp,icol,:] = mu0[iexp,icol] * toa_flux[iexp,icol,:]
+
+    
+    lwp = dat.variables['cloud_lwp'][:].data
+    iwp = dat.variables['cloud_iwp'][:].data
+
+    # if predictand in ['broadband_rsu_rsd','broadband_rlu_rld']: 
+    rsu = dat.variables['rsu'][:]
+    rsd = dat.variables['rsd_dir'][:]
+        
+    if np.size(rsu.shape) != 3:
+        sys.exit("Invalid array shapes, RTE output should have 3 dimensions")
+    
+    # Reshape to profiles...
+    x_gas   = np.reshape(x_gas,(ns,nlay,nx)) 
+    lwp     = np.reshape(lwp,  (ns,nlay,1))    
+    iwp     = np.reshape(iwp,  (ns,nlay,1))
+    rsu     = np.reshape(rsu,  (ns,nlev))
+    rsd     = np.reshape(rsd,  (ns,nlev))
+
+    top_output = np.ones((ns,1),dtype=np.float32)
+
+    vmr_h2o = np.copy(x_gas[:,:,2].reshape(ns,nlay))
+
+    # Mu0 and surface albedo are also required as inputs
+    # Don't know how to add constant (sequence-independent) variables,
+    # so will add them as input to each sequence/level - unelegant but should work..
+
+    mu0     = np.repeat(mu0.reshape(ns,1,1),nlay,axis=1)
+    sfc_alb = np.repeat(sfc_alb.reshape(ns,1,1),nlay,axis=1)
+
+    pres = dat.variables['pres_level'][:,:,:].data       # (nexp,ncol, nlev)
+    pres = np.reshape(pres,(ns,nlev))
+
+    pres_copy = np.copy(pres)
+    pres_copy = np.reshape(pres_copy,(ns,nlev,1))
+
+    m_dry = 2.8964
+    m_h2o =  1.8016
+    factor = 0.0001 / (m_dry + m_h2o * vmr_h2o)
+
+    if use_mass_coord:
+        mass_coord = (pres_copy[:,1:,:] - pres_copy[:,:-1,:]) * factor
+        x_gas[:,:,2] = x_gas[:,:,2] * mass_coord
+        x_gas[:,:,3] = x_gas[:,:,3] * mass_coord
+        x_gas[:,:,4] = x_gas[:,:,4] * mass_coord
+        x_gas[:,:,5] = x_gas[:,:,5] * mass_coord
+        x_gas[:,:,6] = x_gas[:,:,6] * mass_coord
+
+    if scale_p_h2o_o3:
+        # Log-scale pressure, power-scale H2O and O3
+        x_gas[:,:,1] = np.log(x_gas[:,:,1])
+        x_gas[:,:,2] = x_gas[:,:,2]**(1.0/4) 
+        x_gas[:,:,3] = x_gas[:,:,3]**(1.0/4)
+    
+    rsu_raw = np.copy(rsu)
+    rsd_raw = np.copy(rsd)
+    
+    # normalize downwelling flux by the boundary condition
+    if hws_option_2:
+        rsd0    = np.full((rsd.shape[0],), 1412.0)
+    else:
+        rsd0    = rsd[:,0]
+    rsd     = rsd / np.repeat(rsd0.reshape(-1,1), nlev, axis=1)
+    # remove rsd0 from array
+    rsd     = rsd[:,1:]
+    # extract and remove upwelling flux at surface, this will be computed 
+    # explicitly, resulting in NN outputs with consistent dimensions to input (nlay)
+    rsu0    = rsu[:,-1]
+    rsu     = rsu[:,0:-1]
+    rsu     = rsu / np.repeat(rsd0.reshape(-1,1), nlay, axis=1)
+
+    rsu     = rsu.reshape((ns,nlay,1))
+    rsd     = rsd.reshape((ns,nlay,1))
+
+
+
+    # Concatenate inputs and outputs...
+    if hws_option_1:
+        # substitue mass coord for albedo
+        x       = np.concatenate((x_gas,lwp,iwp,mu0,sfc_alb,mass_coord),axis=2)
+    else:
+        x       = np.concatenate((x_gas,lwp,iwp,mu0,sfc_alb),axis=2)
+    y       = rsd #np.concatenate((rsd,rsu),axis=2)
+
+    print( "there are {} profiles in this dataset ({} experiments, {} columns)".format(nexp*ncol,nexp,ncol))
+    
+    #if return_coldry:
+    #    coldry = get_col_dry(vmr_h2o,pres)
+    
+    dat.close()
+    if return_p:
+        if return_coldry:
+            return x,y,rsd0,rsu0,rsd_raw,rsu_raw,pres,coldry, top_output
+        else:
+            return x,y,rsd0,rsu0,rsd_raw,rsu_raw,pres, top_output
+    
+    else:
+        if return_coldry:
+            return x,y,rsd0,rsu0,rsd_raw,rsu_raw, coldry, top_output
+        else:
+            return x,y,rsd0,rsu0,rsd_raw,rsu_raw, top_output
 
 def get_col_dry(vmr_h2o, plev):
     grav = 9.80665

@@ -23,7 +23,7 @@ import gc
 import numpy as np
 import time
 
-from ml_loaddata_hws import load_radscheme_rnn, preproc_divbymax
+from ml_loaddata_hws import load_radscheme_rnn_direct, preproc_divbymax
 
 import matplotlib.pyplot as plt
 
@@ -116,21 +116,12 @@ scale_inputs    = True
 
 # didn't seem to improve results
 # include_deltap = True
-include_deltap = False
 
-include_coldry = False
-
-only_albedo_as_auxinput = True # 
-mu0_and_albedo_as_auxinput = False
-
-use_auxinputs = mu0_and_albedo_as_auxinput or only_albedo_as_auxinput
 
 # do outputs consist of the entire profile, i.e. fluxes on halv levels (nlay+1)
 # otherwise the TOA incoming flux and surface downward flux can be omitted for nlay outputs
 train_on_levflux = True
 
-# third upward RNN before output layer
-third_rnn = True
 
 # Model training and evaluation: use GPU or CPU?
 use_gpu = False
@@ -147,36 +138,21 @@ reverse_sequence = True
 # ----------- config ------------
 
 # Load data
-if include_coldry:
-    x_tr_raw, y_tr_raw, rsd0_tr, rsu0_tr, rsd_tr, rsu_tr, pres_tr, coldry_tr = \
-        load_radscheme_rnn(fpath,  scale_p_h2o_o3 = scale_inputs, return_p=True, return_coldry=True, hws_option_1=hws_option_1,
-        hws_option_2=hws_option_2)
-    
-    x_val_raw, y_val_raw, rsd0_val, rsu0_val,rsd_val,rsu_val,  pres_val, coldry_val = \
-        load_radscheme_rnn(fpath_val, scale_p_h2o_o3 = scale_inputs, return_p=True, return_coldry=True, 
-        hws_option_1=hws_option_1,
-        hws_option_2=hws_option_2)
 
-    x_test_raw, y_test_raw, rsd0_test, rsu0_test, rsd_test, rsu_test, pres_test, coldry_test = \
-        load_radscheme_rnn(fpath_test,  scale_p_h2o_o3 = scale_inputs, return_p=True, return_coldry=True, 
-        hws_option_1=hws_option_1,
-        hws_option_2=hws_option_2)
-else: 
-
-    x_tr_raw, y_tr_raw, rsd0_tr, rsu0_tr, rsd_tr, rsu_tr, pres_tr = \
-        load_radscheme_rnn(fpath,  scale_p_h2o_o3 = scale_inputs, return_p=True, 
-        hws_option_1=hws_option_1,
-        hws_option_2=hws_option_2)
-        
-    x_val_raw, y_val_raw, rsd0_val, rsu0_val,rsd_val,rsu_val,  pres_val = \
-        load_radscheme_rnn(fpath_val, scale_p_h2o_o3 = scale_inputs, return_p=True,
-        hws_option_1=hws_option_1,
-        hws_option_2=hws_option_2) 
+x_tr_raw, y_tr_raw, rsd0_tr, rsu0_tr, rsd_tr, rsu_tr, pres_tr, top_output_tr= \
+    load_radscheme_rnn_direct(fpath,  scale_p_h2o_o3 = scale_inputs, return_p=True, 
+    hws_option_1=hws_option_1,
+    hws_option_2=hws_option_2)
     
-    x_test_raw, y_test_raw, rsd0_test, rsu0_test, rsd_test, rsu_test, pres_test = \
-        load_radscheme_rnn(fpath_test,  scale_p_h2o_o3 = scale_inputs, return_p=True, 
-        hws_option_1=hws_option_1,
-        hws_option_2=hws_option_2)
+x_val_raw, y_val_raw, rsd0_val, rsu0_val,rsd_val,rsu_val,  pres_val, top_output_val = \
+    load_radscheme_rnn_direct(fpath_val, scale_p_h2o_o3 = scale_inputs, return_p=True,
+    hws_option_1=hws_option_1,
+    hws_option_2=hws_option_2) 
+
+x_test_raw, y_test_raw, rsd0_test, rsu0_test, rsd_test, rsu_test, pres_test, top_output_test = \
+    load_radscheme_rnn_direct(fpath_test,  scale_p_h2o_o3 = scale_inputs, return_p=True, 
+    hws_option_1=hws_option_1,
+    hws_option_2=hws_option_2)
 
 if scale_inputs:
     x_tr        = np.copy(x_tr_raw)
@@ -211,11 +187,11 @@ ny = y_tr_raw.shape[-1]
 nlay = x_tr.shape[-2]
   
 if train_on_levflux:
-    y_tr = np.concatenate((np.expand_dims(rsd_tr,2), np.expand_dims(rsu_tr,2)),axis=2)
-    y_val = np.concatenate((np.expand_dims(rsd_val,2), np.expand_dims(rsu_val,2)),axis=2)
-    y_test = np.concatenate((np.expand_dims(rsd_test,2), np.expand_dims(rsu_test,2)),axis=2)
+    y_tr = np.expand_dims(rsd_tr,2)
+    y_val = np.expand_dims(rsd_val,2)
+    y_test = np.expand_dims(rsd_test,2)
     del y_tr_raw, y_val_raw, y_test_raw
-    for i in range(2):
+    for i in range(1):
         for j in range(61):
             y_tr[:,j,i] = y_tr[:,j,i] / rsd0_tr
             y_val[:,j,i] = y_val[:,j,i] / rsd0_val
@@ -223,55 +199,17 @@ if train_on_levflux:
 else:
     y_tr = y_tr_raw; y_val = y_val_raw; y_test = y_test_raw
 
-
 rsd0_tr_big     = rsd0_tr.reshape(-1,1).repeat(nlay+1,axis=1)
 rsd0_val_big    = rsd0_val.reshape(-1,1).repeat(nlay+1,axis=1)
 rsd0_test_big   = rsd0_test.reshape(-1,1).repeat(nlay+1,axis=1)
 
-if not use_auxinputs: # everything as layer inputs
-    x_tr_m = x_tr; x_val_m = x_val; 
-    x_test_m = x_test
-    # add albedo as aux input anyway to use in loss function
-    x_tr_aux1 = x_tr[:,0,-1:]; x_val_aux1 = x_val[:,0,-1:]
-    x_test_aux1 = x_test[:,0,-1:]  
-    nx_aux = 1
-else:
-    if only_albedo_as_auxinput: # only one scalar input (albedo)
-        x_tr_m = x_tr[:,:,0:-1];  x_val_m = x_val[:,:,0:-1]
-        x_test_m = x_test[:,:,0:-1]
-        x_tr_aux1 = x_tr[:,0,-1:]; x_val_aux1 = x_val[:,0,-1:]; 
-        x_test_aux1 = x_test[:,0,-1:]    
-        nx_aux = 1
-    else: # two scalar inputs (mu0 and albedo)
-        x_tr_m = x_tr[:,:,0:-2];  x_val_m = x_val[:,:,0:-2];  
-        x_test_m = x_test[:,:,0:-2]
-        
-        x_tr_aux1 = x_tr[:,0,-1:]; x_tr_aux2 = x_tr[:,0,-2:-1]
-        x_val_aux1 = x_val[:,0,-1:];  x_val_aux2 = x_val[:,0,-2:-1]; 
-        x_test_aux1 = x_test[:,0,-1:]; x_test_aux2 = x_test[:,0,-2:-1]
-        nx_aux = x_tr_aux1.shape[-1]
+x_tr_m = x_tr[:,:,0:-1];  x_val_m = x_val[:,:,0:-1]
+x_test_m = x_test[:,:,0:-1]
+x_tr_aux1 = x_tr[:,0,-1:]; x_val_aux1 = x_val[:,0,-1:]; 
+x_test_aux1 = x_test[:,0,-1:]    
+nx_aux = 1
 
 nx_main = x_tr_m.shape[-1]
-
-if include_deltap:
-    pmax = 4083.2031
-    dpres_tr    = np.expand_dims(pres_tr[:,1:] - pres_tr[:,0:-1],axis=2) / pmax
-    dpres_val    = np.expand_dims(pres_val[:,1:] - pres_val[:,0:-1],axis=2) / pmax
-    dpres_test    = np.expand_dims(pres_test[:,1:] - pres_test[:,0:-1],axis=2) / pmax
-    x_tr_m      = np.concatenate((x_tr_m, dpres_tr), axis=2)
-    x_val_m     = np.concatenate((x_val_m, dpres_val), axis=2)
-    x_test_m    = np.concatenate((x_test_m, dpres_test), axis=2)
-    nx = nx + 1
-    nx_main = nx_main + 1
-    
-if include_coldry:
-    coldry_max = 8.159878628698766e+23
-    
-    x_tr_m      = np.concatenate((x_tr_m, np.expand_dims(coldry_tr/coldry_max,axis=2)), axis=2)
-    x_val_m     = np.concatenate((x_val_m,  np.expand_dims(coldry_val/coldry_max,axis=2)), axis=2)
-    x_test_m    = np.concatenate((x_test_m,  np.expand_dims(coldry_test/coldry_max,axis=2)), axis=2)
-    nx = nx + 1
-    nx_main = nx_main + 1
     
 hre_loss = True
 if hre_loss:
@@ -335,10 +273,9 @@ def my_gradient_tf(a):
     return a[:,1:] - a[:,0:-1]
 
 
-def calc_heatingrates_tf_dp(flux_dn, flux_up, dp):
+def calc_heatingrates_tf_dp(flux_dn, dp):
     #  flux_net =   flux_up   - flux_dn
-    F = tf.subtract(flux_up, flux_dn)
-    dF = my_gradient_tf(F)
+    dF = my_gradient_tf(-flux_dn)
     dFdp = tf.divide(dF, dp)
     coeff = -844.2071713147411#  -(24*3600) * (9.81/1004)  
     dTdt_day = tf.multiply(coeff, dFdp)
@@ -352,11 +289,9 @@ def CustomLoss(y_true, y_pred, dp, rsd_top):
 
     rsd_true = tf.math.multiply(y_true[:,:,0], rsd_top)
     rsd_pred = tf.math.multiply(y_pred[:,:,0], rsd_top)
-    rsu_true = tf.math.multiply(y_true[:,:,1], rsd_top)
-    rsu_pred = tf.math.multiply(y_pred[:,:,1], rsd_top)
 
-    HR_true = calc_heatingrates_tf_dp(rsd_true, rsu_true, dp)
-    HR_pred = calc_heatingrates_tf_dp(rsd_pred, rsu_pred, dp)
+    HR_true = calc_heatingrates_tf_dp(rsd_true, dp)
+    HR_pred = calc_heatingrates_tf_dp(rsd_pred, dp)
     # err_hr = tf.math.sqrt(tf.math.reduce_mean(tf.math.square(HR_true - HR_pred),axis=-1))
     err_hr = K.sqrt(K.mean(K.square(HR_true - HR_pred)))
 
@@ -370,11 +305,9 @@ def rmse_hr(y_true, y_pred, dp, rsd_top):
     
     rsd_true = tf.math.multiply(y_true[:,:,0], rsd_top)
     rsd_pred = tf.math.multiply(y_pred[:,:,0], rsd_top)
-    rsu_true = tf.math.multiply(y_true[:,:,1], rsd_top)
-    rsu_pred = tf.math.multiply(y_pred[:,:,1], rsd_top)
 
-    HR_true = calc_heatingrates_tf_dp(rsd_true, rsu_true, dp)
-    HR_pred = calc_heatingrates_tf_dp(rsd_pred, rsu_pred, dp)
+    HR_true = calc_heatingrates_tf_dp(rsd_true, dp)
+    HR_pred = calc_heatingrates_tf_dp(rsd_pred, dp)
 
     # return tf.math.sqrt(tf.math.reduce_mean(tf.math.square(HR_true - HR_pred),axis=-1))
     return K.sqrt(K.mean(K.square(HR_true - HR_pred)))
@@ -440,10 +373,8 @@ if not final_evaluation:
     print("Inputs shape: " + str(inputs.shape))
     
     # Optionally, use auxiliary inputs that do not dependend on sequence?
-    
-    # if use_auxinputs:  # commented out cos I need albedo for the loss function, easier to have it separate
-    inp_aux_albedo = Input(shape=(nx_aux),batch_size=batch_size,name='inputs_aux_albedo') # sfc_albedo
-    if mu0_and_albedo_as_auxinput: inp_aux_mu = Input(shape=(nx_aux),batch_size=batch_size,name='inputs_aux_mu0') # mu0
+
+
     
     # Target outputs: these are fed as part of the input to avoid problem with 
     # validation data where TF complained about wrong shape
@@ -453,44 +384,20 @@ if not final_evaluation:
     # other inputs required to compute heating rate
     dpres   = Input((nlay,), batch_size=batch_size,name="dpres")
     incflux = Input((nlay+1), batch_size=batch_size,name="incflux")
+    top_output = Input((1),batch_size=batch_size,name="top_output")
     
+    inp_aux_albedo = Input(shape=(nx_aux),batch_size=batch_size,name='inputs_aux_albedo') 
             
     # hidden0,last_state = layers.SimpleRNN(nneur,return_sequences=True,return_state=True)(inputs)
-    hidden0,last_state = layers.GRU(nneur,return_sequences=True,return_state=True)(inputs)
+    hidden0, last_state = layers.GRU(nneur,return_sequences=True,return_state=True)(inputs)
     
-    last_state_plus_albedo =  tf.concat([last_state,inp_aux_albedo],axis=1)
-    
-    if hws_option_3:
-        mlp_surface_outp = Dense(nneur,name='dense_surface')(last_state_plus_albedo)
-        norm_1 = layers.BatchNormalization()(mlp_surface_outp)
-        norm_1_act = layers.Activation(activation=activ0)(norm_1)           
-        hidden0_lev = tf.concat([hidden0,tf.reshape(norm_1_act,[-1,1,nneur])],axis=1)
-    else:
-        mlp_surface_outp = Dense(nneur, activation=activ0,name='dense_surface')(last_state_plus_albedo)
-    
-        hidden0_lev = tf.concat([hidden0,tf.reshape(mlp_surface_outp,[-1,1,nneur])],axis=1)
-    
-    hidden1 = layers.GRU(nneur,return_sequences=True,go_backwards=True)(hidden0_lev)
-    # hidden1 = layers.SimpleRNN(nneur,return_sequences=True,go_backwards=True)(hidden0_lev)
+    #last_state_plus_albedo =  tf.concat([last_state,inp_aux_albedo],axis=1)
 
-    print("hidden1 shape: " + str(hidden1.shape))
-    print("hidden1 type: " + str(hidden1))
+    #mlp_surface_outp = Dense(nneur, activation=activ0,name='dense_surface')(last_state_plus_albedo)
 
-    if reverse_sequence:
-        hidden1 = tf.reverse(hidden1, [1])
-    
-    # try concatinating hidden0 and hidden 1 instead
-    hidden_concat  = tf.concat([hidden0_lev,hidden1],axis=2)
+    outputs = TimeDistributed(layers.Dense(ny, activation=activ_last),name='dense_output')(hidden0)
 
-    
-    if third_rnn:
-        hidden2 = layers.GRU(nneur,return_sequences=True)(hidden_concat)
-        # hidden2 = layers.SimpleRNN(nneur,return_sequences=True)(hidden_concat)
-    
-        outputs = TimeDistributed(layers.Dense(ny, activation=activ_last),name='dense_output')(hidden2)
-    else:
-        outputs = TimeDistributed(layers.Dense(ny, activation=activ_last),name='dense_output')(hidden_concat)
-    
+    outputs = tf.concat([tf.reshape(top_output, (-1,1,1)),outputs], axis=1)
     
     # if use_auxinputs:
     #     if only_albedo_as_auxinput:
@@ -499,10 +406,8 @@ if not final_evaluation:
     #         model = Model(inputs=[inputs, inp_aux_mu, inp_aux_albedo, target, dpres, incflux], outputs=outputs)
     # else:
     #     model = Model(inputs=[inputs, target, dpres, incflux], outputs=outputs)
-    if mu0_and_albedo_as_auxinput:
-        model = Model(inputs=[inputs, inp_aux_mu, inp_aux_albedo, target, dpres, incflux], outputs=outputs)
-    else:
-        model = Model(inputs=[inputs, inp_aux_albedo, target, dpres, incflux], outputs=outputs)
+
+    model = Model(inputs=[inputs, inp_aux_albedo, target, dpres, incflux, top_output], outputs=outputs)
     
     model.add_metric(rmse_hr(target,outputs,dpres,incflux),'rmse_hr')
     
@@ -522,73 +427,20 @@ if not final_evaluation:
     callbacks = [EarlyStopping(monitor='rmse_hr',  patience=patience, verbose=1, \
                                  mode='min',restore_best_weights=True)]
     
-    # 16 GRU - BackGRU - GRU
-    #     Epoch 10/100000
-    # 320/320 [==============================] - 12s 39ms/step - loss: 0.0161 - rmse_hr: 14.5004 - val_loss: 0.0149 - val_rmse_hr: 12.7390
-    # stopped at 
-    # Epoch 493/100000
-    # 320/320 [==============================] - 5s 16ms/step - loss: 5.6712e-04 - rmse_hr: 1.4174 - val_loss: 5.2206e-04 - val_rmse_hr: 1.2316
-    
-    # 16 GRU - BackGRU - GRU with concatenated albedo layer and predicting all levels
-    # Epoch 430/100000
-    # 320/320 [==============================] - 5s 17ms/step - loss: 4.5091e-04 - rmse_hr: 1.2175 - val_loss: 4.9115e-04 - val_rmse_hr: 1.1969
-    # with concat of the first GRU and BackGRU:
-    # Epoch 335/100000
-    # 320/320 [==============================] - 6s 17ms/step - loss: 1.9770e-04 - rmse_hr: 1.0664 - val_loss: 2.8051e-04 - val_rmse_hr: 1.0551
-    
-    # 16 GRU - BackGRU concat
-    # Epoch 482/100000
-    # 320/320 [==============================] - 4s 11ms/step - loss: 3.3122e-04 - rmse_hr: 0.8857 - val_loss: 4.0671e-04 - val_rmse_hr: 1.0161
-    
-    # same but tanh activation in surface layer instead of linear
-    # Epoch 336/100000
-    # 320/320 [==============================] - 4s 13ms/step - loss: 5.5611e-04 - rmse_hr: 1.3147 - val_loss: 5.5451e-04 - val_rmse_hr: 1.1525
-    
-    # 8 Gru - BackGru - Gru
-    # Epoch 424/100000
-    # 320/320 [==============================] - 6s 17ms/step - loss: 3.4476e-04 - rmse_hr: 1.2941 - val_loss: 3.3049e-04 - val_rmse_hr: 1.2892
-    
-    # 16 Gru - Backgru - Gru with coldry
-    # Epoch 485/100000
-    # 320/320 [==============================] - 5s 16ms/step - loss: 1.5262e-04 - rmse_hr: 0.8288 - val_loss: 1.4025e-04 - val_rmse_hr: 0.8467
-    # Restoring model weights from the end of the best epoch.
-    
-    # 12 Gru - Backgru - Gru with coldry: stuck at RMSE hr 1.01
-    
-    # 16 Gru - Backgru - Gru with coldry and no flux weights
-    # rmse_hr: 0.8889
-    
-    # 12 Gru BackGru
-    # Epoch 756/100000
-    # 320/320 [==============================] - 4s 12ms/step - loss: 2.4949e-04 - rmse_hr: 0.7504 - val_loss: 2.7354e-04 - val_rmse_hr: 0.6899
-    # 1 core 1.253s (val)
-    
-    # 24 Gru BackGru : 4.8s,  HR RMSE 0.2-0.3
-    # 24 Gru BackGru-16 : 4s
-    
-    # 16 Gru - Backgru - Gru without coldry and with flux weights, TF 2.50
-    # loss 1.13e-04, val rmse 0.23974052; Total params: 5,698
-    
-    # START TRAINING
-    # with tf.device(devstr):
     
     epoch_period = 200
     n_epochs = 0
     fpath = 'saved_model/bigru_gru_16_nocoldry_levoutput.HWS7.'
 
     if False:
-        n_epochs = 6800
+        n_epochs = 200
         del model
-        model = tf.keras.models.load_model(fpath + 'TEMP.' + str(n_epochs))
+        model = tf.keras.models.load_model(fpath + 'DIRECT_TEMP.' + str(n_epochs))
     while n_epochs < epochs:
-        if not mu0_and_albedo_as_auxinput:
-            history = model.fit(x=[x_tr_m, x_tr_aux1, y_tr, dp_tr, rsd0_tr_big], y=None, \
-            epochs=epoch_period, batch_size=batch_size, shuffle=True, verbose=1,  \
-            validation_data=[x_val_m, x_val_aux1, y_val, dp_val, rsd0_val_big], callbacks=callbacks)
-        else:
-            history = model.fit(x=[x_tr_m, x_tr_aux1, x_tr_aux2, y_tr, dp_tr, rsd0_tr_big], y=None, \
+
+        history = model.fit(x=[x_tr_m, x_tr_aux1, y_tr, dp_tr, rsd0_tr_big, top_output_tr], y=None, \
                 epochs=epoch_period, batch_size=batch_size, shuffle=True, verbose=1,  \
-                validation_data=[x_val_m, x_val_aux1, x_val_aux2, y_val, dp_val, rsd0_val_big], callbacks=callbacks)  
+                validation_data=[x_val_m, x_val_aux1, y_val, dp_val, rsd0_val_big, top_output_val], callbacks=callbacks)  
         
         #print(history.history.keys())
         #print("number of epochs = " + str(history.history['epoch']))
@@ -596,16 +448,16 @@ if not final_evaluation:
 
         nn_epochs = len(history.history['rmse_hr'])
         if  nn_epochs < epoch_period:
-            model.save(fpath + 'FINAL')
+            model.save(fpath + 'DIRECT_FINAL')
             print("Writing FINAL model. N_epochs = " + str(n_epochs + nn_epochs))
             break
         else:
             n_epochs = n_epochs + epoch_period
-            model.save(fpath + 'TEMP.' + str(n_epochs))
+            model.save(fpath + 'DIRECT_TEMP.' + str(n_epochs))
             print("Writing model " + str(n_epochs))
 
         del model
-        model = tf.keras.models.load_model(fpath + 'TEMP.' + str(n_epochs))
+        model = tf.keras.models.load_model(fpath + 'DIRECT_TEMP.' + str(n_epochs))
 
     # extract weights to save as simpler model without custom functions
     # layers 2,3,4,5,9 have weights
@@ -634,22 +486,6 @@ if not final_evaluation:
     #     (inputs, initial_state= [mlp_dense_inp1,mlp_dense_inp2])
     # hidden2 = layer_rnn2(hidden)
     # outputs = TimeDistributed(layers.Dense(ny, activation=activ_last),name='dense_output')(hidden2)
-    if only_albedo_as_auxinput:
-        newmodel = Model(inputs=[inputs, inp_aux_albedo], outputs=outputs)
-    else:
-        newmodel = Model(inputs=[inputs, inp_aux_mu, inp_aux_albedo], outputs=outputs)
-    newmodel.compile()
-    newmodel.summary()
-    # add weights
-    i = 0
-    for layer in newmodel.layers:
-      w = layer.weights
-      try:      
-        w[0]
-        layer.weights = all_weights[i]
-        i = i + 1
-      except:
-        pass # not all layers have weights !
 
 
 

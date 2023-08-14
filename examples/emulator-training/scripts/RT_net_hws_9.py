@@ -984,7 +984,7 @@ def train():
     log_dir = datadir + "/logs/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     filename_direct_model = datadir + "/Direct_Model-"
     filename_full_model = datadir + "/Full_Model-"
-    model_name = "2.h2o_sq." #"2.Dropout."
+    model_name = "mass.h2o_sq." #"2.Dropout."
 
     # Computing optical depth for each layer
 
@@ -1059,7 +1059,7 @@ def train():
         )
         direct_model.summary()
 
-    if True:
+    if False:
         n_epochs = 900
         direct_model.load_weights((filename_direct_model + model_name + str(n_epochs)))
         for layer in direct_model.layers:
