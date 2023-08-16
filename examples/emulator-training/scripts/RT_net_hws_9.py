@@ -25,6 +25,7 @@ from tensorflow.python.framework.ops import disable_eager_execution
 
 from RT_data_hws import load_data_direct, load_data_full, absorbed_flux_to_heating_rate
 
+
 class DenseFFN(Layer):
     """
     n_hidden[n_layers]: array of the number of nodes per layer
@@ -36,8 +37,11 @@ class DenseFFN(Layer):
         self.n_outputs = n_outputs
         self.minval = minval
         self.maxval = maxval
+        l2_regularization = 0.000
 
-        self.hidden = [Dense(units=n, activation='relu',kernel_initializer=initializers.RandomUniform(minval=minval, maxval=maxval), bias_initializer=initializers.RandomNormal(mean=1.0, stddev=0.05)) for n in n_hidden]
+        self.hidden = [Dense(units=n, activation='relu',kernel_initializer=initializers.RandomUniform(minval=minval, maxval=maxval),                         
+                             #kernel_regularizer=tf.keras.regularizers.l2(l2_regularization),
+                            bias_initializer=initializers.RandomNormal(mean=1.0, stddev=0.05)) for n in n_hidden]
         
         #self.batch_normalization = [tf.keras.layers.BatchNormalization(**kwargs) for _ in n_hidden]
 
@@ -76,27 +80,40 @@ class OpticalDepth(Layer):
         self.n_u = 13
         self.n_n2o = 3
         self.n_ch4 = 9
+        l2_regularization = 0.0001
 
         self.net_lw = Dense(units=self.n_channels,
                         activation=tf.keras.activations.relu,  
-                        name = 'net_lw',                         
-                        kernel_initializer=initializers.RandomUniform(minval=0.38, maxval=0.62),use_bias=False)
+                        name = 'net_lw',  
+                        #kernel_constraint=tf.keras.constraints.NonNeg(),
+                        #kernel_regularizer=tf.keras.regularizers.l2(l2_regularization),
+                        kernel_initializer=initializers.RandomUniform(minval=0.38, maxval=1.24), #maxval=0.62
+                        use_bias=False)
                         #kernel_initializer=initializers.RandomUniform(minval=0.10, maxval=1.0),use_bias=False)
 
         self.net_iw = Dense(units=self.n_channels,
                         activation=tf.keras.activations.relu,
-                        name = 'net_iw',                                      
-                        kernel_initializer=initializers.RandomUniform(minval=0.38, maxval=0.62),use_bias=False)
+                        name = 'net_iw',         
+                        #kernel_constraint=tf.keras.constraints.NonNeg(),  
+                        #kernel_regularizer=tf.keras.regularizers.l2(l2_regularization),
+                        kernel_initializer=initializers.RandomUniform(minval=0.38, maxval=1.24), #maxval=0.62
+                        use_bias=False)
 
         self.net_h2o = Dense(units=self.n_channels,
                         activation=tf.keras.activations.relu,   
-                        name = 'net_h2o',                                  
-                        kernel_initializer=initializers.RandomUniform(minval=0.38, maxval=0.62),use_bias=False)
+                        name = 'net_h2o',
+                        #kernel_constraint=tf.keras.constraints.NonNeg(),
+                        #kernel_regularizer=tf.keras.regularizers.l2(l2_regularization),
+                        kernel_initializer=initializers.RandomUniform(minval=0.38, maxval=1.24), #maxval=0.62
+                        use_bias=False)
 
         self.net_h2o_sq = Dense(units=1, #self.n_channels,
                         activation=tf.keras.activations.relu,   
-                        name = 'net_h2o_sq',                                  
-                        kernel_initializer=initializers.RandomUniform(minval=0.38, maxval=0.62),use_bias=False)
+                        name = 'net_h2o_sq',
+                        #kernel_constraint=tf.keras.constraints.NonNeg(), 
+                        #kernel_regularizer=tf.keras.regularizers.l2(l2_regularization),
+                        kernel_initializer=initializers.RandomUniform(minval=0.38, maxval=1.24), #maxval=0.62
+                        use_bias=False)
         """
         self.net_ke_h2o = Dense(units=self.n_channels, # 1,
                         #activation=tf.keras.activations.relu,
@@ -116,7 +133,10 @@ class OpticalDepth(Layer):
         self.net_o3 = Dense(units=self.n_o3,
                         activation=tf.keras.activations.relu,  
                         name = 'net_o3',                                 
-                        kernel_initializer=initializers.RandomUniform(minval=0.38, maxval=0.62),use_bias=False)
+                        #kernel_constraint=tf.keras.constraints.NonNeg(),
+                        #kernel_regularizer=tf.keras.regularizers.l2(l2_regularization),
+                        kernel_initializer=initializers.RandomUniform(minval=0.38, maxval=1.24), #maxval=0.62
+                        use_bias=False)
         """
         self.net_ke_o3 = Dense(units=self.n_o3,  #1,
                         #activation=tf.keras.activations.relu,
@@ -131,8 +151,11 @@ class OpticalDepth(Layer):
 
         self.net_co2 = Dense(units=self.n_co2,
                         activation=tf.keras.activations.relu, 
-                        name = 'net_co2',                                     
-                        kernel_initializer=initializers.RandomUniform(minval=0.38, maxval=0.62),use_bias=False)
+                        name = 'net_co2',      
+                        #kernel_constraint=tf.keras.constraints.NonNeg(),  
+                        #kernel_regularizer=tf.keras.regularizers.l2(l2_regularization),
+                        kernel_initializer=initializers.RandomUniform(minval=0.38, maxval=1.24), #maxval=0.62
+                        use_bias=False)
         
         """
         self.net_ke_co2 = Dense(units=self.n_co2,  #1,
@@ -148,8 +171,11 @@ class OpticalDepth(Layer):
 
         self.net_u = Dense(units=self.n_u,
                         activation=tf.keras.activations.relu,    
-                        name = 'net_u',                                   
-                        kernel_initializer=initializers.RandomUniform(minval=0.38, maxval=0.62),use_bias=False)
+                        name = 'net_u',  
+                        #kernel_constraint=tf.keras.constraints.NonNeg(), 
+                        #kernel_regularizer=tf.keras.regularizers.l2(l2_regularization),
+                        kernel_initializer=initializers.RandomUniform(minval=0.38, maxval=1.24), #maxval=0.62
+                        use_bias=False)
         
         """
         self.net_ke_u = Dense(units=self.n_u,   #1,
@@ -165,8 +191,11 @@ class OpticalDepth(Layer):
 
         self.net_n2o = Dense(units=self.n_n2o,
                         activation=tf.keras.activations.relu,       
-                        name = 'net_n2o',                                      
-                        kernel_initializer=initializers.RandomUniform(minval=0.38, maxval=0.62),use_bias=False)
+                        name = 'net_n2o',      
+                        #kernel_constraint=tf.keras.constraints.NonNeg(), 
+                        #kernel_regularizer=tf.keras.regularizers.l2(l2_regularization),
+                        kernel_initializer=initializers.RandomUniform(minval=0.38, maxval=1.24), #maxval=0.62
+                        use_bias=False)
 
         """
         self.net_ke_n2o = Dense(units=self.n_n2o,   #1,
@@ -182,8 +211,11 @@ class OpticalDepth(Layer):
 
         self.net_ch4 = Dense(units=self.n_ch4,
                         activation=tf.keras.activations.relu, 
-                        name = 'net_ch4',                                            
-                        kernel_initializer=initializers.RandomUniform(minval=0.38, maxval=0.62),use_bias=False)
+                        name = 'net_ch4',          
+                        #kernel_constraint=tf.keras.constraints.NonNeg(), 
+                        #kernel_regularizer=tf.keras.regularizers.l2(l2_regularization),
+                        kernel_initializer=initializers.RandomUniform(minval=0.38, maxval=1.24), #maxval=0.62
+                        use_bias=False)
         
         """
         self.net_ke_ch4 = Dense(units=self.n_ch4, #1,
@@ -290,7 +322,7 @@ class LayerPropertiesDirect(Layer):
 
     def call(self, input, **kargs):
 
-        tau, mu = input
+        tau, mu, u = input
 
         #print(f"LayerProperties(): shape of taus = {tau.shape}")
 
@@ -301,6 +333,9 @@ class LayerPropertiesDirect(Layer):
         #print(" ")
 
         t_direct = tf.math.exp(-tau_total / (mu + 0.0000001))
+
+        #u = tf.expand_dims(u,axis=1)
+        #t_direct = tf.math.exp(-(tau_total * u) / (mu + 0.0000001))
 
         #print(f'Shape of t_direct = {t_direct.shape}')
         #print(" ")
@@ -760,8 +795,9 @@ class ConsolidateFluxDirect(Layer):
 
         # Sum across channels
 
+        flux_down_direct = tf.squeeze(flux_down_direct,axis=3)     
         flux_down_direct = tf.math.reduce_sum(flux_down_direct, axis=2)
-        flux_down_direct = tf.squeeze(flux_down_direct,axis=2)     
+
 
         return flux_down_direct
 
@@ -923,9 +959,9 @@ class OriginalLoss(tf.keras.losses.Loss):
         return cls(**config)
     
 def modify_weights_1(model):
-    factor_1 = 0.85  # decrease in original positive weights #0.92, 1.1, 0.86; 0.9, 1.1
-    factor_2 = 0.3  # Initial fraction of possible weight for negative weights #0.1, 0.2, 0.35; 0.3, 0.2
-    ke_index_list = [0, 1, 2, 11, 20, 29, 38, 47]
+    factor_1 = 0.92  # decrease in original positive weights #0.92, 1.1, 0.86; 0.9, 1.1
+    factor_2 = 0.1  # Initial fraction of possible weight for negative weights #0.1, 0.2, 0.35; 0.3, 0.2
+    ke_index_list = [0, 1, 2, 3, 20, 29, 38, 47, 56]
     for layer in model.layers:
         if layer.name == 'optical_depth':
             layer_weights = layer.get_weights()
@@ -976,6 +1012,7 @@ def train():
     n_epochs    = 0
     epochs_period = 100
     patience    = 1000 #25
+    l2_regularization = 0.00001
 
     datadir     = "/home/hws/tmp/"
     filename_training       = datadir + "/RADSCHEME_data_g224_CAMS_2009-2018_sans_2014-2015.2.nc"
@@ -984,7 +1021,7 @@ def train():
     log_dir = datadir + "/logs/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     filename_direct_model = datadir + "/Direct_Model-"
     filename_full_model = datadir + "/Full_Model-"
-    model_name = "mass.h2o_sq." #"2.Dropout."
+    model_name = "mass.2.h2o_sq." #"2.Dropout."
 
     # Computing optical depth for each layer
 
@@ -997,6 +1034,9 @@ def train():
     o3 = Input(shape=(n_layers, 1), batch_size=batch_size, name="o3_input") 
 
     co2 = Input(shape=(n_layers, 1), batch_size=batch_size, name="co2_input") 
+
+    o2 = Input(shape=(n_layers, 1), batch_size=batch_size, name="o2_input") 
+
     u = Input(shape=(n_layers, 1), batch_size=batch_size, name="u_input") 
 
     n2o = Input(shape=(n_layers, 1), batch_size=batch_size, name="n2o_input") 
@@ -1012,16 +1052,18 @@ def train():
 
     mu = Input(shape=(n_layers, 1), batch_size=batch_size, name="mu_input") 
 
-    t_direct = TimeDistributed(LayerPropertiesDirect(), name="layer_properties")([tau, mu])
+    t_direct = TimeDistributed(LayerPropertiesDirect(), name="layer_properties")([tau, mu, u])
 
     # Initializing downwelling radiative flux and splitting it into "channels"
 
     total_flux_down_above_direct = Input(shape=(1), batch_size=batch_size, name="flux_down_above_direct_input")
 
     flux_down_above_direct = Dense(units=n_channels,
-                                   activation=None, #'softmax', 
+                                   activation=None, #'softmax', # softmax is done below!
                                    use_bias=False,
+                                    #kernel_regularizer=tf.keras.regularizers.l2(l2_regularization),
                                    #kernel_initializer=initializers.RandomUniform(minval=0.1, maxval=1.0),
+                                   #kernel_constraint=tf.keras.constraints.NonNeg(), 
                                     kernel_initializer=initializers.RandomUniform(minval=0.4, maxval=0.6),name='flux_down_above_direct')(total_flux_down_above_direct)
     
     flux_down_above_direct = tf.keras.layers.Dropout(0.0)(flux_down_above_direct) # 0.15, 0.075, # 0.0375
@@ -1043,7 +1085,7 @@ def train():
     weight_profile_direct = 1.0 / tf.reduce_mean(target_flux_down_direct, axis=0, keepdims=True)
 
     if True:
-        direct_model = Model(inputs=[mu, lw, h2o, o3, co2, u, n2o, ch4, h2o_sq, t_p, total_flux_down_above_direct, toa, target_flux_down_direct, delta_pressure], 
+        direct_model = Model(inputs=[mu, lw, h2o, o3, co2, o2, u, n2o, ch4, h2o_sq, t_p, total_flux_down_above_direct, toa, target_flux_down_direct, delta_pressure], 
         outputs=[flux_down_direct])
 
         direct_model.add_metric(heating_rate_loss_direct(target_flux_down_direct, flux_down_direct, toa, delta_pressure),name="hr")
@@ -1060,7 +1102,7 @@ def train():
         direct_model.summary()
 
     if False:
-        n_epochs = 900
+        n_epochs =1100
         direct_model.load_weights((filename_direct_model + model_name + str(n_epochs)))
         for layer in direct_model.layers:
             if layer.name == 'flux_down_above_direct':
@@ -1070,7 +1112,7 @@ def train():
                 for k, weights in enumerate(layer.weights):
                     print(f'Weights {k}: {weights}')
 
-        #model = modify_weights_1(direct_model)
+        direct_model = modify_weights_1(direct_model)
         #writer = tf.summary.create_file_writer(log_dir)
         #tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=log_dir, histogram_freq=1, write_images=False, profile_batch=(2, 4))
 

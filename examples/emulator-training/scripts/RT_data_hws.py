@@ -50,15 +50,24 @@ def load_data(file_name, n_channels):
     # kg / m^2
     mass_coordinate = delta_pressure / g
 
-    composition = composition * mass_coordinate
+    vmr_h2o = np.copy(composition[:,:,0:1])
+    m_dry = 28.964
+    m_h2o =  18.016
 
-    lwp = data.variables['cloud_lwp'][:].data / 1000.0
-    iwp = data.variables['cloud_iwp'][:].data / 1000.0
+    mass_ratio = vmr_h2o * m_h2o / m_dry
+    total_mass = mass_coordinate
+    dry_mass  = total_mass / (1.0 + mass_ratio)
+    wet_mass = dry_mass * vmr_h2o
+
+    composition = composition * dry_mass
+
+    lwp = data.variables['cloud_lwp'][:].data 
+    iwp = data.variables['cloud_iwp'][:].data 
 
     lwp     = np.reshape(lwp,  (n_samples,n_layers,1))    
     iwp     = np.reshape(iwp,  (n_samples,n_layers,1))
 
-    composition = np.concatenate([composition,mass_coordinate,lwp,iwp],axis=2)
+    composition = np.concatenate([composition,dry_mass,lwp,iwp],axis=2)
     n_composition = n_composition + 3
 
     # h2o o3 co2 n2o ch4 mass lwp iwp
@@ -69,7 +78,7 @@ def load_data(file_name, n_channels):
     #zero = np.reshape(zero, (1, 1, -1))
     composition_max = composition_max.reshape((1,1,-1))
 
-    composition = composition / composition_max
+    #composition = composition / composition_max
 
     null_lw = np.zeros((n_samples, n_layers, 0),dtype=np.float32)
     null_iw = np.zeros((n_samples, n_layers, 0),dtype=np.float32)
@@ -141,7 +150,7 @@ def load_data_2(file_name, n_channels):
     o = [outputs[0]]
     return i, o
 
-def load_data_full(file_name, n_channels):
+def load_data_full(file_name, n_channels, use_correction_factor=True):
     data = xr.open_dataset(file_name)
     composition = data.variables['rrtmgp_sw_input'][:].data
     (n_exp,n_col,n_layers,n_composition) = composition.shape
@@ -151,7 +160,6 @@ def load_data_full(file_name, n_channels):
     # h2o o3 co2 n2o ch4 mass lwp iwp
     composition = np.reshape(composition, (n_samples,n_layers,n_composition))
     t_p = composition[:,:,0:2].data
-
 
     log_p = np.log(composition[:,:,1:2].data)
     t_p = np.concatenate([t_p, log_p],axis=2)
@@ -175,9 +183,14 @@ def load_data_full(file_name, n_channels):
     # Deriving mass coordinate from pressure difference: mass per area
     # kg / m^2:
 
-    vmr_h2o = np.copy(composition[:,:,2])
+    vmr_h2o = np.copy(composition[:,:,2:3])
     m_dry = 28.964
     m_h2o =  18.016
+
+    mass_ratio = vmr_h2o * m_h2o / m_dry
+    total_mass = (delta_pressure_2 / g) 
+    dry_mass  = total_mass / (1.0 + mass_ratio)
+    wet_mass = dry_mass * vmr_h2o
 
     # assumes gases are given in MOLE FRACTIONS wrt to total air (dry + water vapor)
     # There will be more total moles if water vapor is present since
@@ -190,29 +203,49 @@ def load_data_full(file_name, n_channels):
     # Ukkonen seems to follow this by naming as "vmr"
     correction_factor_vmr = m_dry * (1.0 + vmr_h2o) / (m_dry + m_h2o * vmr_h2o)
 
-    u = np.expand_dims(correction_factor_vmr,axis=2) * (delta_pressure_2 / g) / 4.1637085e+03     #4.1637085e+02
+    if use_correction_factor:
+
+        composition = composition[:,:,2:] * dry_mass
+    else:   
+        u = (delta_pressure_2 / g) / 4.1637085e+02
+        composition = composition[:,:,2:] 
 
     ####
 
-    composition = composition[:,:,2:].data * u 
+    #composition = composition[:,:,2:].data * u 
 
     ####
 
-    h2o = composition[:,:,:1] / np.array([7.9141545e+02],dtype=np.float32)    # 7.9141545e+00
 
-    h2o_sq = np.square(h2o * 10.0)
+    #composition  h2o o3 co2 n2o ch4 mass lwp iwp;
+    #  [3.9838977e-02 1.0478574e-05 6.5954542e-04 3.3845021e-07 5.0880271e-06 4.1637085e+02 2.1337292e-01 1.9692309e-01]
 
-    o3 = composition[:,:,1:2] / np.array([5.4156350],dtype=np.float32)     #  np.array([5.4156350e-04])
-    co2 = composition[:,:,2:3] / np.array([1.6823387e-01],dtype=np.float32)    # 1.6823387e-01
-    n2o = composition[:,:,3:4] / np.array([1.3695081e-05],dtype=np.float32)    # 1.3695081e-04
-    ch4 = composition[:,:,4:5] / np.array([7.9427415e-04],dtype=np.float32)    # 7.9427415e-04
-    #u = composition[:,:,8:9].data / np.array([4.1637085e+02], ,dtype=np.float32)     # 4.1637085e+02
+    if use_correction_factor:
+        h2o = composition[:,:,:1] / np.array([7.7918200],dtype=np.float32)    
+
+        h2o_sq = np.square(h2o)
+
+        o3 = composition[:,:,1:2] / np.array([5.4156192e-04],dtype=np.float32)     
+        co2 = composition[:,:,2:3] / np.array([1.6818701e-01],dtype=np.float32)   
+        n2o = composition[:,:,3:4] / np.array([1.3688966e-04],dtype=np.float32)  
+        ch4 = composition[:,:,4:5] / np.array([7.9373247e-04],dtype=np.float32) 
+        u = dry_mass / np.array([4.1634583e+02],dtype=np.float32) 
+    else:
+        h2o = composition[:,:,:1] / np.array([3.9838977e-02],dtype=np.float32)    
+
+        h2o_sq = np.square(h2o * 10.0)
+
+        o3 = composition[:,:,1:2] / np.array([1.0478574e-05],dtype=np.float32)    
+        co2 = composition[:,:,2:3] / np.array([6.5954542e-04],dtype=np.float32)   
+        n2o = composition[:,:,3:4] / np.array([3.3845021e-07],dtype=np.float32)   
+        ch4 = composition[:,:,4:5] / np.array([5.0880271e-06],dtype=np.float32)   
 
     mu = data.variables['mu0'][:].data 
     mu = np.reshape(mu,(n_samples,1,1))
     mu = np.repeat(mu,axis=1,repeats=n_layers)
 
     mu_bar = np.zeros((n_samples,1), dtype=np.float32)
+    o2 = np.full(shape=(n_samples,n_layers, 1), fill_value=0.2, dtype=np.float32)
 
     rsd = data.variables['rsd'][:].data
     rsd     = rsd.reshape((n_samples,n_levels, 1))
@@ -231,10 +264,10 @@ def load_data_full(file_name, n_channels):
 
     #lwp = data.variables['cloud_lwp'][:].data / 2.1337292e-03  #original
 
-    lwp = data.variables['cloud_lwp'][:].data / 2.1337292e-01
+    lwp = data.variables['cloud_lwp'][:].data / 2.1337292e-00   # 2.1337292e+02
     lwp     = np.reshape(lwp,  (n_samples,n_layers,1))   
 
-    iwp = data.variables['cloud_iwp'][:].data / 1.9692309e-01
+    iwp = data.variables['cloud_iwp'][:].data / 1.9692309e-00   #1.9692309e+02
     iwp     = np.reshape(iwp,  (n_samples,n_layers,1))  
 
     lwp = np.concatenate([lwp, iwp], axis=2) 
@@ -261,7 +294,7 @@ def load_data_full(file_name, n_channels):
 
     surface = [surface_albedo, np.copy(surface_albedo), surface_absorption, np.copy(surface_absorption)]
 
-    inputs = (mu, mu_bar, lwp, h2o, o3, co2, u, n2o, ch4, h2o_sq, t_p, *surface, flux_down_above_direct, flux_down_above_diffuse, toa[:,:,0], rsd_direct, 
+    inputs = (mu, mu_bar, lwp, h2o, o3, co2, o2, u, n2o, ch4, h2o_sq, t_p, *surface, flux_down_above_direct, flux_down_above_diffuse, toa[:,:,0], rsd_direct, 
               rsd, rsu, absorbed_flux, delta_pressure)
     outputs = (rsd_direct, rsd, rsu, absorbed_flux)
 
@@ -269,10 +302,10 @@ def load_data_full(file_name, n_channels):
 
 def load_data_direct(file_name, n_channels):
     tmp_inputs, tmp_outputs = load_data_full(file_name, n_channels)
-    mu, mu_bar, lwp, h2o, o3, co2, u, n2o, ch4, h2o_sq, t_p,s1, s2, \
+    mu, mu_bar, lwp, h2o, o3, co2, o2, u, n2o, ch4, h2o_sq, t_p,s1, s2, \
         s3, s4,flux_down_above_direct, flux_down_above_diffuse, \
             toa, rsd_direct, rsd, rsu, absorbed_flux, delta_pressure = tmp_inputs
-    inputs = (mu,lwp, h2o, o3, co2, u, n2o, ch4, h2o_sq, t_p, flux_down_above_direct,  toa, rsd_direct, delta_pressure)
+    inputs = (mu,lwp, h2o, o3, co2, o2, u, n2o, ch4, h2o_sq, t_p, flux_down_above_direct,  toa, rsd_direct, delta_pressure)
     outputs = (tmp_outputs[0])
 
     return inputs, outputs
@@ -304,8 +337,8 @@ def get_max():
     #print(f'h2o ^ 0.25 = {max[0]**0.25}')
     #print(f'o3 ^ 0.25 = {max[1]**0.25}')
 
-"""
+
 if __name__ == "__main__":
     print(tf.__version__)
-    get_max()  
-"""
+    get_max()
+

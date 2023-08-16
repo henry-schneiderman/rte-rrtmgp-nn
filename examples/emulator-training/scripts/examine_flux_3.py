@@ -143,7 +143,7 @@ print(f'half pressure layers = {0.5 * (pres_layer[0,200,1:].data + pres_layer[0,
 
 print(f'levels in terms of layers = {orig_level[:]}')
 
-if False:
+if True:
     print("temp layer: ")
     print(str(temp_layer[0,200,:].data))
 
@@ -154,7 +154,11 @@ if False:
     print (" ")
 
     delta_p = orig_pres_level[:,:,1:] - orig_pres_level[:,:,:-1]
-    print(f"delta_p mean = {np.mean(delta_p,axis=(0,1))}")
+
+    print(f"delta_p mean = {np.mean(delta_p,axis=(0,1),dtype=np.float64)}")
+    print(f"delta_p std = {np.std(delta_p,axis=(0,1))}")
+    print(f"delta_p min = {np.min(delta_p,axis=(0,1))}")
+    print(f"delta_p max = {np.max(delta_p,axis=(0,1))}")
     delta_delta_p = delta_p[:,:,1:] / delta_p[:,:,:-1]
     print(f"delta_delta_p mean = {np.mean(delta_delta_p,axis=(0,1))}")
     delta_co2 = orig_co2[:,:,1:] / orig_co2[:,:,:-1]
