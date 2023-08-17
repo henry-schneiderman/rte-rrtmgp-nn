@@ -52,22 +52,28 @@ def load_data(file_name, n_channels):
 
     vmr_h2o = np.copy(composition[:,:,0:1])
     m_dry = 28.964
-    m_h2o =  18.016
+    m_h2o =  18.01528
 
     mass_ratio = vmr_h2o * m_h2o / m_dry
     total_mass = mass_coordinate
     dry_mass  = total_mass / (1.0 + mass_ratio)
-    wet_mass = dry_mass * vmr_h2o
+    h2o = dry_mass * mass_ratio
 
-    composition = composition * dry_mass
+    mass_factor = np.array([47.99820, 44.0095, 44.01280, 16.0425]) / m_dry
+    composition = composition[:,:,1:] * np.reshape(mass_factor, (1, 1, -1))
 
+    if False:
+        composition = composition * dry_mass
+    else:
+        composition = composition * dry_mass / (1.0 + composition)
+        
     lwp = data.variables['cloud_lwp'][:].data 
     iwp = data.variables['cloud_iwp'][:].data 
 
     lwp     = np.reshape(lwp,  (n_samples,n_layers,1))    
     iwp     = np.reshape(iwp,  (n_samples,n_layers,1))
 
-    composition = np.concatenate([composition,dry_mass,lwp,iwp],axis=2)
+    composition = np.concatenate([h2o, composition,dry_mass,lwp,iwp],axis=2)
     n_composition = n_composition + 3
 
     # h2o o3 co2 n2o ch4 mass lwp iwp
@@ -150,7 +156,7 @@ def load_data_2(file_name, n_channels):
     o = [outputs[0]]
     return i, o
 
-def load_data_full(file_name, n_channels, use_correction_factor=True):
+def load_data_full(file_name, n_channels, use_ratio=False):
     data = xr.open_dataset(file_name)
     composition = data.variables['rrtmgp_sw_input'][:].data
     (n_exp,n_col,n_layers,n_composition) = composition.shape
@@ -180,65 +186,45 @@ def load_data_full(file_name, n_channels, use_correction_factor=True):
     delta_pressure = pressure[:,1:] - pressure[:,:-1]
     delta_pressure_2 = np.reshape(np.copy(delta_pressure),(n_samples,n_layers, 1))
 
-    # Deriving mass coordinate from pressure difference: mass per area
-    # kg / m^2:
-
+    # Assumes vmr_h2o = moles-h2o / moles-dry-air
     vmr_h2o = np.copy(composition[:,:,2:3])
     m_dry = 28.964
-    m_h2o =  18.016
+    m_h2o =  18.01528
 
+    # mass ratio = mass-h2o / mass-dry-air
     mass_ratio = vmr_h2o * m_h2o / m_dry
+
+    # Deriving mass coordinate from pressure difference: mass per area
+    # kg / m^2:
     total_mass = (delta_pressure_2 / g) 
     dry_mass  = total_mass / (1.0 + mass_ratio)
-    wet_mass = dry_mass * vmr_h2o
+    #wet_mass = total_mass * mass_ratio / (1.0 + mass_ratio)= mass_ratio * dry_mass
 
-    # assumes gases are given in MOLE FRACTIONS wrt to total air (dry + water vapor)
-    # There will be more total moles if water vapor is present since
-    # water weights less than air
-    correction_factor_mf = m_dry / (((1.0 - vmr_h2o) * m_dry) + m_h2o * vmr_h2o)
+    #h2o = composition[:,:,2:3] * dry_mass / np.array([7.7918200],dtype=np.float32)    
+    h2o = mass_ratio * dry_mass / np.array([4.84642649],dtype=np.float32)   
 
-    # Alternatively:
-    # assume gases are given as VOLUMENTRIC MIXING RATIOS, ie. in terms of moles
-    # wrt to total air (dry + wet)
-    # Ukkonen seems to follow this by naming as "vmr"
-    correction_factor_vmr = m_dry * (1.0 + vmr_h2o) / (m_dry + m_h2o * vmr_h2o)
-
-    if use_correction_factor:
-
-        composition = composition[:,:,2:] * dry_mass
-    else:   
-        u = (delta_pressure_2 / g) / 4.1637085e+02
-        composition = composition[:,:,2:] 
-
-    ####
-
-    #composition = composition[:,:,2:].data * u 
-
-    ####
-
+    # conversion to mass ratio wrt to dry air
+    # o3 co2 n2o ch4 
+    mass_factor = np.array([47.99820, 44.0095, 44.01280, 16.0425]) / m_dry
+    composition = composition[:,:,3:] * np.reshape(mass_factor, (1, 1, -1))
+    if use_ratio:
+        composition = composition * dry_mass / (1.0 + composition)
+    else:
+        composition = composition * dry_mass
 
     #composition  h2o o3 co2 n2o ch4 mass lwp iwp;
-    #  [3.9838977e-02 1.0478574e-05 6.5954542e-04 3.3845021e-07 5.0880271e-06 4.1637085e+02 2.1337292e-01 1.9692309e-01]
+    #max = [7.7918200e+00 5.4156192e-04 1.6818701e-01 1.3688966e-04 
+    # 7.9373247e-04 4.1634583e+02 2.1337291e+02 1.9692310e+02]
+    #max = [7.79182005e+00 8.97450472e-04 2.55393449e-01 2.08013207e-04
+    #4.39629856e-04 4.16345825e+02 2.13372910e+02 1.96923096e+02]
 
-    if use_correction_factor:
-        h2o = composition[:,:,:1] / np.array([7.7918200],dtype=np.float32)    
+    h2o_sq = np.square(h2o * 10.0)
 
-        h2o_sq = np.square(h2o)
-
-        o3 = composition[:,:,1:2] / np.array([5.4156192e-04],dtype=np.float32)     
-        co2 = composition[:,:,2:3] / np.array([1.6818701e-01],dtype=np.float32)   
-        n2o = composition[:,:,3:4] / np.array([1.3688966e-04],dtype=np.float32)  
-        ch4 = composition[:,:,4:5] / np.array([7.9373247e-04],dtype=np.float32) 
-        u = dry_mass / np.array([4.1634583e+02],dtype=np.float32) 
-    else:
-        h2o = composition[:,:,:1] / np.array([3.9838977e-02],dtype=np.float32)    
-
-        h2o_sq = np.square(h2o * 10.0)
-
-        o3 = composition[:,:,1:2] / np.array([1.0478574e-05],dtype=np.float32)    
-        co2 = composition[:,:,2:3] / np.array([6.5954542e-04],dtype=np.float32)   
-        n2o = composition[:,:,3:4] / np.array([3.3845021e-07],dtype=np.float32)   
-        ch4 = composition[:,:,4:5] / np.array([5.0880271e-06],dtype=np.float32)   
+    o3 = composition[:,:,0:1] / np.array([8.97450472e-04],dtype=np.float32)     
+    co2 = composition[:,:,1:2] / np.array([2.55393449e-01],dtype=np.float32)   
+    n2o = composition[:,:,2:3] / np.array([2.08013207e-04],dtype=np.float32)  
+    ch4 = composition[:,:,3:4] / np.array([4.39629856e-04],dtype=np.float32) 
+    u = dry_mass / np.array([4.1634583e+02],dtype=np.float32) 
 
     mu = data.variables['mu0'][:].data 
     mu = np.reshape(mu,(n_samples,1,1))
