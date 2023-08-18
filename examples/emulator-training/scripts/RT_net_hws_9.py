@@ -73,6 +73,36 @@ class DenseFFN(Layer):
     def from_config(cls, config):
         return cls(**config)
 
+class ScatteringNet(Layer):
+    """ Computes split of extinguished radiation into absorbed, diffuse transmitted, and
+    diffuse reflected """
+    def __init__(self, **kargs):
+        super().__init__(**kargs)
+        self.n_hidden = [5, 4, 4]
+        
+        self.hidden = [Dense(n_hidden,activation=tf.keras.activations.relu,  
+                        kernel_initializer=tf.keras.initializers.glorot_uniform()) for n_hidden in self.n_hidden]
+        
+        self.output = Dense(units=3, 
+                                activation=tf.keras.activations.softmax,kernel_initializer=tf.keras.initializers.glorot_uniform())
+        
+    def call(self, X, training=False):
+
+        for k, hidden in enumerate(self.hidden):
+            X = hidden(X)
+            #X = tf.nn.relu(self.batch_normalization[k](X, training=training))
+        return self.output(X)
+    
+            
+    def get_config(self):
+        base_config = super(ScatteringNet, self).get_config()
+        config = {
+        }
+        return config.update(base_config)
+    @classmethod
+    def from_config(cls, config):
+        return cls(**config)
+
 class OpticalDepth(Layer):
     def __init__(self, n_channels, **kwargs):
         super().__init__(**kwargs)
@@ -448,6 +478,59 @@ class LayerProperties(Layer):
     def get_config(self):
         base_config = super(LayerProperties, self).get_config()
         config = {
+        }
+        return config.update(base_config)
+    @classmethod
+    def from_config(cls, config):
+        return cls(**config)
+
+
+class LayerPropertiesScattering(Layer):
+    """ Computes split of extinguished radiation into absorbed, diffuse transmitted, and
+    diffuse reflected """
+    def __init__(self, n_channels, **kargs):
+        super().__init__(**kargs)
+        
+        self.n_channels = n_channels
+
+        self.net_direct = [ScatteringNet() for _ in self.n_channels]
+        
+        self.net_diffuse = [ScatteringNet() for _ in self.n_channels]
+
+    def call(self, input, **kargs):
+
+        # tau.shape = (n, 29, n_constituents)
+        tau, mu, mu_bar = input
+
+        mu = tf.expand_dims(mu, axis=2)
+        mu_bar = tf.expand_dims(mu_bar, axis=2)
+
+        tau_total = tf.reduce_sum(tau, axis=-1, keepdims=True)
+
+        t_direct = tf.math.exp(-tau_total / (mu + 0.0000001))
+        t_diffuse = tf.math.exp(-tau_total / (mu_bar + 0.0000001))
+
+        tau_mu = tau / (mu + 0.0000001)
+        tau_mu_bar = tau / (mu_bar + 0.0000001)
+
+        e_split_direct_list = [net(tau_mu[:,k,:]) for k,net in enumerate(self.net_direct)]
+        e_split_diffuse_list = [net(tau_mu_bar[:,k,:]) for k,net in enumerate(self.net_diffuse)]
+
+        e_split_direct = tf.convert_to_tensor(e_split_direct_list)
+        e_split_diffuse = tf.convert_to_tensor(e_split_diffuse_list)
+
+        e_split_direct = tf.transpose(e_split_direct,perm=[1,0,2])
+        e_split_diffuse = tf.transpose(e_split_diffuse,perm=[1,0,2])
+
+        layer_properties = tf.concat([t_direct, t_diffuse, e_split_direct, e_split_diffuse], axis=2)
+
+        return layer_properties
+    
+
+    def get_config(self):
+        base_config = super(LayerPropertiesScattering, self).get_config()
+        config = {
+            'n_channels': self.n_channels,
         }
         return config.update(base_config)
     @classmethod
