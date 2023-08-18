@@ -218,7 +218,7 @@ def load_data_full(file_name, n_channels, use_ratio=False):
     #max = [7.79182005e+00 8.97450472e-04 2.55393449e-01 2.08013207e-04
     #4.39629856e-04 4.16345825e+02 2.13372910e+02 1.96923096e+02]
 
-    h2o_sq = np.square(h2o * 10.0)
+    h2o_sq = np.square(h2o * 10.0) * 0.0
 
     o3 = composition[:,:,0:1] / np.array([8.97450472e-04],dtype=np.float32)     
     co2 = composition[:,:,1:2] / np.array([2.55393449e-01],dtype=np.float32)   

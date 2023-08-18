@@ -25,6 +25,8 @@ from tensorflow.python.framework.ops import disable_eager_execution
 
 from RT_data_hws import load_data_direct, load_data_full, absorbed_flux_to_heating_rate
 
+print("Num GPUs Available: ", len(tf.config.list_physical_devices('GPU')))
+tf.config.optimizer.set_jit(True)
 
 class DenseFFN(Layer):
     """
@@ -292,11 +294,23 @@ class OpticalDepth(Layer):
         tau_ch4_3 = tf.pad(tau_ch4[:,7:], paddings_c, "CONSTANT")
         tau_ch4 = tau_ch4_1 + tau_ch4_2 + tau_ch4_3
 
-        tau_gases = tau_h2o + tau_o3 + tau_co2 + tau_u + tau_n2o + tau_ch4 + tau_h2o_sq
-        tau_gases = tf.expand_dims(tau_gases, axis=2)
         tau_lw = tf.expand_dims(tau_lw, axis=2)
         tau_iw = tf.expand_dims(tau_iw, axis=2)
-        tau = tf.concat((tau_lw, tau_iw, tau_gases), axis=2)
+
+        if False:
+            tau_gases = tau_h2o + tau_o3 + tau_co2 + tau_u + tau_n2o + tau_ch4 + tau_h2o_sq
+            tau_gases = tf.expand_dims(tau_gases, axis=2)
+            tau = tf.concat((tau_lw, tau_iw, tau_gases), axis=2)
+        else:
+            tau_h2o = tf.expand_dims(tau_h2o, axis=2)
+            tau_o3 = tf.expand_dims(tau_o3, axis=2)
+            tau_co2 = tf.expand_dims(tau_co2, axis=2)
+            tau_u = tf.expand_dims(tau_u, axis=2)
+            tau_n2o = tf.expand_dims(tau_n2o, axis=2)
+            tau_ch4 = tf.expand_dims(tau_ch4, axis=2)
+            tau_h2o_sq = tf.repeat(tau_h2o_sq, self.n_channels, axis=1)
+            tau_h2o_sq = tf.expand_dims(tau_h2o_sq, axis=2)
+            tau = tf.concat((tau_lw, tau_iw, tau_h2o, tau_o3, tau_co2, tau_u, tau_n2o, tau_ch4, tau_h2o_sq), axis=2)
 
         return tau
 
@@ -1010,7 +1024,7 @@ def train():
     batch_size  = 2048
     epochs      = 100000
     n_epochs    = 0
-    epochs_period = 100
+    epochs_period = 20
     patience    = 1000 #25
     l2_regularization = 0.00001
 
@@ -1022,6 +1036,7 @@ def train():
     filename_direct_model = datadir + "/Direct_Model-"
     filename_full_model = datadir + "/Full_Model-"
     model_name = "mass.2.h2o_sq." #"2.Dropout."
+    use_direct_model = False
 
     # Computing optical depth for each layer
 
@@ -1084,7 +1099,7 @@ def train():
 
     weight_profile_direct = 1.0 / tf.reduce_mean(target_flux_down_direct, axis=0, keepdims=True)
 
-    if True:
+    if use_direct_model:
         direct_model = Model(inputs=[mu, lw, h2o, o3, co2, o2, u, n2o, ch4, h2o_sq, t_p, total_flux_down_above_direct, toa, target_flux_down_direct, delta_pressure], 
         outputs=[flux_down_direct])
 
@@ -1116,7 +1131,7 @@ def train():
         #writer = tf.summary.create_file_writer(log_dir)
         #tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=log_dir, histogram_freq=1, write_images=False, profile_batch=(2, 4))
 
-    if True:
+    if use_direct_model:
         training_inputs, training_outputs = load_data_direct(filename_training, n_channels)
         validation_inputs, validation_outputs = load_data_direct(filename_validation, n_channels)
         while n_epochs < epochs:
@@ -1143,7 +1158,7 @@ def train():
     # Connect graph for full model
 
     # Learn coefficient for diffuse mu (effective cosine of zenith angle)
-    if False:
+    if not use_direct_model:
         mu_bar_input = Input(shape=(1), batch_size=batch_size, name="mu_bar_input") 
         mu_bar = Dense(units=1,kernel_initializer='zeros', use_bias=False, activation="sigmoid",name="mu_bar")(mu_bar_input)
         mu_bar = tf.repeat(tf.expand_dims(mu_bar,axis=1),repeats=n_layers,axis=1)
@@ -1228,7 +1243,7 @@ def train():
         
         target_absorbed_flux = Input(shape=(n_layers), batch_size=batch_size, name="target_absorbed_flux_input")
 
-        full_model = Model(inputs=[mu, mu_bar_input, lw, h2o, o3, co2, u, n2o, ch4, h2o_sq,t_p, 
+        full_model = Model(inputs=[mu, mu_bar_input, lw, h2o, o3, co2, o2, u, n2o, ch4, h2o_sq,t_p, 
                                 surface_albedo_direct, surface_albedo_diffuse,
                                 surface_absorption_direct, surface_absorption_diffuse,
                                 total_flux_down_above_direct,
@@ -1286,25 +1301,10 @@ def train():
         #print(f"len of output = {len(output)}")
 
 
-        if False:
-            n_epochs_full = 100
+        if True:
+            n_epochs_full = 360
             n_epochs = n_epochs_full
             full_model.load_weights((filename_full_model + model_name + str(n_epochs_full)))
-
-
-            full_model = modify_weights_1(full_model)
-
-            for layer in full_model.layers:
-                if layer.name == 'flux_down_above_direct':
-                    print(f'flux_down_above_direct.weights = {layer.weights}')
-                if layer.name == 'optical_depth':
-                    print("Optical Depth layers")
-                    for k, weights in enumerate(layer.weights):
-                        print(f'Weights {k}: {weights}')
-                if layer.name == 'mu_bar':
-                    print(f"mu bar.weights = {layer.weights}")
-                    for k, weights in enumerate(layer.weights):
-                        print(f'Weights {k}: {weights}')
 
         if False:
             n_epochs_full = 7
@@ -1343,7 +1343,7 @@ def train():
             full_model.summary()
 
 
-        if True:
+        if False:
             n_epochs = 272
             full_model.load_weights((filename_full_model + model_name + str(n_epochs)))
             for layer in full_model.layers:
@@ -1367,7 +1367,7 @@ def train():
             #writer = tf.summary.create_file_writer(log_dir)
             #tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=log_dir, histogram_freq=1, write_images=False) # profile_batch=('2,4'))
 
-        if True:
+        if not use_direct_model:
             training_inputs, training_outputs = load_data_full(filename_training, n_channels)
             validation_inputs, validation_outputs = load_data_full(filename_validation, n_channels)
             while n_epochs < epochs:
