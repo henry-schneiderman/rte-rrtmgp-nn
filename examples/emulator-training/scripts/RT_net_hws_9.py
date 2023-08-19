@@ -80,18 +80,18 @@ class ScatteringNet(Layer):
         super().__init__(**kargs)
         self.n_hidden = [5, 4, 4]
         
-        self.hidden = [Dense(n_hidden,activation=tf.keras.activations.relu,  
+        self.hidden_net = [Dense(n_hidden,activation=tf.keras.activations.relu,  
                         kernel_initializer=tf.keras.initializers.glorot_uniform()) for n_hidden in self.n_hidden]
         
-        self.output = Dense(units=3, 
+        self.output_net = Dense(units=3, 
                                 activation=tf.keras.activations.softmax,kernel_initializer=tf.keras.initializers.glorot_uniform())
         
     def call(self, X, training=False):
 
-        for k, hidden in enumerate(self.hidden):
+        for k, hidden in enumerate(self.hidden_net):
             X = hidden(X)
             #X = tf.nn.relu(self.batch_normalization[k](X, training=training))
-        return self.output(X)
+        return self.output_net(X)
     
             
     def get_config(self):
@@ -493,9 +493,9 @@ class LayerPropertiesScattering(Layer):
         
         self.n_channels = n_channels
 
-        self.net_direct = [ScatteringNet() for _ in self.n_channels]
+        self.net_direct = [ScatteringNet() for _ in range(self.n_channels)]
         
-        self.net_diffuse = [ScatteringNet() for _ in self.n_channels]
+        self.net_diffuse = [ScatteringNet() for _ in range(self.n_channels)]
 
     def call(self, input, **kargs):
 
@@ -1251,7 +1251,7 @@ def train():
         #   Split of extinguished radiation into transmitted, 
         #         reflected, absorbed components
 
-        layer_properties = TimeDistributed(LayerProperties(), name="layer_properties")([tau, mu, mu_bar])
+        layer_properties = TimeDistributed(LayerPropertiesScattering(n_channels), name="layer_properties")([tau, mu, mu_bar])
 
         # Compute multireflection among layers. For each layer, resolve into
         # absorption (a) and reflection (r) where these describe 
@@ -1384,7 +1384,7 @@ def train():
         #print(f"len of output = {len(output)}")
 
 
-        if True:
+        if False:
             n_epochs_full = 360
             n_epochs = n_epochs_full
             full_model.load_weights((filename_full_model + model_name + str(n_epochs_full)))
