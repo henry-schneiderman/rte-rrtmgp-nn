@@ -156,7 +156,7 @@ def load_data_2(file_name, n_channels):
     o = [outputs[0]]
     return i, o
 
-def load_data_full(file_name, n_channels, use_ratio=False):
+def load_data_full(file_name, n_channels, n_coarse_code, use_ratio=False):
     data = xr.open_dataset(file_name)
     composition = data.variables['rrtmgp_sw_input'][:].data
     (n_exp,n_col,n_layers,n_composition) = composition.shape
@@ -280,7 +280,18 @@ def load_data_full(file_name, n_channels, use_ratio=False):
 
     surface = [surface_albedo, np.copy(surface_albedo), surface_absorption, np.copy(surface_absorption)]
 
-    inputs = (mu, mu_bar, lwp, h2o, o3, co2, o2, u, n2o, ch4, h2o_sq, t_p, *surface, flux_down_above_direct, flux_down_above_diffuse, toa[:,:,0], rsd_direct, 
+    coarse_code = np.ones((n_samples,n_layers,1,1), dtype=np.float32)
+    #coarse_code = np.ones((n_samples,n_layers,n_channels,n_coarse_code), dtype=np.float32)
+    if False:
+        sigma = 0.25
+        const_1 = 1.0 / (sigma * np.sqrt(2.0 * np.pi))
+        for i in range(n_channels):
+            ii = i / n_channels
+            for j in range(n_coarse_code):
+                jj = j / n_coarse_code
+                coarse_code[:,:,i,j] = const_1 * np.exp(-0.5 * np.square((ii - jj)/sigma))
+
+    inputs = (mu, mu_bar, lwp, h2o, o3, co2, o2, u, n2o, ch4, h2o_sq, t_p, coarse_code, *surface, flux_down_above_direct, flux_down_above_diffuse, toa[:,:,0], rsd_direct, 
               rsd, rsu, absorbed_flux, delta_pressure)
     outputs = (rsd_direct, rsd, rsu, absorbed_flux)
 
@@ -288,7 +299,7 @@ def load_data_full(file_name, n_channels, use_ratio=False):
 
 def load_data_direct(file_name, n_channels):
     tmp_inputs, tmp_outputs = load_data_full(file_name, n_channels)
-    mu, mu_bar, lwp, h2o, o3, co2, o2, u, n2o, ch4, h2o_sq, t_p,s1, s2, \
+    mu, mu_bar, lwp, h2o, o3, co2, o2, u, n2o, ch4, h2o_sq, t_p, coarse_code,s1, s2, \
         s3, s4,flux_down_above_direct, flux_down_above_diffuse, \
             toa, rsd_direct, rsd, rsu, absorbed_flux, delta_pressure = tmp_inputs
     inputs = (mu,lwp, h2o, o3, co2, o2, u, n2o, ch4, h2o_sq, t_p, flux_down_above_direct,  toa, rsd_direct, delta_pressure)

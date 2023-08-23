@@ -15,6 +15,8 @@ data_out = xr.open_dataset(file_name_out2) #Dataset(file_name_in)
 rsd_direct = data_out.variables["rsd_dir"]
 rsd = data_out.variables["rsd"]
 rsu = data_out.variables["rsu"]
+print(f'Average flux down = {np.mean(np.abs(rsd.data))}')
+print(f'Average flux up = {np.mean(np.abs(rsu.data))}')
 mu = data_out.variables["mu0"]
 pres_level = data_out.variables["pres_level"]
 orig_pres_level = data_in.variables["pres_level"].data
@@ -189,4 +191,6 @@ if True:
 
     print(f"original o2 = {orig_o2[:]}")
     print(f"original n2 = {orig_n2[:]}")
+
+
 

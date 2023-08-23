@@ -1,6 +1,4 @@
-# Same as #6 except can use twice the channels
-# Also stripped out everything except direct down path
-# And Renormalized inputs to be between 0.0 and 1.0 (changes mostly in RT_net_data.py)
+# Same as #9 except different scattering strategy
 
 import os
 import datetime
@@ -398,9 +396,11 @@ class LayerPropertiesDirect(Layer):
 class LayerProperties(Layer):
     """ Computes split of extinguished radiation into absorbed, diffuse transmitted, and
     diffuse reflected """
-    def __init__(self, **kargs):
+    def __init__(self, n_channels, n_coarse_code, **kargs):
         super().__init__(**kargs)
-        self.n_hidden = [5, 4, 4]
+        self.n_channels = n_channels
+        self.n_coarse_code = n_coarse_code
+        self.n_hidden = [6, 6, 6, 6]
         self.input_net_direct = Dense(units=self.n_hidden[0],
                         activation=tf.keras.activations.elu,  
                         kernel_initializer=tf.keras.initializers.glorot_uniform())
@@ -420,19 +420,49 @@ class LayerProperties(Layer):
         
         self.output_net_diffuse = Dense(units=3, 
                                 activation=tf.keras.activations.softmax,kernel_initializer=tf.keras.initializers.glorot_uniform())
+        
+        self.coarse_code_template = np.ones((1,self.n_channels,self.n_coarse_code), dtype=np.float32)
+        sigma = 0.25
+        const_1 = 1.0 / (sigma * np.sqrt(2.0 * np.pi))
+        for i in range(n_channels):
+            ii = i / n_channels
+            for j in range(n_coarse_code):
+                jj = j / n_coarse_code
+                self.coarse_code_template[:,i,j] = const_1 * np.exp(-0.5 * np.square((ii - jj)/sigma))
+
 
     def call(self, input, **kargs):
 
         # tau.shape = (n, 29, n_constituents)
-        tau, mu, mu_bar = input
-
+        #tau, mu, mu_bar, lw, h2o, o3, co2, o2, u, n2o, ch4, t_p, coarse_code = input
+        tau, mu, mu_bar, coarse_code = input
         #print(f"LayerProperties(): shape of taus = {tau.shape}")
 
         mu = tf.expand_dims(mu, axis=2)
         mu_bar = tf.expand_dims(mu_bar, axis=2)
 
-        x_direct = self.input_net_direct(tau / mu)
-        x_diffuse = self.input_net_diffuse(tau / mu_bar)
+        if False:
+            x = tf.concat([lw, h2o, o3, co2, o2, u, n2o, ch4], axis=1)
+
+            x_direct = x / (mu + 0.0000001)
+            x_diffuse = x / (mu_bar + 0.0000001)
+            x_direct = tf.repeat(tf.expand_dims(x_direct,axis=1), self.n_channels,axis=1)
+            x_diffuse = tf.repeat(tf.expand_dims(x_diffuse,axis=1), self.n_channels,axis=1)
+            t_p = tf.repeat(tf.expand_dims(t_p,axis=1), self.n_channels,axis=1)
+
+            x_direct = tf.concat([x_direct, t_p, coarse_code], axis=2)
+            x_diffuse = tf.concat([x_diffuse, t_p, coarse_code], axis=2)
+        else:
+            x_direct = tau / (mu + 0.0000001)
+            x_diffuse = tau / (mu_bar + 0.0000001)
+
+            coarse_code = coarse_code * self.coarse_code_template
+
+            x_direct = tf.concat([x_direct, coarse_code], axis=2)
+            x_diffuse = tf.concat([x_diffuse, coarse_code], axis=2)
+
+        x_direct = self.input_net_direct(x_direct)
+        x_diffuse = self.input_net_diffuse(x_diffuse)
 
         for net in self.hidden_net_direct:
             x_direct = net(x_direct, **kargs)
@@ -458,6 +488,7 @@ class LayerProperties(Layer):
         #print(" ")
 
 
+
         t_direct = tf.math.exp(-tau_total / (mu + 0.0000001))
         t_diffuse = tf.math.exp(-tau_total / (mu_bar + 0.0000001))
 
@@ -478,6 +509,8 @@ class LayerProperties(Layer):
     def get_config(self):
         base_config = super(LayerProperties, self).get_config()
         config = {
+            'n_channels' : self.n_channels,
+            'n_coarse_code' : self.n_coarse_code,
         }
         return config.update(base_config)
     @classmethod
@@ -1104,10 +1137,11 @@ def train():
     n_levels = n_layers + 1
     n_composition = 8 # 6 gases + liquid water + ice water
     n_channels = 29 #58
-    batch_size  = 2048
+    n_coarse_code = 3 #5
+    batch_size  = 2048 #1024 #
     epochs      = 100000
     n_epochs    = 0
-    epochs_period = 50
+    epochs_period = 100
     patience    = 1000 #25
     l2_regularization = 0.00001
 
@@ -1117,7 +1151,7 @@ def train():
     filename_testing  = datadir +  "/RADSCHEME_data_g224_CAMS_2015_true_solar_angles.nc"
     log_dir = datadir + "/logs/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     filename_direct_model = datadir + "/Direct_Model-"
-    filename_full_model = datadir + "/Full_Model-"
+    filename_full_model = datadir + "/Full_Model-Coarse_Code-"
     model_name = "mass.2.h2o_sq." #"2.Dropout."
     use_direct_model = False
 
@@ -1251,7 +1285,13 @@ def train():
         #   Split of extinguished radiation into transmitted, 
         #         reflected, absorbed components
 
-        layer_properties = TimeDistributed(LayerPropertiesScattering(n_channels), name="layer_properties")([tau, mu, mu_bar])
+        #coarse_code = Input(shape=(n_layers, n_channels, n_coarse_code), batch_size=batch_size, name="coarse_code_input") 
+
+        coarse_code = Input(shape=(n_layers, 1, 1), batch_size=batch_size, name="coarse_code_input") 
+
+        #layer_properties = TimeDistributed(LayerProperties(n_channels), name="layer_properties")([tau, mu, mu_bar, lw, h2o, o3, co2, o2, u, n2o, ch4, t_p, coarse_code])
+
+        layer_properties = TimeDistributed(LayerProperties(n_channels,n_coarse_code), name="layer_properties")([tau, mu, mu_bar, coarse_code])
 
         # Compute multireflection among layers. For each layer, resolve into
         # absorption (a) and reflection (r) where these describe 
@@ -1326,7 +1366,7 @@ def train():
         
         target_absorbed_flux = Input(shape=(n_layers), batch_size=batch_size, name="target_absorbed_flux_input")
 
-        full_model = Model(inputs=[mu, mu_bar_input, lw, h2o, o3, co2, o2, u, n2o, ch4, h2o_sq,t_p, 
+        full_model = Model(inputs=[mu, mu_bar_input, lw, h2o, o3, co2, o2, u, n2o, ch4, h2o_sq,t_p, coarse_code,
                                 surface_albedo_direct, surface_albedo_diffuse,
                                 surface_absorption_direct, surface_absorption_diffuse,
                                 total_flux_down_above_direct,
@@ -1385,9 +1425,10 @@ def train():
 
 
         if True:
-            n_epochs_full = 1260
+            n_epochs_full = 500
             n_epochs = n_epochs_full
             full_model.load_weights((filename_full_model + model_name + str(n_epochs_full)))
+            full_model = modify_weights_1(full_model)
 
         if False:
             n_epochs_full = 7
@@ -1451,8 +1492,8 @@ def train():
             #tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=log_dir, histogram_freq=1, write_images=False) # profile_batch=('2,4'))
 
         if not use_direct_model:
-            training_inputs, training_outputs = load_data_full(filename_training, n_channels)
-            validation_inputs, validation_outputs = load_data_full(filename_validation, n_channels)
+            training_inputs, training_outputs = load_data_full(filename_training, n_channels, n_coarse_code)
+            validation_inputs, validation_outputs = load_data_full(filename_validation, n_channels, n_coarse_code)
             while n_epochs < epochs:
                 history = full_model.fit(x=training_inputs, y=training_outputs,
                         epochs = epochs_period, batch_size=batch_size,
