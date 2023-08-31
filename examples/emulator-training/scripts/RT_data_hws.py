@@ -2,7 +2,7 @@
 import sys
 import numpy as np
 import xarray as xr
-import tensorflow as tf
+
 
 from netCDF4 import Dataset
 
@@ -218,7 +218,7 @@ def load_data_full(file_name, n_channels, n_coarse_code, use_ratio=False):
     #max = [7.79182005e+00 8.97450472e-04 2.55393449e-01 2.08013207e-04
     #4.39629856e-04 4.16345825e+02 2.13372910e+02 1.96923096e+02]
 
-    h2o_sq = np.square(h2o * 10.0) * 0.0
+    h2o_sq = np.square(h2o * 10.0) #* 0.0
 
     o3 = composition[:,:,0:1] / np.array([8.97450472e-04],dtype=np.float32)     
     co2 = composition[:,:,1:2] / np.array([2.55393449e-01],dtype=np.float32)   
@@ -264,9 +264,9 @@ def load_data_full(file_name, n_channels, n_coarse_code, use_ratio=False):
     flux_down_above_direct = np.ones([n_samples,1],dtype='float32') 
     flux_down_above_diffuse = np.zeros((n_samples, n_channels, 1), dtype=np.float32)
 
-    rsd_direct = tf.squeeze(rsd_direct, axis=2)
-    rsd = tf.squeeze(rsd, axis=2)
-    rsu = tf.squeeze(rsu, axis=2)
+    rsd_direct = np.squeeze(rsd_direct, axis=2)
+    rsd = np.squeeze(rsd, axis=2)
+    rsu = np.squeeze(rsu, axis=2)
 
     surface_albedo = data.variables['sfc_alb'][:].data
     surface_albedo = surface_albedo[:,:,0]
@@ -291,19 +291,39 @@ def load_data_full(file_name, n_channels, n_coarse_code, use_ratio=False):
                 jj = j / n_coarse_code
                 coarse_code[:,:,i,j] = const_1 * np.exp(-0.5 * np.square((ii - jj)/sigma))
 
-    inputs = (mu, mu_bar, lwp, h2o, o3, co2, o2, u, n2o, ch4, h2o_sq, t_p, coarse_code, *surface, flux_down_above_direct, flux_down_above_diffuse, toa[:,:,0], rsd_direct, 
+    if n_coarse_code > 0:
+        inputs = (mu, mu_bar, lwp, h2o, o3, co2, o2, u, n2o, ch4, h2o_sq, t_p, coarse_code, *surface, flux_down_above_direct, flux_down_above_diffuse, toa[:,:,0], rsd_direct, 
+              rsd, rsu, absorbed_flux, delta_pressure)
+    else:
+        inputs = (mu, mu_bar, lwp, h2o, o3, co2, o2, u, n2o, ch4, h2o_sq, t_p, *surface, flux_down_above_direct, flux_down_above_diffuse, toa[:,:,0], rsd_direct, 
               rsd, rsu, absorbed_flux, delta_pressure)
     outputs = (rsd_direct, rsd, rsu, absorbed_flux)
 
     return inputs, outputs
 
 def load_data_direct(file_name, n_channels):
-    tmp_inputs, tmp_outputs = load_data_full(file_name, n_channels)
-    mu, mu_bar, lwp, h2o, o3, co2, o2, u, n2o, ch4, h2o_sq, t_p, coarse_code,s1, s2, \
+    tmp_inputs, tmp_outputs = load_data_full(file_name, n_channels, n_coarse_code=0)
+    mu, mu_bar, lwp, h2o, o3, co2, o2, u, n2o, ch4, h2o_sq, t_p, s1, s2, \
         s3, s4,flux_down_above_direct, flux_down_above_diffuse, \
             toa, rsd_direct, rsd, rsu, absorbed_flux, delta_pressure = tmp_inputs
     inputs = (mu,lwp, h2o, o3, co2, o2, u, n2o, ch4, h2o_sq, t_p, flux_down_above_direct,  toa, rsd_direct, delta_pressure)
     outputs = (tmp_outputs[0])
+
+    return inputs, outputs
+
+def load_data_direct_pytorch(file_name, n_channels):
+    tmp_inputs, tmp_outputs = load_data_full(file_name, n_channels, n_coarse_code=0)
+
+    mu, mu_bar, lwp, h2o, o3, co2, o2, u, n2o, ch4, h2o_sq, t_p, s1, s2, \
+        s3, s4,flux_down_above_direct, flux_down_above_diffuse, \
+            toa, rsd_direct, rsd, rsu, absorbed_flux, delta_pressure = tmp_inputs
+    constituents = np.concatenate([lwp,h2o,o3,co2,u,n2o,ch4],axis=2)
+    inputs = np.concatenate([mu,t_p,constituents], axis=2)
+    toa = np.repeat(toa,t_p.shape[1],axis=1)
+    rsd_direct = np.expand_dims(rsd_direct[:,1:], axis=2)
+    toa = np.expand_dims(toa,axis=2)
+    delta_pressure = np.expand_dims(delta_pressure, axis=2)
+    outputs = np.concatenate([rsd_direct, toa, delta_pressure],axis=2)
 
     return inputs, outputs
 
@@ -336,6 +356,7 @@ def get_max():
 
 
 if __name__ == "__main__":
+    import tensorflow as tf
     print(tf.__version__)
     get_max()
 

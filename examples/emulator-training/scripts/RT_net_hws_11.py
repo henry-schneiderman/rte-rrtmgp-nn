@@ -1089,8 +1089,8 @@ class OriginalLoss(tf.keras.losses.Loss):
         return cls(**config)
     
 def modify_weights_1(model):
-    factor_1 = 0.92  # decrease in original positive weights #0.92, 1.1, 0.86; 0.9, 1.1
-    factor_2 = 0.1  # Initial fraction of possible weight for negative weights #0.1, 0.2, 0.35; 0.3, 0.2
+    factor_1 = 0.98  # decrease in original positive weights #0.92, 1.1, 0.86; 0.9, 1.1
+    factor_2 = 0.0004  # Initial fraction of possible weight for negative weights #0.1, 0.2, 0.35; 0.3, 0.2
     ke_index_list = [0, 1, 2, 3, 20, 29, 38, 47, 56]
     for layer in model.layers:
         if layer.name == 'optical_depth':
@@ -1141,7 +1141,7 @@ def train():
     batch_size  = 2048 #1024 #
     epochs      = 100000
     n_epochs    = 0
-    epochs_period = 100
+    epochs_period = 180 # 180
     patience    = 1000 #25
     l2_regularization = 0.00001
 
@@ -1424,11 +1424,15 @@ def train():
         #print(f"len of output = {len(output)}")
 
 
+        if False:
+            #writer = tf.summary.create_file_writer(log_dir)
+            tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=log_dir, histogram_freq=1, write_images=False, profile_batch=(2, 4))
+
         if True:
-            n_epochs_full = 500
+            n_epochs_full = 3260 #1620
             n_epochs = n_epochs_full
             full_model.load_weights((filename_full_model + model_name + str(n_epochs_full)))
-            full_model = modify_weights_1(full_model)
+            #full_model = modify_weights_1(full_model)
 
         if False:
             n_epochs_full = 7
@@ -1491,6 +1495,13 @@ def train():
             #writer = tf.summary.create_file_writer(log_dir)
             #tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=log_dir, histogram_freq=1, write_images=False) # profile_batch=('2,4'))
 
+
+        testing_inputs, testing_outputs = load_data_full(filename_testing, n_channels, n_coarse_code)
+
+        if False:
+            print("Evaluating model:")
+            full_model.evaluate(testing_inputs, testing_outputs, batch_size=batch_size)
+
         if not use_direct_model:
             training_inputs, training_outputs = load_data_full(filename_training, n_channels, n_coarse_code)
             validation_inputs, validation_outputs = load_data_full(filename_validation, n_channels, n_coarse_code)
@@ -1498,7 +1509,7 @@ def train():
                 history = full_model.fit(x=training_inputs, y=training_outputs,
                         epochs = epochs_period, batch_size=batch_size,
                         shuffle=True, verbose=1,
-                        validation_data=(validation_inputs, validation_outputs))
+                        validation_data=(validation_inputs, validation_outputs)) #,
                         #callbacks = [tensorboard_callback])
                         
                 #,callbacks = [EarlyStopping(monitor='heating_rate',  patience=patience, verbose=1, \
@@ -1509,25 +1520,29 @@ def train():
                 print (" ")
                 n_epochs = n_epochs + epochs_period
 
-                for layer in full_model.layers:
-                    if layer.name == 'flux_down_above_direct':
-                        print(f'flux_down_above_direct.weights = {layer.weights}')
-                    if layer.name == 'optical_depth':
-                        if False:
-                            print(f'optical_depth.weights = {layer.weights[0]}')
-                            if n_epochs > epochs_period: #170: #epochs_period:
-                                print(f'diff = {tf.convert_to_tensor(last_weights) - tf.convert_to_tensor(layer.weights[0])}')
-                            last_weights = tf.identity(layer.weights[0])
+                if False:
+                    for layer in full_model.layers:
+                        if layer.name == 'flux_down_above_direct':
+                            print(f'flux_down_above_direct.weights = {layer.weights}')
+                        if layer.name == 'optical_depth':
+                            if False:
+                                print(f'optical_depth.weights = {layer.weights[0]}')
+                                if n_epochs > epochs_period: #170: #epochs_period:
+                                    print(f'diff = {tf.convert_to_tensor(last_weights) - tf.convert_to_tensor(layer.weights[0])}')
+                                last_weights = tf.identity(layer.weights[0])
+                                print("")
                             print("")
-                        print("")
-                        for k, weights in enumerate(layer.weights):
-                            print(f'Weights {k}: {weights}')
+                            for k, weights in enumerate(layer.weights):
+                                print(f'Weights {k}: {weights}')
 
 
                 print(f"Writing model weights {n_epochs}")
                 full_model.save_weights(filename_full_model + model_name + str(n_epochs)) #, save_traces=True)
                 #model = modify_weights_1(model)
                 #del model
+
+                print("Evaluating model:")
+                full_model.evaluate(testing_inputs, testing_outputs, batch_size=batch_size)
 
                 #model.load_weights((filename_full_model + 'TEMP.4.' + str(n_epochs))) 
 
