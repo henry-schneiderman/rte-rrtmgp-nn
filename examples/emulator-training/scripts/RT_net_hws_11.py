@@ -1429,7 +1429,7 @@ def train():
             tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=log_dir, histogram_freq=1, write_images=False, profile_batch=(2, 4))
 
         if True:
-            n_epochs_full = 3260 #1620
+            n_epochs_full = 3800 #1620
             n_epochs = n_epochs_full
             full_model.load_weights((filename_full_model + model_name + str(n_epochs_full)))
             #full_model = modify_weights_1(full_model)

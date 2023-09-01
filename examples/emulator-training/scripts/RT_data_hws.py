@@ -306,7 +306,7 @@ def load_data_direct(file_name, n_channels):
     mu, mu_bar, lwp, h2o, o3, co2, o2, u, n2o, ch4, h2o_sq, t_p, s1, s2, \
         s3, s4,flux_down_above_direct, flux_down_above_diffuse, \
             toa, rsd_direct, rsd, rsu, absorbed_flux, delta_pressure = tmp_inputs
-    inputs = (mu,lwp, h2o, o3, co2, o2, u, n2o, ch4, h2o_sq, t_p, flux_down_above_direct,  toa, rsd_direct, delta_pressure)
+    inputs = (mu,lwp, h2o, o3, co2, o2, u, n2o, ch4, h2o_sq * 0.0, t_p, flux_down_above_direct,  toa, rsd_direct, delta_pressure)
     outputs = (tmp_outputs[0])
 
     return inputs, outputs
@@ -318,14 +318,10 @@ def load_data_direct_pytorch(file_name, n_channels):
         s3, s4,flux_down_above_direct, flux_down_above_diffuse, \
             toa, rsd_direct, rsd, rsu, absorbed_flux, delta_pressure = tmp_inputs
     constituents = np.concatenate([lwp,h2o,o3,co2,u,n2o,ch4],axis=2)
-    inputs = np.concatenate([mu,t_p,constituents], axis=2)
-    toa = np.repeat(toa,t_p.shape[1],axis=1)
-    rsd_direct = np.expand_dims(rsd_direct[:,1:], axis=2)
-    toa = np.expand_dims(toa,axis=2)
-    delta_pressure = np.expand_dims(delta_pressure, axis=2)
-    outputs = np.concatenate([rsd_direct, toa, delta_pressure],axis=2)
+    X = np.concatenate([mu,t_p,constituents], axis=2)
+    y = rsd_direct
 
-    return inputs, outputs
+    return X, y, toa, delta_pressure
 
 def get_max():
 

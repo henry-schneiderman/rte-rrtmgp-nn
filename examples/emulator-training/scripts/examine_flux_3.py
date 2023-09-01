@@ -1,23 +1,36 @@
 from netCDF4 import Dataset
 import numpy as np
 import xarray as xr
+import matplotlib.pyplot as plt
 
 data_dir       = "/home/hws/tmp/"
 #file_name_in   = data_dir + "CAMS_2014_RFMIPstyle.nc"
 file_name_in   = data_dir + "CAMS_2009-2018_sans_2014-2015_RFMIPstyle.nc"
 #file_name_out  = data_dir + "RADSCHEME_data_g224_CAMS_2014.nc"
 #file_name_out  = data_dir + "RADSCHEME_data_g224_CAMS_2009-2018_sans_2014-2015.nc"
-#file_name_out2  = data_dir + "RADSCHEME_data_g224_CAMS_2014.2.nc"
+file_name_out3  = data_dir + "RADSCHEME_data_g224_CAMS_2014.2.nc"
 file_name_out2  = data_dir + "RADSCHEME_data_g224_CAMS_2009-2018_sans_2014-2015.2.nc"
+file_name_in_2 = data_dir + "/RADSCHEME_data_g224_CAMS_2015_true_solar_angles.nc"
 data_in = xr.open_dataset(file_name_in)
+data_in_2 = xr.open_dataset(file_name_in_2)
 data_out = xr.open_dataset(file_name_out2) #Dataset(file_name_in)
+data_out_3 = xr.open_dataset(file_name_out3)
 
 rsd_direct = data_out.variables["rsd_dir"]
 rsd = data_out.variables["rsd"]
 rsu = data_out.variables["rsu"]
 print(f'Average flux down = {np.mean(np.abs(rsd.data))}')
 print(f'Average flux up = {np.mean(np.abs(rsu.data))}')
-mu = data_out.variables["mu0"]
+mu = data_out.variables["mu0"].data
+mu_2 = data_in_2.variables["mu0"].data
+mu_3 = data_out_3.variables["mu0"].data
+
+fig, axs = plt.subplots(1, 3, sharey=True, tight_layout=True)
+axs[0].hist(np.arccos(mu.flatten()),bins=40, density=True)
+axs[1].hist(np.arccos(mu_3.flatten()),bins=40, density=True)
+axs[2].hist(np.arccos(mu_2.flatten()),bins=40, density=True)
+plt.show() 
+
 pres_level = data_out.variables["pres_level"]
 orig_pres_level = data_in.variables["pres_level"].data
 orig_co2 = data_in.variables['carbon_dioxide'].data
@@ -91,7 +104,7 @@ print("ciwp 60,900,0:10 = " + str(ciwp[60,900,0:10].data))
 print (" ")
 
 print("mu  = " + str(mu[0:7,200].data))
-print("412.0 * mu  = " + str(1412.0 * mu[0:7,200].data))
+print("412.0 * mu  = " + str(1412.0 * mu[0:7,200]))
 print("rsd = " + str(rsd[0:7,200,0].data))
 print("rsd_direct = " + str(rsd_direct[0:7,200,0].data))
 print (" ")
@@ -118,15 +131,15 @@ print("lwp 5,40:50 = " + str(lwp[5,200,30:40].data))
 print("iwp 5,40:50 = " + str(iwp[5,200,30:40].data))
 print (" ")
 print("mu  = " + str(mu[7,200].data))
-print("rsd  = " + str(1412.0 * mu[7,200].data))
+print("rsd  = " + str(1412.0 * mu[7,200]))
 print("rsd = " + str(rsd[7,200, 10:20].data))
 
 print (" ")
-print("mu  = " + str(mu[0:7,201].data))
+print("mu  = " + str(mu[0:7,201]))
 print("rsd = " + str(rsd[0:7,201,0].data))
 print("rsd = " + str(rsd[0,201,0:4].data))
 print (" ")
-print("mu  = " + str(mu[0:7,401].data))
+print("mu  = " + str(mu[0:7,401]))
 print("rsd = " + str(rsd[0:7,401,0].data))
 
 print(" ")
