@@ -243,7 +243,6 @@ def loss_ukkonen_direct(y, y_pred, toa, delta_pressure, weight_profile):
     return alpha * hr_loss + (1.0 - alpha) * loss_flux
 
 def train_loop(dataloader, model, optimizer, weight_profile):
-    size = len(dataloader.dataset)
     # Set the model to training mode - important for batch normalization and dropout layers
     # Unnecessary in this situation but added for best practices
     model.train()
@@ -260,9 +259,8 @@ def train_loop(dataloader, model, optimizer, weight_profile):
         optimizer.zero_grad()
 
         if batch % 20 == 0:
-            loss = loss.item()
-            #f"loss: {loss:>7f}")
-            loss_string += f" {loss:>7f}"
+            loss_value = loss.item()
+            loss_string += f" {loss_value:>7f}"
 
     print (loss_string)
 
@@ -291,6 +289,8 @@ def test_loop(dataloader, model, weight_profile):
 
     print(f"Test Error: \n Loss: {loss:>8f}\n Heating Rate Loss: {loss_heating_rate:>8f}")
     print(f" Flux Loss: {loss_flux:>8f}\n")
+
+    return loss
       
 if __name__ == "__main__":
 
@@ -302,6 +302,7 @@ if __name__ == "__main__":
     filename_training = datadir + "/RADSCHEME_data_g224_CAMS_2009-2018_sans_2014-2015.2.nc"
     filename_validation = datadir + "/RADSCHEME_data_g224_CAMS_2014.2.nc"
     filename_testing = datadir + "/RADSCHEME_data_g224_CAMS_2015_true_solar_angles.nc"
+    filename_direct_model = datadir + "/Direct_Torch."
 
     batch_size = 2048
     n_channel = 30
@@ -310,6 +311,7 @@ if __name__ == "__main__":
 
     optimizer = torch.optim.Adam(model.parameters())
 
+    checkpoint_period = 100
     epochs = 4000
 
     X_train, y_train, toa_train, delta_pressure_train = load_data_direct_pytorch(filename_training, n_channel)
@@ -328,11 +330,37 @@ if __name__ == "__main__":
                                                         torch.from_numpy(delta_pressure_valid).float().to(device))
 
     validation_dataloader = torch.utils.data.DataLoader(validation_dataset, batch_size, shuffle=True)
+    start = torch.cuda.Event(enable_timing=True)
+    end = torch.cuda.Event(enable_timing=True)
 
-    for t in range(epochs):
-        print(f"Epoch {t+1}\n-------------------------------")
+    if True:
+        t = 0
+    else:   
+        t = 100
+        checkpoint = torch.load(filename_direct_model + str(t))
+        print(f"Loaded Model: epoch = {t}")
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        #epoch = checkpoint['epoch']
+    while t < epochs:
+        t += 1
+        print(f"Epoch {t}\n-------------------------------")
         #with profiler.profile(with_stack=True, profile_memory=True) as prof:
+        start.record()
         train_loop(train_dataloader, model, optimizer, weight_profile)
-        test_loop(validation_dataloader, model, weight_profile)
+        loss = test_loop(validation_dataloader, model, weight_profile)
+        end.record()
+        torch.cuda.synchronize()
+        print(f" Elapsed time in seconds: {start.elapsed_time(end) / 1000.0}\n")
+
+        if t % checkpoint_period == 0:
+            torch.save({
+            'epoch': t,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'loss': loss,
+            }, filename_direct_model + str(t))
+            print(f' Wrote Model: epoch = {t}')
+
     print("Done!")
     #print(prof.key_averages(group_by_stack_n=5).table(sort_by='self_cpu_time_total', row_limit=5))

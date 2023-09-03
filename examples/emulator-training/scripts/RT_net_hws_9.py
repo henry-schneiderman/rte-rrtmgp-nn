@@ -500,7 +500,12 @@ class LayerPropertiesScattering(Layer):
     def call(self, input, **kargs):
 
         # tau.shape = (n, 29, n_constituents)
-        tau, mu, mu_bar = input
+        tau, mu, mu_bar, lw, h2o, o3, co2, u, n2o, ch4 = input
+
+        constituents = tf.concat([lw, h2o, o3, co2, u, n2o, ch4], axis=1)
+
+        constituents_direct = constituents / (mu + 0.0000001)
+        constituents_diffuse = constituents / (mu_bar + 0.0000001)
 
         mu = tf.expand_dims(mu, axis=2)
         mu_bar = tf.expand_dims(mu_bar, axis=2)
@@ -510,11 +515,8 @@ class LayerPropertiesScattering(Layer):
         t_direct = tf.math.exp(-tau_total / (mu + 0.0000001))
         t_diffuse = tf.math.exp(-tau_total / (mu_bar + 0.0000001))
 
-        tau_mu = tau / (mu + 0.0000001)
-        tau_mu_bar = tau / (mu_bar + 0.0000001)
-
-        e_split_direct_list = [net(tau_mu[:,k,:]) for k,net in enumerate(self.net_direct)]
-        e_split_diffuse_list = [net(tau_mu_bar[:,k,:]) for k,net in enumerate(self.net_diffuse)]
+        e_split_direct_list = [net(constituents_direct) for net in self.net_direct]
+        e_split_diffuse_list = [net(constituents_diffuse) for net in self.net_diffuse]
 
         e_split_direct = tf.convert_to_tensor(e_split_direct_list)
         e_split_diffuse = tf.convert_to_tensor(e_split_diffuse_list)
@@ -1107,7 +1109,7 @@ def train():
     batch_size  = 2048
     epochs      = 100000
     n_epochs    = 0
-    epochs_period = 1 #50
+    epochs_period = 50
     patience    = 1000 #25
     l2_regularization = 0.00001
 
@@ -1251,7 +1253,7 @@ def train():
         #   Split of extinguished radiation into transmitted, 
         #         reflected, absorbed components
 
-        layer_properties = TimeDistributed(LayerPropertiesScattering(n_channels), name="layer_properties")([tau, mu, mu_bar])
+        layer_properties = TimeDistributed(LayerPropertiesScattering(n_channels), name="layer_properties")([tau, mu, mu_bar, lw, h2o, o3, co2, u, n2o, ch4])
 
         # Compute multireflection among layers. For each layer, resolve into
         # absorption (a) and reflection (r) where these describe 
@@ -1385,7 +1387,7 @@ def train():
 
 
         if True:
-            n_epochs_full = 1260
+            n_epochs_full = 500
             n_epochs = n_epochs_full
             full_model.load_weights((filename_full_model + model_name + str(n_epochs_full)))
 
@@ -1453,8 +1455,8 @@ def train():
         testing_inputs, testing_outputs = load_data_full(filename_testing, n_channels, n_coarse_code=0)
 
 
-        print("Evaluating model:")
-        full_model.evaluate(testing_inputs, testing_outputs, batch_size=batch_size)
+        #print("Evaluating model:")
+        #full_model.evaluate(testing_inputs, testing_outputs, batch_size=batch_size)
 
         if not use_direct_model:
             training_inputs, training_outputs = load_data_full(filename_training, n_channels,n_coarse_code=0)
