@@ -395,24 +395,113 @@ def propagate_layer_up (t_direct, t_diffuse, e_split_direct, e_split_diffuse, r_
             a_bottom_multi_direct, a_bottom_multi_diffuse
 
 class UpwardPropagation(nn.Module):
-    def __init__(self, n_channels, **kwargs):
+    def __init__(self):
         super(UpwardPropagation, self).__init__()
 
-    def call(self, x):
-        #print("***")
+    def forward(self, x):
+
         layer_properties, surface_properties = x
+
         t_direct, t_diffuse, e_split_direct, e_split_diffuse = layer_properties
+
         r_bottom_direct, r_bottom_diffuse, a_bottom_direct, a_bottom_diffuse = surface_properties
 
-        # go from bottom to top
+        t_multi_direct_list = []
+        t_multi_diffuse_list = []
+        r_bottom_multi_direct_list = []
+        r_bottom_multi_diffuse_list = []
+        a_top_multi_direct_list = []
+        a_top_multi_diffuse_list = []
+
         for l in reversed(range(t_direct.shape[1])):
             tmp = propagate_layer_up (t_direct[:,l], t_diffuse[:,l], e_split_direct[:,l,:], e_split_diffuse[:,l,:], r_bottom_direct[:,l], r_bottom_diffuse[:,l], a_bottom_direct[:,l], a_bottom_diffuse[:,l])
 
-            t_multi_direct[:,l], t_multi_diffuse[:,l], \
+            t_multi_direct_value, t_multi_diffuse_value, \
             r_multi_direct, r_multi_diffuse, \
-            r_bottom_multi_direct[:,l], r_bottom_multi_diffuse[:,l], \
-            a_top_multi_direct[:,l], a_top_multi_diffuse[:,l], \
+            r_bottom_multi_direct_value, r_bottom_multi_diffuse_value, \
+            a_top_multi_direct_value, a_top_multi_diffuse_value, \
             a_bottom_multi_direct, a_bottom_multi_diffuse= tmp
+
+            t_multi_direct_list.append(t_multi_direct_value)
+            t_multi_diffuse_list.append(t_multi_diffuse_value)
+            r_bottom_multi_direct_list.append(r_bottom_multi_direct_value)
+            r_bottom_multi_diffuse_list.append(r_bottom_multi_diffuse_value)
+            a_top_multi_direct_list.append(a_top_multi_direct_value)
+            a_top_multi_diffuse_list.append(a_top_multi_diffuse_value)
+
+        t_multi_direct= torch.stack(t_multi_direct_list, dim=1)
+        t_multi_diffuse = torch.stack(t_multi_diffuse_list, dim=1)
+        r_bottom_multi_direct = torch.stack(r_bottom_multi_direct_list, dim=1)
+        r_bottom_multi_diffuse = torch.stack(r_bottom_multi_diffuse_list, dim=1)
+        a_top_multi_direct = torch.stack(a_top_multi_direct_list, dim=1)
+        a_top_multi_diffuse = torch.stack(a_top_multi_diffuse_list, dim=1)
+
+        t_multi_direct = torch.flip(t_multi_direct, dim=1)
+        t_multi_diffuse = torch.flip(t_multi_diffuse, dim=1)
+        r_bottom_multi_direct = torch.flip(r_bottom_multi_direct, dim=1)
+        r_bottom_multi_diffuse = torch.flip(r_bottom_multi_diffuse, dim=1)
+        a_top_multi_direct = torch.flip(a_top_multi_direct, dim=1)
+        a_top_multi_diffuse = torch.flip(a_top_multi_diffuse, dim=1)
+
+        layer_properties = [t_direct, t_diffuse, t_multi_direct, t_multi_diffuse, r_bottom_multi_direct_list,r_bottom_multi_diffuse, a_top_multi_direct, a_top_multi_diffuse]
+
+        return [layer_properties, r_multi_direct]
+    
+
+class DownwardPropagation(nn.modules):
+    def __init__(self,n_channel):
+        super().__init__()
+        super(DownwardPropagation, self).__init__()
+        self.n_channel = n_channel
+
+    def forward(self, x):
+
+        input_fluxes, layer_properties, r_multi_direct = x
+        flux_down_above_direct, flux_down_above_diffuse =  input_fluxes
+
+        t_direct, t_diffuse, \
+        t_multi_direct, t_multi_diffuse, \
+        r_bottom_multi_direct, r_bottom_multi_diffuse, \
+        a_top_multi_direct, a_top_multi_diffuse  = layer_properties
+
+        absorbed_flux_top = []
+        # Assign all 3 fluxes above the top layer
+        flux_down_below_direct = [flux_down_above_direct]
+        flux_down_below_diffuse = [flux_down_above_diffuse]
+        flux_up_below_diffuse = [flux_down_above_direct * r_multi_direct]
+        
+        for l in range(t_direct.shape[1]):
+
+            absorbed_flux_top.append(flux_down_above_direct * a_top_multi_direct[:,l] + 
+                        flux_down_above_diffuse * a_top_multi_diffuse[:,l])
+
+            # Will want this later when incorporate surface interactions
+            #absorbed_flux_bottom = flux_down_above_direct * a_bottom_multi_direct + \
+            #flux_down_above_diffuse * a_bottom_multi_diffuse
+
+            flux_down_below_direct.append(flux_down_above_direct * t_direct[:,l])
+            flux_down_below_diffuse.append(flux_down_above_direct * t_multi_direct[:,l] + 
+                                    flux_down_above_diffuse * (t_diffuse[:,l] + t_multi_diffuse[:,l]))
+            flux_up_below_diffuse.append(flux_down_above_direct * 
+                                         r_bottom_multi_direct[:,l] 
+                                         + flux_down_above_diffuse * 
+                                         r_bottom_multi_diffuse[:,l])
+            
+            flux_down_above_direct = flux_down_below_direct[-1]
+            flux_down_above_diffuse = flux_down_below_diffuse[-1]
+        
+
+        flux_down_direct = torch.stack(flux_down_below_direct,dim=1)
+        flux_down_diffuse = torch.stack(flux_down_below_diffuse,dim=1)
+        flux_up_diffuse = torch.stack(flux_up_below_diffuse,dim=1)
+        absorbed_flux = torch.stack(absorbed_flux_top,dim=1)
+
+        flux_down_direct = torch.sum(flux_down_direct,dim=2,keepdim=False)
+        flux_down_diffuse = torch.sum(flux_down_diffuse,dim=2,keepdim=False)      
+        flux_up_diffuse = torch.sum(flux_up_diffuse,dim=2,keepdim=False)  
+        absorbed_flux = torch.sum(absorbed_flux,dim=2,keepdim=False)  
+
+        return [flux_down_direct, flux_down_diffuse, flux_up_diffuse, absorbed_flux]
 
 
 class DownwardPropagationDirect(nn.Module):
@@ -458,6 +547,44 @@ class DirectDownwardNet(nn.Module):
         flux_down_direct_channels = self.downward_propagate((flux_down_above_direct_channels,t_direct))
         flux_down_direct = torch.sum(flux_down_direct_channels,dim=2,keepdim=False)
         return flux_down_direct
+    
+
+
+class FullNet(nn.Module):
+
+    def __init__(self, n_channel, n_constituent, device):
+        super(FullNet, self).__init__()
+        self.device = device
+        self.n_channel = n_channel
+        self.mu_bar_net = nn.Linear(1,1,bias=False,device=device)
+        self.sigmoid = nn.Sigmoid()
+        self.spectral_net = nn.Linear(1,n_channel,bias=False,device=device)
+        torch.nn.init.uniform_(self.spectral_net.weight, a=0.4, b=0.6)
+        self.softmax = nn.Softmax(dim=-1)
+        self.optical_depth_net = TimeDistributed(OpticalDepth(n_channel,device))
+        self.layer_properties_net = TimeDistributed(LayerPropertiesFull_1(n_channel,n_constituent))
+        self.upward_net = UpwardPropagation()
+        self.downward_net = DownwardPropagationDirect(n_channel)
+
+    def forward(self, x):
+        mu, temperature_pressure, constituents = x[:,:,0:1], x[:,:,1:4], x[:,:,4:]
+        #with profiler.record_function("Spectral Decomposition"):
+        one = torch.ones((mu.shape[0],1),dtype=torch.float32,device=self.device)
+        flux_down_above_direct_channels = self.softmax(self.spectral_net(one))
+        flux_down_above_diffuse_channels = torch.zeros((mu.shape[0], self.n_channel),dtype=torch.float32,device=self.device)
+        mu_bar = self.sigmoid(self.mu_bar_net(one))
+        mu_bar = torch.unsqueeze(mu_bar,dim=1).repeat([1,self.n_channel])
+        #with profiler.record_function("Optical Depth"):
+        tau = self.optical_depth_net((temperature_pressure, constituents))
+        #with profiler.record_function("Layer Properties"):
+        layer_properties = self.layer_properties_net((tau, mu, mu_bar, constituents))
+
+        multireflection_layer_properties = self.upward_net(layer_properties)
+        #with profiler.record_function("Downward Propagate"):
+        input_fluxes = [flux_down_above_direct_channels, flux_down_above_diffuse_channels]
+        full_output = self.downward_propagate(input_fluxes.append(multireflection_layer_properties))
+        return full_output
+
     
 def loss_weighted(y, y_pred, weight_profile):
     error = torch.mean(torch.square(weight_profile * (y_pred - y)), dim=(0,1), keepdim=False)
