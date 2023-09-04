@@ -168,7 +168,7 @@ class TimeDistributed(nn.Module):
         return unsquashed_output
     
 class LayerPropertiesDirect(nn.Module):
-    """ Only Comutes Direct Transmission Coefficient """
+    """ Only Computes Direct Transmission Coefficient """
     def __init__(self):
         super(LayerPropertiesDirect, self).__init__()
 
@@ -178,6 +178,242 @@ class LayerPropertiesDirect(nn.Module):
         tau_total = torch.sum(tau,dim=2,keepdim=False)
         t_direct = torch.exp(-tau_total / (mu + eps_1))
         return t_direct
+
+
+class LayerPropertiesFull_1(nn.Module):
+    """ Computes full set of layer properties for
+    direct and diffuse transmission, reflection,
+    and absorption
+    Uses a separate net for each channel
+    """
+    def __init__(self, n_channel, n_constituent):
+        super(LayerPropertiesFull_1, self).__init__()
+        self.n_channel = n_channel
+        n_hidden = [5, 4, 4]
+        """ Computes split of extinguished radiation into absorbed, diffuse transmitted, and
+        diffuse reflected """
+        # XXXX May need to specify initial weights!!!
+        self.net_direct = nn.ModuleList([MLP(n_hidden, n_constituent,3,device) for _ in range(self.n_channel)])
+        self.net_diffuse = nn.ModuleList([MLP(n_hidden, n_constituent,3,device) for _ in range(self.n_channel)])
+        self.activation = nn.Softmax()
+
+    def forward(self, x):
+
+        # tau.shape = (n, 29, n_constituents)
+        tau, mu, mu_bar, constituents = x
+
+        constituents_direct = constituents / (mu + eps_1)
+        constituents_diffuse = constituents / (mu_bar + eps_1)
+
+        mu = torch.unsqueeze(mu, dim=2)
+        mu_bar = torch.unsqueeze(mu_bar, dim=2)
+
+        tau_total = torch.sum(tau, dim=2, keepdims=True)
+
+        t_direct = torch.math.exp(-tau_total / (mu + eps_1))
+        t_diffuse = torch.math.exp(-tau_total / (mu_bar + eps_1))
+
+        a = self.activation
+        e_split_direct_list = [a(net(constituents_direct)) for net in self.net_direct]
+        e_split_diffuse_list = [a(net(constituents_diffuse)) for net in self.net_diffuse]
+
+        e_split_direct = torch.stack(e_split_direct_list, dim=1)
+        e_split_diffuse = torch.stack(e_split_diffuse_list, dim=1)
+
+        layer_properties = [t_direct, t_diffuse, e_split_direct, e_split_diffuse]
+
+        return layer_properties
+    
+def propagate_layer_up (t_direct, t_diffuse, e_split_direct, e_split_diffuse, r_bottom_direct, r_bottom_diffuse, a_bottom_direct, a_bottom_diffuse):
+    """
+    Combines the properties of two atmospheric layers within a column: 
+    usually a shallow "top layer" and a thicker "bottom layer" where this "bottom layer" spans all the 
+    layers beneath the top layer including the surface. Computes the impact of multi-reflection between these layers.
+
+    Naming conventions:
+     
+    The prefixes -- t, e, r, a -- correspond respectively to transmission,
+    extinction, reflection, absorption.
+
+    The suffixes "_direct" and "_diffuse" specify the type of input radiation. 
+    Note, however, that an input of direct radiation may produce diffuse output,
+    e.g., t_multi_direct (transmission of direct radiation through multi-reflection) 
+    
+    Input and Output Shape:
+        Tensor with shape (n_batches, n_channels)
+
+    Arguments:
+
+        t_direct, t_diffuse - Direct transmission coefficients for 
+            the top layer. 
+
+        e_split_direct, e_split_diffuse - The split of extinguised  
+            radiation into transmitted (diffuse), reflected,
+            and absorbed components. These components sum to 1.0.
+            
+        r_bottom_direct, r_bottom_diffuse - The reflection 
+            coefficients for bottom layer.
+
+        a_bottom_direct, a_bottom_diffuse - The absorption coefficients
+            for the bottom layer. 
+            
+    Returns:
+
+        t_multi_direct, t_multi_diffuse - The transmission coefficients for 
+            radiation that is multi-reflected (as opposed to directly transmitted, 
+            e.g., t_direct, t_diffuse)
+
+        r_multi_direct, r_multi_diffuse - The reflection coefficients 
+            for the top layer after accounting for multi-reflection
+            with the bottom layer
+
+        r_bottom_multi_direct, r_bottom_multi_diffuse - The reflection coefficients for
+            the bottom layer after accounting for multi-reflection with top layer
+
+        a_top_multi_direct, a_top_multi_diffuse - The absorption coefficients of 
+            the top layer after multi-reflection between the layers
+
+        a_bottom_multi_direct, a_bottom_multi_diffuse - The absorption coefficients 
+            of the bottom layer after multi-reflection between the layers
+
+    Notes:
+        Since the bottom layer includes the surface:
+                a_bottom_direct + r_bottom_direct = 1.0
+                a_bottom_diffuse + r_bottom_diffuse = 1.0
+
+        Consider two downward fluxes entering top layer: flux_direct, flux_diffuse
+
+            Downward Direct Flux Transmitted = flux_direct * t_direct
+            Downward Diffuse Flux Transmitted = flux_direct * t_multi_direct + 
+                                            flux_diffuse * (t_diffuse + t_multi_diffuse)
+
+            Upward Flux from Top Layer = flux_direct * r_multi_direct +
+                                     flux_diffuse * r_multi_diffuse
+
+            Upward Flux into Top Layer = flux_direct * r_bottom_multi_direct +
+                                        flux_diffuse * r_bottom_multi_diffuse
+
+            Both upward fluxes are diffuse since they are from radiation
+            that is scattered upwards
+
+        Conservation of energy:
+            a_bottom_multi_direct + a_top_multi_direct + r_multi_direct = 1.0
+            a_bottom_multi_diffuse + a_top_multi_diffuse + r_multi_diffuse = 1.0
+
+        The absorption at the top layer (after accounting for multi-reflection)
+        must equal the combined loss of flux for the downward and upward paths:
+         
+            a_top_multi_direct = (1 - t_direct - t_multi_direct) + 
+                                (r_bottom_multi_direct - r_multi_direct)
+            a_top_multi_diffuse = (1 - t_diffuse - t_multi_diffuse) + 
+                                (r_bottom_multi_diffuse - r_multi_diffuse)
+
+    """
+
+    #tf.debugging.assert_near(r_bottom_direct + a_bottom_direct, 1.0, rtol=1e-2, atol=1e-2, message="Bottom Direct", summarize=5)
+
+    #tf.debugging.assert_near(r_bottom_diffuse + a_bottom_diffuse, 1.0, rtol=1e-2, atol=1e-2, message="Bottom Diffuse", summarize=5)
+
+    # The top layer splits the direct beam into transmitted and extinguished components
+    e_direct = 1.0 - t_direct
+    
+    # The top layer also splits the downward diffuse flux into transmitted and extinguished components
+    e_diffuse = 1.0 - t_diffuse
+
+    # The top layer further splits each extinguished component into transmitted, reflected,
+    # and absorbed components
+    e_t_direct, e_r_direct, e_a_direct = e_split_direct[:,:,0:1], e_split_direct[:,:,1:2],e_split_direct[:,:,2:]
+    e_t_diffuse, e_r_diffuse, e_a_diffuse = e_split_diffuse[:,:,0:1], e_split_diffuse[:,:,1:2],e_split_diffuse[:,:,2:]
+
+    #tf.debugging.assert_near(e_t_direct + e_r_direct + e_a_direct, 1.0, rtol=1e-3, atol=1e-3, message="Extinction Direct", summarize=5)
+
+    #tf.debugging.assert_near(e_t_diffuse + e_r_diffuse + e_a_diffuse, 1.0, rtol=1e-3, atol=1e-3, message="Extinction Diffuse", summarize=5)
+
+    #print(f"e_a_diffuse.shape = {e_a_diffuse.shape}")
+
+    # Multi-reflection between the top layer and lower layer resolves 
+    # a direct beam into:
+    #   r_multi_direct - total effective reflection at the top layer
+    #   a_top_multi_direct - absorption at the top layer
+    #   a_bottom_multi_direct - absorption for the entire bottom layer
+
+    # The adding-doubling method computes these
+    # See p.418-424 of "A First Course in Atmospheric Radiation (2nd edition)"
+    # by Grant W. Petty
+    #
+    # Also see Shonk and Hogan, 2007
+
+    # pre-compute denominator. Add constant to avoid division by zero
+    eps = 1.0e-06
+    d = 1.0 / (1.0 - e_diffuse * e_r_diffuse * r_bottom_diffuse + eps)
+
+    t_multi_direct = t_direct * r_bottom_direct * e_diffuse * e_r_diffuse * d + \
+        e_direct * e_t_direct * d # good
+    
+    a_bottom_multi_direct = t_direct * a_bottom_direct + t_multi_direct * a_bottom_diffuse # good
+
+    r_bottom_multi_direct = t_direct * r_bottom_direct * d + e_direct * e_t_direct * r_bottom_diffuse * d # good
+
+    a_top_multi_direct = e_direct * e_a_direct + r_bottom_multi_direct * e_diffuse * e_a_diffuse # good
+
+    r_multi_direct = e_direct * e_r_direct + r_bottom_multi_direct * (t_diffuse + e_diffuse * e_t_diffuse) # good
+
+    # These should sum to 1.0
+    #total_direct = a_bottom_multi_direct + a_top_multi_direct + r_multi_direct
+    #tf.debugging.assert_near(total_direct, 1.0, rtol=1e-3, atol=1e-3, message="Total Direct Error", summarize=5)
+    # Loss of flux should equal absorption
+    #diff_flux = 1.0 - t_direct - t_multi_direct + r_bottom_multi_direct - r_multi_direct 
+    #tf.debugging.assert_near(diff_flux, a_top_multi_direct, rtol=1e-3, atol=1e-3, message="Diff Flux Direct", summarize=5)
+
+    # Multi-reflection for diffuse flux
+
+    t_multi_diffuse = \
+        t_diffuse * r_bottom_diffuse * e_diffuse * e_r_diffuse * d + \
+        e_diffuse * e_t_diffuse * d  # good
+    
+    a_bottom_multi_diffuse = t_diffuse * a_bottom_diffuse + t_multi_diffuse * a_bottom_diffuse # good
+
+    r_bottom_multi_diffuse = t_diffuse * r_bottom_diffuse * d + e_diffuse * e_t_diffuse * r_bottom_diffuse * d # good
+    
+    a_top_multi_diffuse = e_diffuse * e_a_diffuse + r_bottom_multi_diffuse * e_diffuse * e_a_diffuse # good
+
+    r_multi_diffuse = e_diffuse * e_r_diffuse + r_bottom_multi_diffuse * (t_diffuse + e_diffuse * e_t_diffuse) # good
+
+    #total_diffuse = a_bottom_multi_diffuse + a_top_multi_diffuse + r_multi_diffuse
+    #tf.debugging.assert_near(total_diffuse, 1.0, rtol=1e-3, atol=1e-3, message="Total Diffuse Error", summarize=5)
+    #diff_flux = 1.0 - t_diffuse - t_multi_diffuse + r_bottom_multi_diffuse - r_multi_diffuse
+    #tf.debugging.assert_near(diff_flux, a_top_multi_diffuse, rtol=1e-3, atol=1e-3, message="Diff Flux Diffuse", summarize=5)
+
+    #tf.debugging.assert_near(r_multi_direct + a_top_multi_direct + a_bottom_multi_direct, 1.0, rtol=1e-2, atol=1e-2, message="Top Direct", summarize=5)
+
+    #tf.debugging.assert_near(r_multi_diffuse + a_top_multi_diffuse + a_bottom_multi_diffuse, 1.0, rtol=1e-2, atol=1e-2, message="Top Diffuse", summarize=5)
+
+    return t_multi_direct, t_multi_diffuse, \
+            r_multi_direct, r_multi_diffuse, \
+            r_bottom_multi_direct, r_bottom_multi_diffuse, \
+            a_top_multi_direct, a_top_multi_diffuse, \
+            a_bottom_multi_direct, a_bottom_multi_diffuse
+
+class UpwardPropagation(nn.Module):
+    def __init__(self, n_channels, **kwargs):
+        super(UpwardPropagation, self).__init__()
+
+    def call(self, x):
+        #print("***")
+        layer_properties, surface_properties = x
+        t_direct, t_diffuse, e_split_direct, e_split_diffuse = layer_properties
+        r_bottom_direct, r_bottom_diffuse, a_bottom_direct, a_bottom_diffuse = surface_properties
+
+        # go from bottom to top
+        for l in reversed(range(t_direct.shape[1])):
+            tmp = propagate_layer_up (t_direct[:,l], t_diffuse[:,l], e_split_direct[:,l,:], e_split_diffuse[:,l,:], r_bottom_direct[:,l], r_bottom_diffuse[:,l], a_bottom_direct[:,l], a_bottom_diffuse[:,l])
+
+            t_multi_direct[:,l], t_multi_diffuse[:,l], \
+            r_multi_direct, r_multi_diffuse, \
+            r_bottom_multi_direct[:,l], r_bottom_multi_diffuse[:,l], \
+            a_top_multi_direct[:,l], a_top_multi_diffuse[:,l], \
+            a_bottom_multi_direct, a_bottom_multi_diffuse= tmp
+
 
 class DownwardPropagationDirect(nn.Module):
     def __init__(self,n_channel):
@@ -306,6 +542,7 @@ if __name__ == "__main__":
 
     batch_size = 2048
     n_channel = 30
+    n_constituent = 8
     model = DirectDownwardNet(n_channel,device)
     model = model.to(device=device)
 
