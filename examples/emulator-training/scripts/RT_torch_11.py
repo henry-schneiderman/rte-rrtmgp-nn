@@ -199,12 +199,13 @@ class LayerPropertiesFull_1(nn.Module):
 
     def forward(self, x):
 
-        # tau.shape = (n, 29, n_constituents)
+
         tau, mu, mu_bar, constituents = x
 
         constituents_direct = constituents / (mu + eps_1)
         constituents_diffuse = constituents / (mu_bar + eps_1)
 
+        # tau.shape = (n, 29, n_constituents)
         mu = torch.unsqueeze(mu, dim=2)
         mu_bar = torch.unsqueeze(mu_bar, dim=2)
 
@@ -456,7 +457,7 @@ class DownwardPropagation(nn.modules):
 
     def forward(self, x):
 
-        input_fluxes, layer_properties, r_multi_direct = x
+        layer_properties, r_multi_direct, input_fluxes = x
         flux_down_above_direct, flux_down_above_diffuse =  input_fluxes
 
         t_direct, t_diffuse, \
@@ -557,6 +558,7 @@ class FullNet(nn.Module):
         self.device = device
         self.n_channel = n_channel
         self.mu_bar_net = nn.Linear(1,1,bias=False,device=device)
+        torch.nn.init.uniform_(self.mu_bar_net.weight, a=0.4, b=0.6)
         self.sigmoid = nn.Sigmoid()
         self.spectral_net = nn.Linear(1,n_channel,bias=False,device=device)
         torch.nn.init.uniform_(self.spectral_net.weight, a=0.4, b=0.6)
@@ -564,25 +566,27 @@ class FullNet(nn.Module):
         self.optical_depth_net = TimeDistributed(OpticalDepth(n_channel,device))
         self.layer_properties_net = TimeDistributed(LayerPropertiesFull_1(n_channel,n_constituent))
         self.upward_net = UpwardPropagation()
-        self.downward_net = DownwardPropagationDirect(n_channel)
+        self.downward_net = DownwardPropagation(n_channel)
 
     def forward(self, x):
-        mu, temperature_pressure, constituents = x[:,:,0:1], x[:,:,1:4], x[:,:,4:]
+        mu, temperature_pressure, constituents, surface_properties = x
         #with profiler.record_function("Spectral Decomposition"):
         one = torch.ones((mu.shape[0],1),dtype=torch.float32,device=self.device)
         flux_down_above_direct_channels = self.softmax(self.spectral_net(one))
         flux_down_above_diffuse_channels = torch.zeros((mu.shape[0], self.n_channel),dtype=torch.float32,device=self.device)
         mu_bar = self.sigmoid(self.mu_bar_net(one))
-        mu_bar = torch.unsqueeze(mu_bar,dim=1).repeat([1,self.n_channel])
+        mu_bar = mu_bar.repeat([1,mu.shape[1]])
+        mu_bar = torch.unsqueeze(mu_bar,dim=2)
         #with profiler.record_function("Optical Depth"):
         tau = self.optical_depth_net((temperature_pressure, constituents))
         #with profiler.record_function("Layer Properties"):
         layer_properties = self.layer_properties_net((tau, mu, mu_bar, constituents))
 
-        multireflection_layer_properties = self.upward_net(layer_properties)
+        multireflection_layer_properties = self.upward_net([layer_properties,surface_properties])
         #with profiler.record_function("Downward Propagate"):
         input_fluxes = [flux_down_above_direct_channels, flux_down_above_diffuse_channels]
-        full_output = self.downward_propagate(input_fluxes.append(multireflection_layer_properties))
+        x = multireflection_layer_properties.append(input_fluxes)
+        full_output = self.downward_net(x)
         return full_output
 
     
