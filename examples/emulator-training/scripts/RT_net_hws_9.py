@@ -1387,7 +1387,7 @@ def train():
 
 
         if True:
-            n_epochs_full = 500
+            n_epochs_full = 1150
             n_epochs = n_epochs_full
             full_model.load_weights((filename_full_model + model_name + str(n_epochs_full)))
 

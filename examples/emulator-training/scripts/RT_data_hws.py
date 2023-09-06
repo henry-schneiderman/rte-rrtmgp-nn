@@ -318,10 +318,28 @@ def load_data_direct_pytorch(file_name, n_channels):
         s3, s4,flux_down_above_direct, flux_down_above_diffuse, \
             toa, rsd_direct, rsd, rsu, absorbed_flux, delta_pressure = tmp_inputs
     constituents = np.concatenate([lwp,h2o,o3,co2,u,n2o,ch4],axis=2)
-    X = np.concatenate([mu,t_p,constituents], axis=2)
+    x = np.concatenate([mu,t_p,constituents], axis=2)
     y = rsd_direct
 
-    return X, y, toa, delta_pressure
+    return x, y, toa, delta_pressure
+
+def load_data_full_pytorch(file_name, n_channels):
+    tmp_inputs, tmp_outputs = load_data_full(file_name, n_channels, n_coarse_code=0)
+
+    mu, mu_bar, lwp, h2o, o3, co2, o2, u, n2o, ch4, h2o_sq, t_p, s1, s2, \
+        s3, s4,flux_down_above_direct, flux_down_above_diffuse, \
+            toa, rsd_direct, rsd, rsu, absorbed_flux, delta_pressure = tmp_inputs
+    constituents = np.concatenate((lwp,h2o,o3,co2,u,n2o,ch4),axis=2)
+    surface_properties = np.concatenate((s1,s2,s3,s4), axis=2)
+    surface_properties = np.squeeze(surface_properties,axis=3)
+    absorbed_flux = np.squeeze(absorbed_flux,axis=-1)
+    x = np.concatenate([mu,t_p,constituents], axis=2)
+    rsd_direct = np.expand_dims(rsd_direct, axis=2)
+    rsd = np.expand_dims(rsd, axis=2)
+    rsu = np.expand_dims(rsu, axis=2)
+    y = np.concatenate((rsd_direct, rsd, rsu), axis=2)
+
+    return x, surface_properties, y, absorbed_flux, toa, delta_pressure
 
 def get_max():
 
