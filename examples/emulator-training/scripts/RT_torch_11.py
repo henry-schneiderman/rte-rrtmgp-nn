@@ -18,7 +18,10 @@ class MLP(nn.Module):
         for n in n_hidden:
             mod = nn.Linear(n_last, n, bias=True,device=device)
             torch.nn.init.uniform_(mod.weight, a=lower, b=upper)
-            torch.nn.init.uniform_(mod.bias, a=-0.1, b=0.1)
+            # Because of Relu activation, don't want any connections to
+            # be prematurely pruned away by becoming negative.
+            # Therefore start with a significant positive bias
+            torch.nn.init.uniform_(mod.bias, a=0.9, b=1.1) #a=-0.1, b=0.1)
             self.hidden.append(mod)
             n_last = n
         self.activation = nn.ReLU()
@@ -145,7 +148,8 @@ class TimeDistributed(nn.Module):
     """
     Adapted from https://stackoverflow.com/questions/62912239/tensorflows-timedistributed-equivalent-in-pytorch
     Allows inputs and outputs to be lists of tensors
-    Input and output elements are: (samples, timesteps, input/output size)
+    Input and output elements are: (samples, timesteps, input/output dim 1,
+    input / output dim 2, . . .)
     """
     def __init__(self, module):
         super(TimeDistributed, self).__init__()
@@ -213,7 +217,7 @@ class LayerPropertiesFull_1(nn.Module):
         n_hidden = [5, 4, 4]
         """ Computes split of extinguished radiation into absorbed, diffuse transmitted, and
         diffuse reflected """
-        self.net_direct = nn.ModuleList([MLP(n_hidden, n_constituent,3,device,lower=-1.0,upper=1.0) for _ in range(self.n_channel)])
+        self.net_direct = nn.ModuleList([MLP(n_hidden, n_constituent + 1,3,device,lower=-1.0,upper=1.0) for _ in range(self.n_channel)])
         self.net_diffuse = nn.ModuleList([MLP(n_hidden, n_constituent,3,device, lower=-1.0,upper=1.0) for _ in range(self.n_channel)])
         self.softmax = nn.Softmax(dim=-1)
 
@@ -223,11 +227,9 @@ class LayerPropertiesFull_1(nn.Module):
         tau, mu, mu_bar, constituents = x
 
         constituents_direct = constituents / (mu + eps_1)
-        constituents_diffuse = constituents / (mu_bar + eps_1)
+        constituents_direct = torch.concat((constituents_direct, mu),dim=1)
 
-        # tau.shape = (n, 29, n_constituents)
-        #mu = torch.unsqueeze(mu, dim=2)
-        #mu_bar = torch.unsqueeze(mu_bar, dim=2)
+        constituents_diffuse = constituents 
 
         tau_total = torch.sum(tau, dim=2, keepdims=False)
 
@@ -256,8 +258,8 @@ def propagate_layer_up (t_direct, t_diffuse, e_split_direct, e_split_diffuse, r_
     extinction, reflection, absorption.
 
     The suffixes "_direct" and "_diffuse" specify the type of input radiation. 
-    Note, however, that an input of direct radiation may produce diffuse output,
-    e.g., t_multi_direct (transmission of direct radiation through multi-reflection) 
+    Note, that direct radiation may be transformed into diffuse radiation,
+    through reflection or multi-reflection
     
     Input and Output Shape:
         Tensor with shape (n_batches, n_channels)
@@ -268,8 +270,10 @@ def propagate_layer_up (t_direct, t_diffuse, e_split_direct, e_split_diffuse, r_
             the top layer. 
 
         e_split_direct, e_split_diffuse - The split of extinguised  
-            radiation into transmitted (diffuse), reflected,
+            radiation into transmitted, reflected,
             and absorbed components. These components sum to 1.0.
+            Also, transmitted and reflected components are always
+            diffuse.
             
         r_bottom_direct, r_bottom_diffuse - The reflection 
             coefficients for bottom layer.
@@ -673,7 +677,7 @@ def train_direct_loop(dataloader, model, optimizer, weight_profile):
 
         if batch % 20 == 0:
             loss_value = loss.item()
-            loss_string += f" {loss_value:>7f}"
+            loss_string += f" {loss_value:.9f}"
 
     print (loss_string)
 
@@ -696,7 +700,7 @@ def train_full_loop(dataloader, model, optimizer, weight_profile):
 
         if batch % 20 == 0:
             loss_value = loss.item()
-            loss_string += f" {loss_value:>7f}"
+            loss_string += f" {loss_value:.9f}"
 
     print (loss_string)
 
@@ -722,8 +726,8 @@ def test_direct_loop(dataloader, model, weight_profile):
     loss_heating_rate /= num_batches
     loss_flux /= num_batches
 
-    print(f"Test Error: \n Loss: {loss:>8f}\n Heating Rate Loss: {loss_heating_rate:>8f}")
-    print(f" Flux Loss: {loss_flux:>8f}\n")
+    print(f"Test Error: \n Loss: {loss:.10f}\n Heating Rate Loss: {loss_heating_rate:.8f}")
+    print(f" Flux Loss: {loss_flux:.8f}\n")
 
     return loss
 
@@ -758,9 +762,9 @@ def test_full_loop(dataloader, model, weight_profile):
     loss_heating_rate /= num_batches
     loss_flux /= num_batches
 
-    print(f"Test Error: \n Loss: {loss:>8f}\n Heating Rate Loss: {loss_heating_rate:>8f}")
-    print(f" Direct Heating Rate Loss: {loss_direct_heating_rate:>8f}")
-    print(f" Flux Loss: {loss_flux:>8f}\n")
+    print(f"Test Error: \n Loss: {loss:.10f}\n Heating Rate Loss: {loss_heating_rate:.8f}")
+    print(f" Direct Heating Rate Loss: {loss_direct_heating_rate:.8f}")
+    print(f" Flux Loss: {loss_flux:.8f}\n")
 
     return loss
  
@@ -784,7 +788,7 @@ def train_direct_only():
 
     optimizer = torch.optim.Adam(model.parameters())
 
-    checkpoint_period = 100
+    checkpoint_period = 50
     epochs = 4000
 
     x_train, y_train, toa_train, delta_pressure_train = load_data_direct_pytorch(filename_training, n_channel)
@@ -924,4 +928,5 @@ def train_full():
     #print(prof.key_averages(group_by_stack_n=5).table(sort_by='self_cpu_time_total', row_limit=5))
 
 if __name__ == "__main__":
-    train_direct_only()
+    #train_direct_only()
+    train_full()

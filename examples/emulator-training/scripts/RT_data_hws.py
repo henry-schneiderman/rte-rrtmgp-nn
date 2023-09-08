@@ -339,7 +339,14 @@ def load_data_full_pytorch(file_name, n_channels):
     rsu = np.expand_dims(rsu, axis=2)
     y = np.concatenate((rsd_direct, rsd, rsu), axis=2)
 
-    return x, surface_properties, y, absorbed_flux, toa, delta_pressure
+    return  x, surface_properties, y, absorbed_flux, toa, delta_pressure    
+
+def load_data_full_pytorch_2(file_name, n_channels):
+    # Re-ordering of outputs 
+
+    x, surface_properties, y, absorbed_flux, toa, delta_pressure = load_data_full_pytorch(file_name, n_channels)
+
+    return x, surface_properties, toa, delta_pressure, y, absorbed_flux
 
 def get_max():
 

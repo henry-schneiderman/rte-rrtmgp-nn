@@ -3,11 +3,14 @@ import torch
 from torch import nn
 import torch.autograd.profiler as profiler
 
-from RT_data_hws import load_data_direct_pytorch, load_data_full_pytorch_2,absorbed_flux_to_heating_rate
+from RT_data_hws import load_data_direct_pytorch, load_data_full_pytorch_2, absorbed_flux_to_heating_rate
 
 eps_1 = 0.0000001
 
 class MLP(nn.Module):
+    """
+    A fully connected multilayer perceptron module
+    """
     def __init__(self, n_hidden, n_input, n_output, device, lower=-0.1, upper=0.1):
         super(MLP, self).__init__()
         self.n_hidden = n_hidden
@@ -18,10 +21,13 @@ class MLP(nn.Module):
         for n in n_hidden:
             mod = nn.Linear(n_last, n, bias=True,device=device)
             torch.nn.init.uniform_(mod.weight, a=lower, b=upper)
-            torch.nn.init.uniform_(mod.bias, a=-0.1, b=0.1)
+            # Because of Relu activation, don't want any connections to
+            # be prematurely pruned away by becoming negative.
+            # Therefore start with a significant positive bias
+            torch.nn.init.uniform_(mod.bias, a=0.9, b=1.1) #a=-0.1, b=0.1)
             self.hidden.append(mod)
             n_last = n
-        self.activation = nn.ReLU()
+        self.relu = nn.ReLU()
         self.output = nn.Linear(n_last, n_output, bias=True, device=device)
         torch.nn.init.uniform_(self.output.weight, a=lower, b=upper)
         torch.nn.init.uniform_(self.output.bias, a=-0.1, b=0.1)
@@ -29,18 +35,71 @@ class MLP(nn.Module):
     def forward(self, x):
         for hidden in self.hidden:
             x = hidden(x)
-            x = self.activation(x)
+            x = self.relu(x)
         return self.output(x)
+
+class LayerDistributed(nn.Module):
+    """
+    Applies the a single module to an array of atmospheric layers
+
+    Adapted from https://stackoverflow.com/questions/62912239/tensorflows-timedistributed-equivalent-in-pytorch
+
+    Allows inputs and outputs to be lists of tensors
+    Input and output dimensions are: (n_samples, n_layers, input / output dimensions. . .)
+    """
+
+    def __init__(self, module):
+        super(LayerDistributed, self).__init__()
+        self.module = module
+
+    def forward(self, x):
+
+        if torch.is_tensor(x):
+            shape = x.shape
+            n_sample = shape[0]
+            n_layer = shape[1]
+
+            squashed_input = x.contiguous().view(n_sample*n_layer, *shape[2:]) 
+        else: 
+            # Input is a list of tensors. Squash each individually
+            squashed_input = []
+            for xx in x:
+                # Squash samples and layers into a single axis
+                shape = xx.shape
+                n_sample = shape[0]
+                n_layer = shape[1]
+
+                xx_reshape = xx.contiguous().view(n_sample*n_layer, *shape[2:])
+                squashed_input.append(xx_reshape)
+
+        y = self.module(squashed_input)
+
+        # Reshape y
+
+        if torch.is_tensor(y):
+            shape = y.shape
+            unsquashed_output = y.contiguous().view(n_sample, n_layer, *shape[1:]) 
+        else:
+            # Output is a list of tensors. Unsquash each individually
+            unsquashed_output = []
+            for yy in y:
+                shape = yy.shape
+                yy_reshaped = yy.contiguous().view(n_sample, n_layer, *shape[1:])
+                unsquashed_output.append(yy_reshaped)
+
+        return unsquashed_output
     
+
 class Extinction(nn.Module):
     """ 
-    Computes optical depth for each atmospheric constituent
+    For a given layer, computes optical depth for each atmospheric constituent for each channel
     """
     def __init__(self, n_channel, device):
         super(Extinction, self).__init__()
         self.n_channel = n_channel
         self.device = device
 
+        # Computes extinction coeffients for each constituent for each channel
         self.net_lw  = nn.Linear(1,self.n_channel,bias=False,device=device)
         self.net_iw  = nn.Linear(1,self.n_channel,bias=False,device=device)
         self.net_h2o = nn.Linear(1,self.n_channel,bias=False,device=device)
@@ -61,12 +120,23 @@ class Extinction(nn.Module):
         torch.nn.init.uniform_(self.net_n2o.weight, a=lower, b=upper)
         torch.nn.init.uniform_(self.net_ch4.weight, a=lower, b=upper)
 
+        # exp() activation forces coefficient to always be positive
+        # and never negative or zero
+        self.exp = torch.exp
+
+        # Modifies extinction coeffient as a function of temperature and pressure
+        # (pressuring broadening of atmospheric absorption lines)
+        # Single network for each constituent
         self.net_ke_h2o = MLP(n_hidden=(6,4,4),n_input=3,n_output=1,device=device)
         self.net_ke_o3  = MLP(n_hidden=(6,4,4),n_input=3,n_output=1,device=device)
         self.net_ke_co2 = MLP(n_hidden=(6,4,4),n_input=3,n_output=1,device=device)
         self.net_ke_u   = MLP(n_hidden=(6,4,4),n_input=3,n_output=1,device=device)
         self.net_ke_n2o = MLP(n_hidden=(6,4,4),n_input=3,n_output=1,device=device)
         self.net_ke_ch4 = MLP(n_hidden=(6,4,4),n_input=3,n_output=1,device=device)
+
+        self.sigmoid = nn.Sigmoid()
+
+        # Filters select which constituents contribute to each channel
 
         self.filter_h2o = torch.tensor([1,1,1,1,1, 1,1,1,1,1, 1,1,1,1,1,
                                        1,1,1,1,1, 1,1,0,0,0, 0,0,0,1,1,],
@@ -91,18 +161,12 @@ class Extinction(nn.Module):
         self.filter_ch4 = torch.tensor([1,1,1,1,0, 0,1,1,0,0, 1,1,0,0,0,
                                        0,0,0,0,0, 0,0,0,0,0, 0,0,0,1,1,],
                                        dtype=torch.float32,device=device)
-        
-        #self.activation_1 = nn.ReLU()
-        # exp() activation forces coefficient to always be positive
-        # and never negative or zero
-        self.activation_1 = torch.exp
-        self.activation_2 = nn.Sigmoid()
 
     def forward(self, x):
         t_p, c = x
 
-        a = self.activation_1
-        b = self.activation_2
+        a = self.exp
+        b = self.sigmoid
 
         one = torch.ones((c.shape[0],1), dtype=torch.float32,device=self.device)
         tau_lw  = a(self.net_lw (one)) * (c[:,0:1])
@@ -127,54 +191,7 @@ class Extinction(nn.Module):
 
         return tau
     
-class TimeDistributed(nn.Module):
-    """
-    Adapted from https://stackoverflow.com/questions/62912239/tensorflows-timedistributed-equivalent-in-pytorch
-    Allows inputs and outputs to be lists of tensors
-    Input and output elements are: (samples, timesteps, input/output dim 1,
-    input / output dim 2, . . .)
-    """
-    def __init__(self, module):
-        super(TimeDistributed, self).__init__()
-        self.module = module
 
-    def forward(self, x):
-
-        if torch.is_tensor(x):
-            shape = x.shape
-            n_sample = shape[0]
-            n_layer = shape[1]
-
-            squashed_input = x.contiguous().view(n_sample*n_layer, *shape[2:])  # (samples * timesteps, input_size)
-        else: 
-            # Is a list of tensors. Squash each individually
-            squashed_input = []
-            for xx in x:
-                # Squash samples and timesteps into a single axis
-                shape = xx.shape
-                n_sample = shape[0]
-                n_layer = shape[1]
-
-                xx_reshape = xx.contiguous().view(n_sample*n_layer, *shape[2:])  # (samples * timesteps, input_size)
-                squashed_input.append(xx_reshape)
-
-        y = self.module(squashed_input)
-
-        # We have to reshape y
-
-        if torch.is_tensor(y):
-            shape = y.shape
-            unsquashed_output = y.contiguous().view(n_sample, n_layer, *shape[1:])  # (samples, timesteps, output_size)
-        else:
-            # Is a list of tensors. Unsquash each individually
-            unsquashed_output = []
-            for yy in y:
-                shape = yy.shape
-                yy_reshaped = yy.contiguous().view(n_sample, n_layer, *shape[1:])  # (samples, timesteps, output_size)
-                unsquashed_output.append(yy_reshaped)
-
-        return unsquashed_output
-    
 class LayerPropertiesDirect(nn.Module):
     """ Only Computes Direct Transmission Coefficient """
     def __init__(self):
@@ -189,32 +206,49 @@ class LayerPropertiesDirect(nn.Module):
 
 
 class Scattering(nn.Module):
-    """ Computes full set of layer properties for
-    direct and diffuse transmission, reflection,
-    and absorption
-    Uses a separate net for each channel
+    """ 
+    For a given atmospheric layer, computes radiative coefficients (transmission, reflection,
+    and absorption) for both direct and diffuse input for each channel.
+    Uses a separate MLP for each channel.
+
+    Inputs:
+
+        Cosine of zenith angle: mu_direct, mu_diffuse
+
+        Optical depth of each constituent in layer for each channel: tau
+
+        Mass of each constituent in layer: constituents
+
+
+    Outputs:
+
+        Direct transmission coefficients of 
+            the layer: t_direct, t_diffuse 
+
+        The layer's split of extinguised  
+            radiation into transmitted, reflected,
+            and absorbed components. These components 
+            sum to 1.0: e_split_direct, e_split_diffuse 
+
     """
     def __init__(self, n_channel, n_constituent, device):
         super(Scattering, self).__init__()
         self.n_channel = n_channel
-        n_hidden = [5, 4, 4]
+
         """ Computes split of extinguished radiation into absorbed, diffuse transmitted, and
         diffuse reflected """
-        self.net_direct = nn.ModuleList([MLP(n_hidden, n_constituent,3,device,lower=-1.0,upper=1.0) for _ in range(self.n_channel)])
+        n_hidden = [5, 4, 4]
+        self.net_direct = nn.ModuleList([MLP(n_hidden, n_constituent + 1,3,device,lower=-1.0,upper=1.0) for _ in range(self.n_channel)])
         self.net_diffuse = nn.ModuleList([MLP(n_hidden, n_constituent,3,device, lower=-1.0,upper=1.0) for _ in range(self.n_channel)])
         self.softmax = nn.Softmax(dim=-1)
 
     def forward(self, x):
 
-
         tau, mu_direct, mu_diffuse, constituents = x
 
         constituents_direct = constituents / (mu_direct + eps_1)
-        constituents_diffuse = constituents / (mu_diffuse + eps_1)
-
-        # tau.shape = (n, 29, n_constituents)
-        #mu_direct = torch.unsqueeze(mu_direct, dim=2)
-        #mu_diffuse = torch.unsqueeze(mu_diffuse, dim=2)
+        constituents_diffuse = constituents 
+        constituents_direct = torch.concat((constituents_direct, mu_direct),dim=1)
 
         tau_total = torch.sum(tau, dim=2, keepdims=False)
 
@@ -231,11 +265,9 @@ class Scattering(nn.Module):
 
         return layer_properties
     
-def propagate_layer_up (t_direct, t_diffuse, e_split_direct, e_split_diffuse, r_bottom_direct, r_bottom_diffuse, a_bottom_direct, a_bottom_diffuse):
+def adding_doubling (t_direct, t_diffuse, e_split_direct, e_split_diffuse, r_bottom_direct, r_bottom_diffuse, a_bottom_direct, a_bottom_diffuse):
     """
-    Combines the properties of two atmospheric layers within a column: 
-    usually a shallow "top layer" and a thicker "bottom layer" where this "bottom layer" spans all the 
-    layers beneath the top layer including the surface. Computes the impact of multi-reflection between these layers.
+    Multireflection between a single layer and a surface.
 
     Naming conventions:
      
@@ -247,45 +279,49 @@ def propagate_layer_up (t_direct, t_diffuse, e_split_direct, e_split_diffuse, r_
     through reflection or multi-reflection
     
     Input and Output Shape:
-        Tensor with shape (n_batches, n_channels)
+        Tensor with shape (n_samples, n_channels, . . .)
 
     Arguments:
 
-        t_direct, t_diffuse - Direct transmission coefficients for 
-            the top layer. 
+        t_direct, t_diffuse - Direct transmission coefficients of 
+            the layer. 
 
-        e_split_direct, e_split_diffuse - The split of extinguised  
+        e_split_direct, e_split_diffuse - The layer's split of extinguised  
             radiation into transmitted, reflected,
-            and absorbed components. These components sum to 1.0.
-            Also, transmitted and reflected components are always
+            and absorbed components. These components 
+            sum to 1.0. Also, transmitted and reflected components are always
             diffuse.
             
         r_bottom_direct, r_bottom_diffuse - The reflection 
-            coefficients for bottom layer.
+            coefficients of the surface.
 
         a_bottom_direct, a_bottom_diffuse - The absorption coefficients
-            for the bottom layer. 
+            of the surface. 
             
     Returns:
 
-        t_multi_direct, t_multi_diffuse - The transmission coefficients for 
+        t_multi_direct, t_multi_diffuse - The layer's transmission coefficients of 
             radiation that is multi-reflected (as opposed to directly transmitted, 
             e.g., t_direct, t_diffuse)
 
-        r_multi_direct, r_multi_diffuse - The reflection coefficients 
-            for the top layer after accounting for multi-reflection
-            with the bottom layer
+        r_multi_direct, r_multi_diffuse - The layer's reflection coefficients 
+            after accounting for multi-reflection with the surface
 
         r_bottom_multi_direct, r_bottom_multi_diffuse - The reflection coefficients for
-            the bottom layer after accounting for multi-reflection with top layer
+            the surface after accounting for multi-reflection with the layer
 
         a_top_multi_direct, a_top_multi_diffuse - The absorption coefficients of 
-            the top layer after multi-reflection between the layers
+            the layer after multi-reflection with surface
 
         a_bottom_multi_direct, a_bottom_multi_diffuse - The absorption coefficients 
-            of the bottom layer after multi-reflection between the layers
+            of the surface after multi-reflection with the layer
 
     Notes:
+
+        When merging the multireflected layer and the surface into a new "surface":
+        r = r_multi (the reflection of the combination is the reflection of layer)
+        a = a_top_multi + a_bottom_multi (however, the absorption of the combination is the sum)
+
         Since the bottom layer includes the surface:
                 a_bottom_direct + r_bottom_direct = 1.0
                 a_bottom_diffuse + r_bottom_diffuse = 1.0
@@ -340,11 +376,11 @@ def propagate_layer_up (t_direct, t_diffuse, e_split_direct, e_split_diffuse, r_
 
     #print(f"e_a_diffuse.shape = {e_a_diffuse.shape}")
 
-    # Multi-reflection between the top layer and lower layer resolves 
-    # a direct beam into:
-    #   r_multi_direct - total effective reflection at the top layer
-    #   a_top_multi_direct - absorption at the top layer
-    #   a_bottom_multi_direct - absorption for the entire bottom layer
+    # Multi-reflection between the layer and surface resolves 
+    # a direct input into:
+    #   r_multi_direct - total effective reflection at the layer
+    #   a_top_multi_direct - absorption at the layer
+    #   a_bottom_multi_direct - absorption at the surface
 
     # The adding-doubling method computes these
     # See p.418-424 of "A First Course in Atmospheric Radiation (2nd edition)"
@@ -405,8 +441,20 @@ def propagate_layer_up (t_direct, t_diffuse, e_split_direct, e_split_diffuse, r_
 
 class MultiReflection(nn.Module):
     """
-    Computes multireflection coefficients between successive layers.
-    Computation propagates upwards starting with the surface layer.
+    Updates the representation of the atmosphere by incorporating 
+    interactions between layers (multireflection) using the 
+    adding-doubling method. 
+
+    The basic idea is that we multi reflect between a single 
+    layer and a surface computing their revised radiative coefficients 
+    (transmission, reflection, and absorption).
+    Then the surface and the layer are merged into a new
+    "surface" and the process is repeated with 
+    the next layer above. We construct this representation by 
+    starting at the original surface and moving upwards layer by layer
+    to the top of the atmosphere (toa) 
+
+    Computations are independent across channel.
     """
 
     def __init__(self):
@@ -414,12 +462,11 @@ class MultiReflection(nn.Module):
 
     def forward(self, x):
 
-        layer_properties, surface_properties = x
+        radiative_layers, x_surface = x
 
-        #t_direct[n,n_layer,n_channel]
-        t_direct, t_diffuse, e_split_direct, e_split_diffuse = layer_properties
+        t_direct, t_diffuse, e_split_direct, e_split_diffuse = radiative_layers
 
-        r_bottom_direct, r_bottom_diffuse, a_bottom_direct, a_bottom_diffuse = surface_properties[:,:,0], surface_properties[:,:,1], surface_properties[:,:,2], surface_properties[:,:,3]
+        r_bottom_direct, r_bottom_diffuse, a_bottom_direct, a_bottom_diffuse = x_surface[:,:,0], x_surface[:,:,1], x_surface[:,:,2], x_surface[:,:,3]
 
         t_multi_direct = []
         t_multi_diffuse = []
@@ -428,15 +475,17 @@ class MultiReflection(nn.Module):
         a_top_multi_direct = []
         a_top_multi_diffuse = []
 
+        # Compute starting at the original surface and the first layer and progress upwards
         for l in reversed(range(t_direct.shape[1])):
-            multirelection_layer = propagate_layer_up (t_direct[:,l,:], t_diffuse[:,l,:], e_split_direct[:,l,:,:], e_split_diffuse[:,l,:,:], r_bottom_direct, r_bottom_diffuse, a_bottom_direct, a_bottom_diffuse)
+            multireflected_info = adding_doubling (t_direct[:,l,:], t_diffuse[:,l,:], e_split_direct[:,l,:,:], e_split_diffuse[:,l,:,:], r_bottom_direct, r_bottom_diffuse, a_bottom_direct, a_bottom_diffuse)
 
             t_multi_direct, t_multi_diffuse, \
             r_multi_direct, r_multi_diffuse, \
             r_bottom_multi_direct, r_bottom_multi_diffuse, \
             a_top_multi_direct, a_top_multi_diffuse, \
-            a_bottom_multi_direct, a_bottom_multi_diffuse= multirelection_layer
+            a_bottom_multi_direct, a_bottom_multi_diffuse = multireflected_info
 
+            # Merge the layer and surface forming a new "surface"
             r_bottom_direct = r_multi_direct
             r_bottom_diffuse = r_multi_diffuse
             a_bottom_direct = a_top_multi_direct + a_bottom_multi_direct
@@ -463,9 +512,9 @@ class MultiReflection(nn.Module):
         a_top_multi_direct = torch.flip(a_top_multi_direct, dims=(1,))
         a_top_multi_diffuse = torch.flip(a_top_multi_diffuse, dims=(1,))
 
-        multireflection_layer_properties = [t_direct, t_diffuse, t_multi_direct, t_multi_diffuse, r_bottom_multi_direct,r_bottom_multi_diffuse, a_top_multi_direct, a_top_multi_diffuse]
+        multireflected_layers = [t_direct, t_diffuse, t_multi_direct, t_multi_diffuse, r_bottom_multi_direct,r_bottom_multi_diffuse, a_top_multi_direct, a_top_multi_diffuse]
 
-        return [multireflection_layer_properties, r_multi_direct]
+        return [multireflected_layers, r_multi_direct]
     
 
 class Propagation(nn.Module):
@@ -482,12 +531,12 @@ class Propagation(nn.Module):
 
     def forward(self, x):
 
-        multireflection_layer_properties, r_multi_direct, input_flux = x
+        multireflected_layers, r_multi_direct, input_flux = x
 
         t_direct, t_diffuse, \
         t_multi_direct, t_multi_diffuse, \
         r_bottom_multi_direct, r_bottom_multi_diffuse, \
-        a_top_multi_direct, a_top_multi_diffuse  = multireflection_layer_properties
+        a_top_multi_direct, a_top_multi_diffuse  = multireflected_layers
 
         # Assign all 3 fluxes above the top layer
         input_flux_direct, input_flux_diffuse = input_flux
@@ -558,8 +607,8 @@ class DirectDownwardNet(nn.Module):
         self.spectral_net = nn.Linear(1,n_channel,bias=False,device=device)
         torch.nn.init.uniform_(self.spectral_net.weight, a=0.4, b=0.6)
         self.softmax = nn.Softmax(dim=-1)
-        self.extinction_net = TimeDistributed(Extinction(n_channel,device))
-        self.layer_properties_net = TimeDistributed(LayerPropertiesDirect())
+        self.extinction_net = LayerDistributed(Extinction(n_channel,device))
+        self.layer_properties_net = LayerDistributed(LayerPropertiesDirect())
         self.downward_propagate = DownwardPropagationDirect(n_channel)
 
     def forward(self, x):
@@ -593,9 +642,9 @@ class FullNet(nn.Module):
         torch.nn.init.uniform_(self.spectral_net.weight, a=0.4, b=0.6)
         self.softmax = nn.Softmax(dim=-1)
 
-        self.extinction_net = TimeDistributed(Extinction(n_channel,device))
+        self.extinction_net = LayerDistributed(Extinction(n_channel,device))
 
-        self.scattering_net = TimeDistributed(Scattering(n_channel,n_constituent,device))
+        self.scattering_net = LayerDistributed(Scattering(n_channel,n_constituent,device))
 
         self.multireflection_net = MultiReflection()
 
@@ -605,27 +654,33 @@ class FullNet(nn.Module):
         x_layers, x_surface = x
         mu_direct, temperature_pressure, constituents = x_layers[:,:,0:1], x_layers[:,:,1:4], x_layers[:,:,4:12]
 
+        # Diffuse Zenith Angle
         #with profiler.record_function("Mu Diffuse"):
         one = torch.ones((mu_direct.shape[0],1),dtype=torch.float32,device=self.device)
         mu_diffuse = self.sigmoid(self.mu_diffuse_net(one))
         mu_diffuse = mu_diffuse.repeat([1,mu_direct.shape[1]])
         mu_diffuse = torch.unsqueeze(mu_diffuse,dim=2)
 
+        # Optical Depth
         #with profiler.record_function("Extinction"):
         tau = self.extinction_net((temperature_pressure, constituents))
 
+        # Transmission, Reflection, and Absorption for each individual layer
         #with profiler.record_function("Scattering"):
-        layer_properties = self.scattering_net((tau, mu_direct, mu_diffuse, constituents))
+        radiative_layers = self.scattering_net((tau, mu_direct, mu_diffuse, constituents))
 
+        # Interaction (multireflection) among all layers
         #with profiler.record_function("Multireflection"):
-        multireflected_layer_properties = self.multireflection_net([layer_properties,x_surface])
+        multireflected_layers = self.multireflection_net([radiative_layers,x_surface])
 
+        # Decomposition of flux into spectral channels
         #with profiler.record_function("Flux Propagatation"):
         input_flux_direct = self.softmax(self.spectral_net(one))
         input_flux_diffuse = torch.zeros((mu_direct.shape[0], self.n_channel),dtype=torch.float32,device=self.device)
         input_flux = [input_flux_direct, input_flux_diffuse]
 
-        flux = self.propagation_net(*multireflected_layer_properties, input_flux)
+        # Propagation of flux through layers along spectral channels
+        flux = self.propagation_net(*multireflected_layers, input_flux)
 
         flux_down_direct, flux_down_diffuse, flux_up_diffuse, flux_absorbed = flux
         flux_down = flux_down_direct + flux_down_diffuse
