@@ -9,8 +9,20 @@ eps_1 = 0.0000001
 
 class MLP(nn.Module):
     """
-    A fully connected multilayer perceptron module
+    Multi Layer Perceptron (MLP) module
+
+    Fully connected layers
+    
+    Uses ReLU activation for hidden units
+    No activation for output unit
+    
+    Initialization of all weights with uniform distribution with 'lower' and 'upper'
+    bounds. Defaults to -0.1 < x < 0.1
+    
+    Hidden units initial bias with uniform distribution 0.9 < x < 1.1
+    Output unit initial bias with uniform distribution -0.1 < x <0.1
     """
+
     def __init__(self, n_hidden, n_input, n_output, device, lower=-0.1, upper=0.1):
         super(MLP, self).__init__()
         self.n_hidden = n_hidden
@@ -21,7 +33,8 @@ class MLP(nn.Module):
         for n in n_hidden:
             mod = nn.Linear(n_last, n, bias=True,device=device)
             torch.nn.init.uniform_(mod.weight, a=lower, b=upper)
-            # Because of Relu activation, don't want any connections to
+            # Bias initialized to ~1.0
+            # Because of ReLU activation, don't want any connections to
             # be prematurely pruned away by becoming negative.
             # Therefore start with a significant positive bias
             torch.nn.init.uniform_(mod.bias, a=0.9, b=1.1) #a=-0.1, b=0.1)
@@ -40,12 +53,12 @@ class MLP(nn.Module):
 
 class LayerDistributed(nn.Module):
     """
-    Applies the a single module to an array of atmospheric layers
+    Applies a nn.Module to an array of atmospheric layers
 
     Adapted from https://stackoverflow.com/questions/62912239/tensorflows-timedistributed-equivalent-in-pytorch
 
-    Allows inputs and outputs to be lists of tensors
-    Input and output dimensions are: (n_samples, n_layers, input / output dimensions. . .)
+    The input and output may be a list of tensors
+    Each tensor has dimensions: (n_samples, n_layers, input / output dimensions. . .)
     """
 
     def __init__(self, module):
@@ -93,13 +106,20 @@ class LayerDistributed(nn.Module):
 class Extinction(nn.Module):
     """ 
     For a given layer, computes optical depth for each atmospheric constituent for each channel
+
+    Inputs:
+        Mass of each atmospheric constituent in layer
+        Temperature, pressure, and log(pressure)
+
+    Outputs
+        Optical depth of each constituent in layer
     """
     def __init__(self, n_channel, device):
         super(Extinction, self).__init__()
         self.n_channel = n_channel
         self.device = device
 
-        # Computes extinction coeffients for each constituent for each channel
+        # Computes extinction coeffient for each constituent for each channel
         self.net_lw  = nn.Linear(1,self.n_channel,bias=False,device=device)
         self.net_iw  = nn.Linear(1,self.n_channel,bias=False,device=device)
         self.net_h2o = nn.Linear(1,self.n_channel,bias=False,device=device)
@@ -124,8 +144,9 @@ class Extinction(nn.Module):
         # and never negative or zero
         self.exp = torch.exp
 
-        # Modifies extinction coeffient as a function of temperature and pressure
-        # (pressuring broadening of atmospheric absorption lines)
+        # Modifies each extinction coeffient as a function of temperature, pressure
+        # and ln(pressure)
+        # Seeks to model pressuring broadening of atmospheric absorption lines
         # Single network for each constituent
         self.net_ke_h2o = MLP(n_hidden=(6,4,4),n_input=3,n_output=1,device=device)
         self.net_ke_o3  = MLP(n_hidden=(6,4,4),n_input=3,n_output=1,device=device)
@@ -136,7 +157,12 @@ class Extinction(nn.Module):
 
         self.sigmoid = nn.Sigmoid()
 
-        # Filters select which constituents contribute to each channel
+        # Filters select which channels each constituent contributes to
+        # Follows similiar assignment of bands as
+        # Table A2 in Pincus, R., Mlawer, E. J., &
+        # Delamere, J. S. (2019). Balancing accuracy, efficiency, and flexibility in
+        # radiation calculations for dynamical models. Journal of Advances in Modeling
+        # Earth Systems, 11,3074–3089. https://doi.org/10.1029/2019MS001621
 
         self.filter_h2o = torch.tensor([1,1,1,1,1, 1,1,1,1,1, 1,1,1,1,1,
                                        1,1,1,1,1, 1,1,0,0,0, 0,0,0,1,1,],
@@ -163,7 +189,10 @@ class Extinction(nn.Module):
                                        dtype=torch.float32,device=device)
 
     def forward(self, x):
-        t_p, c = x
+        temperature_pressure_log_pressure, constituents = x
+
+        c = constituents
+        t_p = temperature_pressure_log_pressure
 
         a = self.exp
         b = self.sigmoid
@@ -192,10 +221,10 @@ class Extinction(nn.Module):
         return tau
     
 
-class LayerPropertiesDirect(nn.Module):
+class DirectTransmission(nn.Module):
     """ Only Computes Direct Transmission Coefficient """
     def __init__(self):
-        super(LayerPropertiesDirect, self).__init__()
+        super(DirectTransmission, self).__init__()
 
     def forward(self, x):
         mu_direct, tau = x
@@ -208,16 +237,16 @@ class LayerPropertiesDirect(nn.Module):
 class Scattering(nn.Module):
     """ 
     For a given atmospheric layer, computes radiative coefficients (transmission, reflection,
-    and absorption) for both direct and diffuse input for each channel.
+    and absorption) for both direct and diffuse inputs for each channel.
     Uses a separate MLP for each channel.
 
     Inputs:
 
         Cosine of zenith angle: mu_direct, mu_diffuse
 
-        Optical depth of each constituent in layer for each channel: tau
+        Optical depth of each constituent for each channel: tau
 
-        Mass of each constituent in layer: constituents
+        Mass of each constituent: constituents
 
 
     Outputs:
@@ -225,20 +254,26 @@ class Scattering(nn.Module):
         Direct transmission coefficients of 
             the layer: t_direct, t_diffuse 
 
-        The layer's split of extinguised  
+        The layer's split of the extinguised  
             radiation into transmitted, reflected,
-            and absorbed components. These components 
+            and absorbed components. The transmitted
+            and reflected components are diffuse. Components 
             sum to 1.0: e_split_direct, e_split_diffuse 
+
+    Note: extinguished radiation is that radiation which is not directly transmitted
 
     """
     def __init__(self, n_channel, n_constituent, device):
         super(Scattering, self).__init__()
         self.n_channel = n_channel
 
-        """ Computes split of extinguished radiation into absorbed, diffuse transmitted, and
-        diffuse reflected """
+        """ Models split of extinguished radiation into absorbed, transmitted, and
+        reflected components """
         n_hidden = [5, 4, 4]
+        # For direct input
+        # Has additional input for zenith angle ('mu_direct')
         self.net_direct = nn.ModuleList([MLP(n_hidden, n_constituent + 1,3,device,lower=-1.0,upper=1.0) for _ in range(self.n_channel)])
+        # For diffuse input
         self.net_diffuse = nn.ModuleList([MLP(n_hidden, n_constituent,3,device, lower=-1.0,upper=1.0) for _ in range(self.n_channel)])
         self.softmax = nn.Softmax(dim=-1)
 
@@ -246,20 +281,21 @@ class Scattering(nn.Module):
 
         tau, mu_direct, mu_diffuse, constituents = x
 
-        constituents_direct = constituents / (mu_direct + eps_1)
-        constituents_diffuse = constituents 
-        constituents_direct = torch.concat((constituents_direct, mu_direct),dim=1)
 
         tau_total = torch.sum(tau, dim=2, keepdims=False)
 
         t_direct = torch.exp(-tau_total / (mu_direct + eps_1))
         t_diffuse = torch.exp(-tau_total / (mu_diffuse + eps_1))
 
-        e_split_direct_list = [self.softmax(net(constituents_direct)) for net in self.net_direct]
-        e_split_diffuse_list = [self.softmax(net(constituents_diffuse)) for net in self.net_diffuse]
+        constituents_direct = constituents / (mu_direct + eps_1)
+        constituents_diffuse = constituents 
+        constituents_direct = torch.concat((constituents_direct, mu_direct),dim=1)
 
-        e_split_direct = torch.stack(e_split_direct_list, dim=1)
-        e_split_diffuse = torch.stack(e_split_diffuse_list, dim=1)
+        e_split_direct = [self.softmax(net(constituents_direct)) for net in self.net_direct]
+        e_split_diffuse = [self.softmax(net(constituents_diffuse)) for net in self.net_diffuse]
+
+        e_split_direct = torch.stack(e_split_direct, dim=1)
+        e_split_diffuse = torch.stack(e_split_diffuse, dim=1)
 
         layer_properties = [t_direct, t_diffuse, e_split_direct, e_split_diffuse]
 
@@ -608,16 +644,16 @@ class DirectDownwardNet(nn.Module):
         torch.nn.init.uniform_(self.spectral_net.weight, a=0.4, b=0.6)
         self.softmax = nn.Softmax(dim=-1)
         self.extinction_net = LayerDistributed(Extinction(n_channel,device))
-        self.layer_properties_net = LayerDistributed(LayerPropertiesDirect())
+        self.layer_properties_net = LayerDistributed(DirectTransmission())
         self.downward_propagate = DownwardPropagationDirect(n_channel)
 
     def forward(self, x):
-        mu_direct, temperature_pressure, constituents = x[:,:,0:1], x[:,:,1:4], x[:,:,4:]
+        mu_direct, temperature_pressure_log_pressure, constituents = x[:,:,0:1], x[:,:,1:4], x[:,:,4:]
         #with profiler.record_function("Spectral Decomposition"):
         one = torch.unsqueeze(torch.ones((mu_direct.shape[0]),dtype=torch.float32,device=self.device), 1)
         flux_down_above_direct_channels = self.softmax(self.spectral_net(one))
         #with profiler.record_function("Optical Depth"):
-        tau = self.extinction_net((temperature_pressure, constituents))
+        tau = self.extinction_net((temperature_pressure_log_pressure, constituents))
         #with profiler.record_function("Layer Properties"):
         t_direct = self.layer_properties_net((mu_direct, tau))
         #with profiler.record_function("Downward Propagate"):
@@ -652,7 +688,7 @@ class FullNet(nn.Module):
 
     def forward(self, x):
         x_layers, x_surface = x
-        mu_direct, temperature_pressure, constituents = x_layers[:,:,0:1], x_layers[:,:,1:4], x_layers[:,:,4:12]
+        mu_direct, temperature_pressure_log_pressure, constituents = x_layers[:,:,0:1], x_layers[:,:,1:4], x_layers[:,:,4:12]
 
         # Diffuse Zenith Angle
         #with profiler.record_function("Mu Diffuse"):
@@ -663,7 +699,7 @@ class FullNet(nn.Module):
 
         # Optical Depth
         #with profiler.record_function("Extinction"):
-        tau = self.extinction_net((temperature_pressure, constituents))
+        tau = self.extinction_net((temperature_pressure_log_pressure, constituents))
 
         # Transmission, Reflection, and Absorption for each individual layer
         #with profiler.record_function("Scattering"):
