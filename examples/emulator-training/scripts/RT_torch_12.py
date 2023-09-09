@@ -1,4 +1,5 @@
 import numpy as np
+from typing import List
 import torch
 from torch import nn
 import torch.autograd.profiler as profiler
@@ -23,7 +24,7 @@ class MLP(nn.Module):
     Output unit initial bias with uniform distribution -0.1 < x <0.1
     """
 
-    def __init__(self, n_hidden, n_input, n_output, device, lower=-0.1, upper=0.1):
+    def __init__(self, n_hidden: List[int], n_input, n_output, device, lower=-0.1, upper=0.1):
         super(MLP, self).__init__()
         self.n_hidden = n_hidden
         self.n_outputs = n_output
@@ -426,18 +427,23 @@ def adding_doubling (t_direct, t_diffuse, e_split_direct, e_split_diffuse, r_bot
 
     # pre-compute denominator. Add constant to avoid division by zero
     eps = 1.0e-06
-    d = 1.0 / (1.0 - e_diffuse * e_r_diffuse * r_bottom_diffuse + eps)
+    d = 1.0/(1.0 - e_diffuse*e_r_diffuse*r_bottom_diffuse + eps)
 
-    t_multi_direct = t_direct * r_bottom_direct * e_diffuse * e_r_diffuse * d + \
-        e_direct * e_t_direct * d # good
+    t_multi_direct = (t_direct * r_bottom_direct * e_diffuse * e_r_diffuse*d 
+                      + e_direct * e_t_direct * d) # good
     
-    a_bottom_multi_direct = t_direct * a_bottom_direct + t_multi_direct * a_bottom_diffuse # good
+    a_bottom_multi_direct = (t_direct * a_bottom_direct 
+                             + t_multi_direct * a_bottom_diffuse) # good
 
-    r_bottom_multi_direct = t_direct * r_bottom_direct * d + e_direct * e_t_direct * r_bottom_diffuse * d # good
+    r_bottom_multi_direct = (t_direct * r_bottom_direct * d 
+                             + e_direct * e_t_direct * r_bottom_diffuse * d) # good
 
-    a_top_multi_direct = e_direct * e_a_direct + r_bottom_multi_direct * e_diffuse * e_a_diffuse # good
+    a_top_multi_direct = (e_direct * e_a_direct 
+                          + r_bottom_multi_direct * e_diffuse * e_a_diffuse) # good
 
-    r_multi_direct = e_direct * e_r_direct + r_bottom_multi_direct * (t_diffuse + e_diffuse * e_t_diffuse) # good
+    r_multi_direct = (e_direct * e_r_direct 
+                      + r_bottom_multi_direct 
+                      * (t_diffuse + e_diffuse * e_t_diffuse)) # good
 
     # These should sum to 1.0
     #total_direct = a_bottom_multi_direct + a_top_multi_direct + r_multi_direct
@@ -448,17 +454,22 @@ def adding_doubling (t_direct, t_diffuse, e_split_direct, e_split_diffuse, r_bot
 
     # Multi-reflection for diffuse flux
 
-    t_multi_diffuse = \
-        t_diffuse * r_bottom_diffuse * e_diffuse * e_r_diffuse * d + \
-        e_diffuse * e_t_diffuse * d  # good
+    t_multi_diffuse = (
+        t_diffuse * r_bottom_diffuse * e_diffuse * e_r_diffuse * d 
+        + e_diffuse * e_t_diffuse * d)  # good
     
-    a_bottom_multi_diffuse = t_diffuse * a_bottom_diffuse + t_multi_diffuse * a_bottom_diffuse # good
+    a_bottom_multi_diffuse = (t_diffuse * a_bottom_diffuse 
+                              + t_multi_diffuse * a_bottom_diffuse) # good
 
-    r_bottom_multi_diffuse = t_diffuse * r_bottom_diffuse * d + e_diffuse * e_t_diffuse * r_bottom_diffuse * d # good
+    r_bottom_multi_diffuse = (t_diffuse * r_bottom_diffuse * d 
+                              + e_diffuse * e_t_diffuse * r_bottom_diffuse * d) # good
     
-    a_top_multi_diffuse = e_diffuse * e_a_diffuse + r_bottom_multi_diffuse * e_diffuse * e_a_diffuse # good
+    a_top_multi_diffuse = (e_diffuse * e_a_diffuse 
+                           + r_bottom_multi_diffuse * e_diffuse * e_a_diffuse) # good
 
-    r_multi_diffuse = e_diffuse * e_r_diffuse + r_bottom_multi_diffuse * (t_diffuse + e_diffuse * e_t_diffuse) # good
+    r_multi_diffuse = (e_diffuse * e_r_diffuse 
+                       + r_bottom_multi_diffuse 
+                       * (t_diffuse + e_diffuse * e_t_diffuse)) # good
 
     #total_diffuse = a_bottom_multi_diffuse + a_top_multi_diffuse + r_multi_diffuse
     #tf.debugging.assert_near(total_diffuse, 1.0, rtol=1e-3, atol=1e-3, message="Total Diffuse Error", summarize=5)
@@ -469,11 +480,11 @@ def adding_doubling (t_direct, t_diffuse, e_split_direct, e_split_diffuse, r_bot
 
     #tf.debugging.assert_near(r_multi_diffuse + a_top_multi_diffuse + a_bottom_multi_diffuse, 1.0, rtol=1e-2, atol=1e-2, message="Top Diffuse", summarize=5)
 
-    return t_multi_direct, t_multi_diffuse, \
-            r_multi_direct, r_multi_diffuse, \
-            r_bottom_multi_direct, r_bottom_multi_diffuse, \
-            a_top_multi_direct, a_top_multi_diffuse, \
-            a_bottom_multi_direct, a_bottom_multi_diffuse
+    return (t_multi_direct, t_multi_diffuse, 
+            r_multi_direct, r_multi_diffuse, 
+            r_bottom_multi_direct, r_bottom_multi_diffuse, 
+            a_top_multi_direct, a_top_multi_diffuse, 
+            a_bottom_multi_direct, a_bottom_multi_diffuse)
 
 class MultiReflection(nn.Module):
     """
@@ -512,14 +523,20 @@ class MultiReflection(nn.Module):
         a_top_multi_diffuse = []
 
         # Compute starting at the original surface and the first layer and progress upwards
-        for l in reversed(range(t_direct.shape[1])):
-            multireflected_info = adding_doubling (t_direct[:,l,:], t_diffuse[:,l,:], e_split_direct[:,l,:,:], e_split_diffuse[:,l,:,:], r_bottom_direct, r_bottom_diffuse, a_bottom_direct, a_bottom_diffuse)
+        for i in reversed(range(t_direct.shape[1])):
+            multireflected_info = adding_doubling (t_direct[:,i,:], 
+                                                   t_diffuse[:,i,:], 
+                                                   e_split_direct[:,i,:,:], 
+                                                   e_split_diffuse[:,i,:,:], r_bottom_direct, 
+                                                   r_bottom_diffuse, 
+                                                   a_bottom_direct, 
+                                                   a_bottom_diffuse)
 
-            t_multi_direct, t_multi_diffuse, \
-            r_multi_direct, r_multi_diffuse, \
-            r_bottom_multi_direct, r_bottom_multi_diffuse, \
-            a_top_multi_direct, a_top_multi_diffuse, \
-            a_bottom_multi_direct, a_bottom_multi_diffuse = multireflected_info
+            (t_multi_direct, t_multi_diffuse,
+            r_multi_direct, r_multi_diffuse,
+            r_bottom_multi_direct, r_bottom_multi_diffuse,
+            a_top_multi_direct, a_top_multi_diffuse,
+            a_bottom_multi_direct, a_bottom_multi_diffuse) = multireflected_info
 
             # Merge the layer and surface forming a new "surface"
             r_bottom_direct = r_multi_direct
@@ -583,22 +600,22 @@ class Propagation(nn.Module):
         # Will assign flux absorbed at each layer
         flux_absorbed = []
 
-        for l in range(t_direct.shape[1]):
+        for i in range(t_direct.shape[1]):
 
-            flux_absorbed.append(input_flux_direct * a_top_multi_direct[:,l] + 
-                        input_flux_diffuse * a_top_multi_diffuse[:,l])
+            flux_absorbed.append(input_flux_direct * a_top_multi_direct[:,i] + 
+                        input_flux_diffuse * a_top_multi_diffuse[:,i])
 
             # Will want this later when incorporate surface interactions
             #flux_absorbed_bottom = input_flux_direct * a_bottom_multi_direct + \
             #input_flux_diffuse * a_bottom_multi_diffuse
 
-            flux_down_direct.append(input_flux_direct * t_direct[:,l])
-            flux_down_diffuse.append(input_flux_direct * t_multi_direct[:,l] + 
-                                    input_flux_diffuse * (t_diffuse[:,l] + t_multi_diffuse[:,l]))
+            flux_down_direct.append(input_flux_direct * t_direct[:,i])
+            flux_down_diffuse.append(input_flux_direct * t_multi_direct[:,i] + 
+                                    input_flux_diffuse * (t_diffuse[:,i] + t_multi_diffuse[:,i]))
             flux_up_diffuse.append(input_flux_direct * 
-                                         r_bottom_multi_direct[:,l] 
+                                         r_bottom_multi_direct[:,i] 
                                          + input_flux_diffuse * 
-                                         r_bottom_multi_diffuse[:,l])
+                                         r_bottom_multi_diffuse[:,i])
             
             input_flux_direct = flux_down_direct[-1]
             input_flux_diffuse = flux_down_diffuse[-1]
