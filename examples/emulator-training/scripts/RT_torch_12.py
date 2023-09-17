@@ -14,7 +14,7 @@ class MLP(nn.Module):
 
     Fully connected layers
     
-    Uses ReLU activation for hidden units
+    Uses SoftPlus() activation for hidden units
     No activation for output unit
     
     Initialization of all weights with uniform distribution with 'lower' 
@@ -24,7 +24,7 @@ class MLP(nn.Module):
     Output unit initial bias with uniform distribution -0.1 < x <0.1
     """
 
-    def __init__(self, n_input, n_hidden: List[int], n_output, device, 
+    def __init__(self, n_input, n_hidden: List[int], n_output, dropout, device, 
                  lower=-0.1, upper=0.1):
         super(MLP, self).__init__()
         self.n_hidden = n_hidden
@@ -43,6 +43,7 @@ class MLP(nn.Module):
             self.hidden.append(mod)
             n_last = n
         self.relu = nn.ReLU()
+        self.dropout = nn.Dropout(dropout)
         self.output = nn.Linear(n_last, n_output, bias=True, device=device)
         torch.nn.init.uniform_(self.output.weight, a=lower, b=upper)
         torch.nn.init.uniform_(self.output.bias, a=-0.1, b=0.1)
@@ -50,6 +51,7 @@ class MLP(nn.Module):
     def forward(self, x):
         for hidden in self.hidden:
             x = hidden(x)
+            x = self.dropout(x)
             x = self.relu(x)
         return self.output(x)
 
@@ -122,7 +124,7 @@ class Extinction(nn.Module):
     Outputs
         Optical depth of each constituent in each channel
     """
-    def __init__(self, n_channel, device):
+    def __init__(self, n_channel, dropout, device):
         super(Extinction, self).__init__()
         self.n_channel = n_channel
         self.device = device
@@ -157,17 +159,17 @@ class Extinction(nn.Module):
         # Seeks to model pressuring broadening of atmospheric absorption lines
         # Single network for each constituent
         self.net_ke_h2o = MLP(n_input=3,n_hidden=(6,4,4),n_output=1,
-                              device=device)
+                            dropout=dropout,device=device)
         self.net_ke_o3  = MLP(n_input=3,n_hidden=(6,4,4),n_output=1,
-                              device=device)
+                              dropout=dropout,device=device)
         self.net_ke_co2 = MLP(n_input=3,n_hidden=(6,4,4),n_output=1,
-                              device=device)
+                              dropout=dropout,device=device)
         self.net_ke_u   = MLP(n_input=3,n_hidden=(6,4,4),n_output=1,
-                              device=device)
+                              dropout=dropout,device=device)
         self.net_ke_n2o = MLP(n_input=3,n_hidden=(6,4,4),n_output=1,
-                              device=device)
+                              dropout=dropout,device=device)
         self.net_ke_ch4 = MLP(n_input=3,n_hidden=(6,4,4),n_output=1,
-                              device=device)
+                              dropout=dropout,device=device)
 
         self.sigmoid = nn.Sigmoid()
 
@@ -293,7 +295,7 @@ class Scattering(nn.Module):
             
     """
 
-    def __init__(self, n_channel, n_constituent, device):
+    def __init__(self, n_channel, n_constituent, dropout, device):
 
         super(Scattering, self).__init__()
         self.n_channel = n_channel
@@ -305,6 +307,7 @@ class Scattering(nn.Module):
             [MLP(n_input=n_constituent + 1,
                  n_hidden=n_hidden,
                  n_output=3,
+                 dropout=dropout,
                  device=device,
                  lower=-1.0,upper=1.0) 
              for _ in range(self.n_channel)])
@@ -313,6 +316,7 @@ class Scattering(nn.Module):
             [MLP(n_input=n_constituent, 
                  n_hidden=n_hidden, 
                  n_output=3,
+                dropout=dropout,
                  device=device, 
                  lower=-1.0,upper=1.0) 
              for _ in range(self.n_channel)])
@@ -351,25 +355,12 @@ class MultiReflection(nn.Module):
     Recomputes each layer's radiative coefficients by accounting
     for interaction (multireflection) with all other layers using the 
     Adding-Doubling method (no learning).
-
-    Multi reflects between a surface and a single 
-    overhead layer generating their revised radiative coefficients.
-    Then merges this surface and layer into a new
-    "surface" and we repeat this process with 
-    the next layer above and continues
-    to the top of the atmosphere (TOA).
-
-    Computations are independent across channel.
-     
-    The variable prefixes -- t, e, r, a -- correspond respectively to
-    transmission, extinction, reflection, and absorption.
-
     """
 
     def __init__(self):
         super(MultiReflection, self).__init__()
 
-    def _adding_doubling (t_direct, t_diffuse, 
+    def _adding_doubling (self, t_direct, t_diffuse, 
                         e_split_direct, e_split_diffuse, 
                         r_surface_direct, r_surface_diffuse, 
                         a_surface_direct, a_surface_diffuse):
@@ -395,8 +386,8 @@ class MultiReflection(nn.Module):
             e_split_direct, e_split_diffuse - The layer's split of extinguised  
                 radiation into transmitted, reflected,
                 and absorbed components. These components 
-                sum to 1.0. Also, the transmitted and reflected components are 
-                always diffuse.
+                sum to 1.0. The transmitted and reflected components produce
+                diffuse radiation.
                 
             r_surface_direct, r_surface_diffuse - The original reflection 
                 coefficients of the surface.
@@ -456,7 +447,7 @@ class MultiReflection(nn.Module):
                 a_layer_multi_direct + a_surface_multi_direct => 
                                                             a_surface_direct
 
-            See class Propagation for how the multi-reflection
+            See class Propagation below for how the multi-reflection
             coefficients are used to propagate radiation 
             downward from the top of the atmosphere
         """
@@ -501,10 +492,10 @@ class MultiReflection(nn.Module):
                                 + t_multi_diffuse * a_surface_diffuse)
 
         r_surface_multi_diffuse = (t_diffuse * r_surface_diffuse * d 
-                                + e_diffuse * e_t_diffuse * r_surface_diffuse*d)
+                             + e_diffuse * e_t_diffuse * r_surface_diffuse*d)
         
         a_layer_multi_diffuse = (e_diffuse * e_a_diffuse 
-                            + r_surface_multi_diffuse * e_diffuse * e_a_diffuse)
+                        + r_surface_multi_diffuse * e_diffuse * e_a_diffuse)
 
         r_layer_multi_diffuse = (e_diffuse * e_r_diffuse 
                         + r_surface_multi_diffuse 
@@ -517,6 +508,19 @@ class MultiReflection(nn.Module):
                 a_surface_multi_direct, a_surface_multi_diffuse)
 
     def forward(self, x):
+        """
+        Multi reflects between a surface and a single 
+        overhead layer generating their revised radiative coefficients.
+        Then merges this surface and layer into a new
+        "surface" and we repeat this process with 
+        the next layer above and continues
+        to the top of the atmosphere (TOA).
+
+        Computations are independent across channel.
+
+        The prefixes -- t, e, r, a -- correspond respectively to
+        transmission, extinction, reflection, and absorption.
+        """
 
         radiative_layers, x_surface = x
 
@@ -527,17 +531,16 @@ class MultiReflection(nn.Module):
                                                x_surface[:,:,1], 
                                                x_surface[:,:,2], 
                                                x_surface[:,:,3])
-
-        t_multi_direct = []
-        t_multi_diffuse = []
-        r_surface_multi_direct = []
-        r_surface_multi_diffuse = []
-        a_layer_multi_direct = []
-        a_layer_multi_diffuse = []
+        t_multi_direct_list = []
+        t_multi_diffuse_list = []
+        r_surface_multi_direct_list = []
+        r_surface_multi_diffuse_list = []
+        a_layer_multi_direct_list = []
+        a_layer_multi_diffuse_list = []
 
         # Start at the original surface and the first layer and move up
         # one layer for each iteration
-        for i in reversed(range(t_direct.shape[1])):
+        for i in reversed(torch.arange(start=0, end=t_direct.shape[1])):
             multireflected_info = self._adding_doubling (t_direct[:,i,:], 
                                                    t_diffuse[:,i,:], 
                                                    e_split_direct[:,i,:,:], 
@@ -558,20 +561,20 @@ class MultiReflection(nn.Module):
             a_surface_direct = a_layer_multi_direct + a_surface_multi_direct
             a_surface_diffuse = a_layer_multi_diffuse + a_surface_multi_diffuse
 
-            t_multi_direct.append(t_multi_direct)
-            t_multi_diffuse.append(t_multi_diffuse)
-            r_surface_multi_direct.append(r_surface_multi_direct)
-            r_surface_multi_diffuse.append(r_surface_multi_diffuse)
-            a_layer_multi_direct.append(a_layer_multi_direct)
-            a_layer_multi_diffuse.append(a_layer_multi_diffuse)
+            t_multi_direct_list.append(t_multi_direct)
+            t_multi_diffuse_list.append(t_multi_diffuse)
+            r_surface_multi_direct_list.append(r_surface_multi_direct)
+            r_surface_multi_diffuse_list.append(r_surface_multi_diffuse)
+            a_layer_multi_direct_list.append(a_layer_multi_direct)
+            a_layer_multi_diffuse_list.append(a_layer_multi_diffuse)
 
         # Stack output in layers
-        t_multi_direct= torch.stack(t_multi_direct, dim=1)
-        t_multi_diffuse = torch.stack(t_multi_diffuse, dim=1)
-        r_surface_multi_direct = torch.stack(r_surface_multi_direct, dim=1)
-        r_surface_multi_diffuse = torch.stack(r_surface_multi_diffuse, dim=1)
-        a_layer_multi_direct = torch.stack(a_layer_multi_direct, dim=1)
-        a_layer_multi_diffuse = torch.stack(a_layer_multi_diffuse, dim=1)
+        t_multi_direct= torch.stack(t_multi_direct_list, dim=1)
+        t_multi_diffuse = torch.stack(t_multi_diffuse_list, dim=1)
+        r_surface_multi_direct = torch.stack(r_surface_multi_direct_list, dim=1)
+        r_surface_multi_diffuse = torch.stack(r_surface_multi_diffuse_list, dim=1)
+        a_layer_multi_direct = torch.stack(a_layer_multi_direct_list, dim=1)
+        a_layer_multi_diffuse = torch.stack(a_layer_multi_diffuse_list, dim=1)
 
         # Reverse ordering of layers such that top layer is first
         t_multi_direct = torch.flip(t_multi_direct, dims=(1,))
@@ -632,30 +635,31 @@ class Propagation(nn.Module):
 
         flux_direct, flux_diffuse = input_flux
 
-        # Assign all 3 fluxes above the layer
+        # Assign all 3 fluxes above the top layer
         flux_down_direct = [flux_direct]
         flux_down_diffuse = [flux_diffuse]
         flux_up_diffuse = [flux_direct * upward_reflection_toa]
 
-        # Will assign flux absorbed at each layer
         flux_absorbed = []
 
         for i in range(t_direct.shape[1]):
 
-            flux_absorbed.append(flux_direct * a_layer_multi_direct[:,i] + 
-                        flux_diffuse * a_layer_multi_diffuse[:,i])
+            flux_absorbed.append(
+                flux_direct * a_layer_multi_direct[:,i]  
+                + flux_diffuse * a_layer_multi_diffuse[:,i])
 
             # Will want this later when incorporate surface interactions
             #flux_absorbed_surface = flux_direct * a_surface_multi_direct + \
             #flux_diffuse * a_surface_multi_diffuse
 
             flux_down_direct.append(flux_direct * t_direct[:,i])
-            flux_down_diffuse.append(flux_direct * t_multi_direct[:,i] + 
-                                    flux_diffuse * (t_diffuse[:,i] + t_multi_diffuse[:,i]))
-            flux_up_diffuse.append(flux_direct * 
-                                         r_surface_multi_direct[:,i] 
-                                         + flux_diffuse * 
-                                         r_surface_multi_diffuse[:,i])
+            flux_down_diffuse.append(
+                flux_direct * t_multi_direct[:,i] 
+                + flux_diffuse * (t_diffuse[:,i] + t_multi_diffuse[:,i]))
+            
+            flux_up_diffuse.append(
+                flux_direct * r_surface_multi_direct[:,i] 
+                + flux_diffuse * r_surface_multi_diffuse[:,i])
             
             flux_direct = flux_down_direct[-1]
             flux_diffuse = flux_down_diffuse[-1]
@@ -665,88 +669,114 @@ class Propagation(nn.Module):
         flux_up_diffuse = torch.stack(flux_up_diffuse,dim=1)
         flux_absorbed = torch.stack(flux_absorbed,dim=1)
 
+        # Sum across channels
         flux_down_direct = torch.sum(flux_down_direct,dim=2,keepdim=False)
         flux_down_diffuse = torch.sum(flux_down_diffuse,dim=2,keepdim=False)      
         flux_up_diffuse = torch.sum(flux_up_diffuse,dim=2,keepdim=False)  
         flux_absorbed = torch.sum(flux_absorbed,dim=2,keepdim=False)  
 
-        return [flux_down_direct, flux_down_diffuse, flux_up_diffuse, flux_absorbed]
+        return [flux_down_direct, flux_down_diffuse, flux_up_diffuse, 
+                flux_absorbed]
 
 class DownwardPropagationDirect(nn.Module):
+    """    
+    Propagate direct downward flux from the top of the atmosphere 
+    to the surface.
+    """
     def __init__(self,n_channel):
         super(DownwardPropagationDirect, self).__init__()
         self.n_channel = n_channel
 
     def forward(self, x):
-        flux_down_above_direct_channels, t_direct = x
-        flux_down_direct_channels = [flux_down_above_direct_channels]
-        flux = flux_down_above_direct_channels
+        input_flux, t_direct = x
+        flux_down_direct = [input_flux]
         for i in range(t_direct.size(1)):
-            flux = flux * t_direct[:,i,:]
-            flux_down_direct_channels.append(flux)
-        output = torch.stack(flux_down_direct_channels,dim=1)
-        return output
+            output_flux = input_flux * t_direct[:,i,:]
+            flux_down_direct.append(output_flux)
+            input_flux = output_flux
+        flux_down_direct = torch.stack(flux_down_direct,dim=1)
+        flux_down_direct = torch.sum(flux_down_direct,dim=2,keepdim=False)
+        return flux_down_direct
 
 class DirectDownwardNet(nn.Module):
-
-    def __init__(self, n_channel, device):
+    """ Computes radiative transfer for downward direct radiation only """
+    def __init__(self, n_channel, n_constituent, device):
         super(DirectDownwardNet, self).__init__()
         self.device = device
+        self.n_constituent = n_constituent
+
+        # Learns decompositon of input solar radiation into channels
         self.spectral_net = nn.Linear(1,n_channel,bias=False,device=device)
         torch.nn.init.uniform_(self.spectral_net.weight, a=0.4, b=0.6)
         self.softmax = nn.Softmax(dim=-1)
+
+        # Learns optical depth for each constituent for each channel
         self.extinction_net = LayerDistributed(Extinction(n_channel,device))
-        self.layer_properties_net = LayerDistributed(DirectTransmission())
+
+        # Computes direct transmission coefficient for each channel
+        self.direct_transmission_net = LayerDistributed(DirectTransmission())
+
+        # Progates radiation from top of atmosphere (TOA) to surface
         self.downward_propagate = DownwardPropagationDirect(n_channel)
 
     def forward(self, x):
-        mu_direct, temperature_pressure_log_pressure, constituents = x[:,:,0:1], x[:,:,1:4], x[:,:,4:]
-        #with profiler.record_function("Spectral Decomposition"):
-        one = torch.unsqueeze(torch.ones((mu_direct.shape[0]),dtype=torch.float32,device=self.device), 1)
-        flux_down_above_direct_channels = self.softmax(self.spectral_net(one))
-        #with profiler.record_function("Optical Depth"):
+        x_layers, _, _, _ = x
+        (mu_direct, temperature_pressure_log_pressure, 
+         constituents) = (x_layers[:,:,0:1], x_layers[:,:,1:4], 
+                          x_layers[:,:,4:4+self.n_constituent])
+
+        one = torch.unsqueeze(
+            torch.ones((mu_direct.shape[0]),
+                       dtype=torch.float32,device=self.device), 1)
+        
+        input_flux = self.softmax(self.spectral_net(one))
+
         tau = self.extinction_net((temperature_pressure_log_pressure, constituents))
-        #with profiler.record_function("Layer Properties"):
-        t_direct = self.layer_properties_net((mu_direct, tau))
-        #with profiler.record_function("Downward Propagate"):
-        flux_down_direct_channels = self.downward_propagate((flux_down_above_direct_channels,t_direct))
-        flux_down_direct = torch.sum(flux_down_direct_channels,dim=2,keepdim=False)
+
+        t_direct = self.direct_transmission_net((mu_direct, tau))
+
+        flux_down_direct = self.downward_propagate((input_flux,t_direct))
+
         return flux_down_direct
     
 class FullNet(nn.Module):
     """ Computes full radiative transfer (direct and diffuse radiation)
     for an atmospheric column """
 
-    def __init__(self, n_channel, n_constituent, device):
+    def __init__(self, n_channel, n_constituent, dropout, device):
         super(FullNet, self).__init__()
         self.device = device
         self.n_channel = n_channel
 
-        # Learns scalar diffuse zenith angle approximation
+        # Learns single diffuse zenith angle approximation 
         self.mu_diffuse_net = nn.Linear(1,1,bias=False,device=device)
         torch.nn.init.uniform_(self.mu_diffuse_net.weight, a=0.4, b=0.6)
         self.sigmoid = nn.Sigmoid()
 
-        # Learns decompositon of TOA radiation into channels
+        # Learns decompositon of input solar radiation into channels
         self.spectral_net = nn.Linear(1,n_channel,bias=False,device=device)
         torch.nn.init.uniform_(self.spectral_net.weight, a=0.4, b=0.6)
         self.softmax = nn.Softmax(dim=-1)
 
-        # Learns optical depth
-        self.extinction_net = LayerDistributed(Extinction(n_channel,device))
+        # Learns optical depth for each layer for each constituent for 
+        # each channel
+        self.extinction_net = LayerDistributed(Extinction(n_channel,dropout,
+                                                          device))
 
-        # Learns scattering
+        # Learns decomposition of extinguished radiation (into t, r, a)
+        # for each channel
         self.scattering_net = LayerDistributed(Scattering(n_channel,
                                                           n_constituent,
+                                                          dropout,
                                                           device))
-        # Computes multireflection among all layers
+        # Computes result of interaction among all layers
         self.multireflection_net = MultiReflection()
 
-        # Propagation of radiation from TOA to surface
+        # Propagates radiation from top of atmosphere (TOA) to surface
         self.propagation_net = Propagation(n_channel)
 
     def forward(self, x):
-        x_layers, x_surface = x
+        x_layers, x_surface, _, _, _, _ = x
 
         (mu_direct, 
          temperature_pressure_log_pressure, 
@@ -754,38 +784,31 @@ class FullNet(nn.Module):
                           x_layers[:,:,1:4], 
                           x_layers[:,:,4:12])
 
-        # Learn diffuse zenith angle
         one = torch.ones((mu_direct.shape[0],1),dtype=torch.float32,
                          device=self.device)
         mu_diffuse = self.sigmoid(self.mu_diffuse_net(one))
         mu_diffuse = mu_diffuse.repeat([1,mu_direct.shape[1]])
         mu_diffuse = torch.unsqueeze(mu_diffuse,dim=2)
 
-        # Learn optical depth of each layer
         tau = self.extinction_net((temperature_pressure_log_pressure, 
                                    constituents))
 
-        # Learn full set of radiative coefficients
-        # from scattering
         layers = self.scattering_net((tau, mu_direct, mu_diffuse, 
                                                 constituents))
 
-        # Interaction (multireflection) among all layers
         (multireflected_layers, 
          upward_reflection_toa) = self.multireflection_net([layers,
                                                           x_surface])
 
-        # Learn decomposition of flux into spectral channels at TOA
         flux_direct = self.softmax(self.spectral_net(one))
         flux_diffuse = torch.zeros((mu_direct.shape[0], self.n_channel),
                                          dtype=torch.float32,
                                          device=self.device)
         input_flux = [flux_direct, flux_diffuse]
 
-        # Propagate flux through layers downward along spectral channels
-        flux = self.propagation_net(multireflected_layers, 
+        flux = self.propagation_net((multireflected_layers, 
                                     upward_reflection_toa,
-                                    input_flux)
+                                    input_flux))
 
         (flux_down_direct, flux_down_diffuse, flux_up_diffuse, 
          flux_absorbed) = flux
@@ -794,19 +817,20 @@ class FullNet(nn.Module):
         flux_up = flux_up_diffuse
         return [flux_down_direct, flux_down, flux_up, flux_absorbed]
 
-def loss_weighted(y, y_pred, weight_profile):
-    error = torch.mean(torch.square(weight_profile * (y_pred - y)), 
+def loss_weighted(y_true, y_pred, weight_profile):
+    error = torch.mean(torch.square(weight_profile * (y_pred - y_true)), 
                        dim=(0,1), keepdim=False)
     return error
 
-def loss_heating_rate_direct(y, y_pred, toa, delta_pressure):
-    absorbed_true = y[:,:-1] - y[:,1:]
+def loss_heating_rate_direct(y_true, y_pred, toa, delta_pressure):
+    absorbed_true = y_true[:,:-1] - y_true[:,1:]
     absorbed_pred = y_pred[:,:-1] - y_pred[:,1:]
     heat_true = absorbed_flux_to_heating_rate(absorbed_true, delta_pressure)
     heat_pred = absorbed_flux_to_heating_rate(absorbed_pred, delta_pressure)
     error = torch.sqrt(torch.mean(torch.square(toa * (heat_true - heat_pred)),
                                   dim=(0,1),keepdim=False))
     return error
+
 def loss_heating_rate_direct_wrapper(data, y_pred, weight_profile):
     _, y, x_toa, x_delta_pressure = data
     loss = loss_heating_rate_direct(y,y_pred,x_toa,x_delta_pressure)
@@ -816,46 +840,62 @@ def loss_heating_rate_direct_full_wrapper(data, y_pred, weight_profile):
     _, _, toa, delta_pressure, y_true, _ = data
     flux_down_direct_pred, _, _, _ = y_pred
     flux_down_direct_true = y_true[:,:,0]
-    loss = loss_heating_rate_direct(flux_down_direct_true, flux_down_direct_pred, toa, delta_pressure)
+    loss = loss_heating_rate_direct(flux_down_direct_true, 
+                                    flux_down_direct_pred, 
+                                    toa, 
+                                    delta_pressure)
     return loss
 
-def loss_heating_rate_full(flux_absorbed_true, flux_absorbed_pred, toa, delta_pressure):
-    heat_true = absorbed_flux_to_heating_rate(flux_absorbed_true, delta_pressure)
-    heat_pred = absorbed_flux_to_heating_rate(flux_absorbed_pred, delta_pressure)
-    error = torch.sqrt(torch.mean(torch.square(toa * (heat_true - heat_pred)),
+def loss_heating_rate_full(flux_absorbed_true, flux_absorbed_pred, 
+                           toa, delta_pressure):
+    heat_true = absorbed_flux_to_heating_rate(flux_absorbed_true, 
+                                              delta_pressure)
+    heat_pred = absorbed_flux_to_heating_rate(flux_absorbed_pred, 
+                                              delta_pressure)
+    loss = torch.sqrt(torch.mean(torch.square(toa * (heat_true - heat_pred)),
                                   dim=(0,1),keepdim=False))
-    return error
+    return loss
+
 def loss_heating_rate_full_wrapper(data, y_pred, weight_profile):
     _, _, toa, delta_pressure, _, flux_absorbed_true = data
     _, _, _, flux_absorbed_pred = y_pred
-    loss = loss_heating_rate_full(flux_absorbed_true, flux_absorbed_pred, toa, delta_pressure)
+    loss = loss_heating_rate_full(flux_absorbed_true, flux_absorbed_pred, 
+                                  toa, delta_pressure)
     return loss
 
-def loss_ukkonen_direct(y, y_pred, toa, delta_pressure, weight_profile):
-    # y(n_examples, n_layers+1)
-    loss_flux = loss_weighted (y, y_pred, weight_profile)
-    hr_loss = loss_heating_rate_direct(y, y_pred, toa, delta_pressure)
+def loss_ukkonen_direct(y_true, y_pred, toa, delta_pressure, weight_profile):
+    loss_flux = loss_weighted (y_true, y_pred, weight_profile)
+    hr_loss = loss_heating_rate_direct(y_true, y_pred, toa, delta_pressure)
     alpha   = 1.0e-4
     return alpha * hr_loss + (1.0 - alpha) * loss_flux
 
 def loss_ukkonen_direct_wrapper(data, y_pred, weight_profile):
-    _, y, x_toa, x_delta_pressure = data
-    loss = loss_ukkonen_direct(y,y_pred,x_toa,x_delta_pressure,weight_profile)
+    _, y_true, x_toa, x_delta_pressure = data
+    loss = loss_ukkonen_direct(y_true,y_pred,x_toa,x_delta_pressure,weight_profile)
     return loss
 
 def loss_flux_direct_wrapper(data, y_pred, weight_profile):
-    _, y, _, _ = data
-    loss = loss_weighted(y,y_pred,weight_profile)
+    _, y_true, _, _ = data
+    loss = loss_weighted(y_true,y_pred,weight_profile)
     return loss
 
 def loss_flux_full_wrapper(data, y_pred, weight_profile):
+    _, _, toa, _, y_true, _ = data
+    flux_down_true, flux_up_true = y_true[:,:,1], y_true[:,:,2]
+    _, flux_down_pred, flux_up_pred, _ = y_pred
+    
+    flux_pred = torch.concat((flux_down_pred,flux_up_pred),dim=1)
+    flux_true = torch.concat((flux_down_true,flux_up_true),dim=1)
+    loss = loss_weighted(flux_true, flux_pred, toa)
+    return loss
+
+def loss_flux_full_wrapper_2(data, y_pred, weight_profile):
     _, _, _, _, y_true, _ = data
     flux_down_true, flux_up_true = y_true[:,:,1], y_true[:,:,2]
     _, flux_down_pred, flux_up_pred, _ = y_pred
     
     flux_pred = torch.concat((flux_down_pred,flux_up_pred),dim=1)
     flux_true = torch.concat((flux_down_true,flux_up_true),dim=1)
-
     loss = loss_weighted(flux_true, flux_pred, weight_profile)
     return loss
 
@@ -881,7 +921,7 @@ def loss_henry(y_true, flux_absorbed_true, y_pred, toa_weighting_profile,
     alpha   = 1.0e-4
     return alpha * (hr_loss + hr_direct_loss) + (1.0 - alpha) * flux_loss
 
-def loss_henry_wrapper(data, y_pred, weight_profile):
+def loss_henry_full_wrapper(data, y_pred, weight_profile):
     _, _, toa, delta_pressure, y_true, flux_absorbed_true = data
     loss = loss_henry(y_true, flux_absorbed_true, y_pred, toa, 
                delta_pressure, weight_profile)
@@ -890,18 +930,13 @@ def loss_henry_wrapper(data, y_pred, weight_profile):
 
 def train_loop(dataloader, model, optimizer, loss_function, weight_profile):
     """ Generic training loop """
-    # Set the model to training mode - important for batch normalization and dropout layers
-    # Unnecessary in this situation but added for best practices
+
     model.train()
 
     loss_string = "Training Loss: "
     for batch, data in enumerate(dataloader):
-        # Compute prediction and loss
         y_pred = model(data)
-
         loss = loss_function(data, y_pred, weight_profile)
-
-        # Backpropagation
         loss.backward()
         optimizer.step()
         optimizer.zero_grad()
@@ -914,15 +949,11 @@ def train_loop(dataloader, model, optimizer, loss_function, weight_profile):
 
 def test_loop(dataloader, model, loss_functions, loss_names, weight_profile):
     """ Generic testing / evaluation loop """
-    # Set the model to evaluation mode - important for batch normalization and dropout layers
-    # Unnecessary in this situation but added for best practices
     model.eval()
     num_batches = len(dataloader)
 
     loss = np.zeros(len(loss_functions), dtype=np.float32)
 
-    # Evaluating the model with torch.no_grad() ensures that no gradients are computed during test mode
-    # also serves to reduce unnecessary gradient computations and memory usage for tensors with requires_grad=True
     with torch.no_grad():
         for data in dataloader:
             y_pred = model(data)
@@ -932,7 +963,7 @@ def test_loop(dataloader, model, loss_functions, loss_names, weight_profile):
     loss /= num_batches
 
     print(f"Test Error: ")
-    for i, value in loss:
+    for i, value in enumerate(loss):
         print(f" {loss_names[i]}: {value:.8f}")
 
     return loss
@@ -953,12 +984,12 @@ def train_direct_only():
     filename_training = datadir + "/RADSCHEME_data_g224_CAMS_2009-2018_sans_2014-2015.2.nc"
     filename_validation = datadir + "/RADSCHEME_data_g224_CAMS_2014.2.nc"
     filename_testing = datadir + "/RADSCHEME_data_g224_CAMS_2015_true_solar_angles.nc"
-    filename_direct_model = datadir + "/Direct_Torch."
+    filename_direct_model = datadir + "/Direct_Torch.3."
 
     batch_size = 2048
     n_channel = 30
     n_constituent = 8
-    model = DirectDownwardNet(n_channel,device)
+    model = DirectDownwardNet(n_channel,n_constituent,device)
     model = model.to(device=device)
 
     optimizer = torch.optim.Adam(model.parameters())
@@ -966,21 +997,22 @@ def train_direct_only():
     checkpoint_period = 100
     epochs = 4000
 
-    x_layers, y, x_toa, x_delta_pressure = load_data_direct_pytorch(filename_training, n_channel)
-
-    weight_profile = 1.0 / torch.mean(torch.from_numpy(y).float().to(device), dim=0, keepdim=True)
+    x_layers, y_true, x_toa, x_delta_pressure = load_data_direct_pytorch(filename_training, n_channel)
 
     tensorize = convert_to_tensor(device)
+    weight_profile = 1.0 / torch.mean(tensorize(y_true), dim=0, keepdim=True)
+
+
     train_dataset = torch.utils.data.TensorDataset(tensorize(x_layers), 
-                                                   tensorize(y),
+                                                   tensorize(y_true),
                                                    tensorize(x_toa),
                                                    tensorize(x_delta_pressure))
 
     train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size, shuffle=True)
 
-    x_layers, y, x_toa, x_delta_pressure = load_data_direct_pytorch(filename_validation, n_channel)
+    x_layers, y_true, x_toa, x_delta_pressure = load_data_direct_pytorch(filename_validation, n_channel)
     validation_dataset = torch.utils.data.TensorDataset(tensorize(x_layers), 
-                                                   tensorize(y),
+                                                   tensorize(y_true),
                                                    tensorize(x_toa),
                                                    tensorize(x_delta_pressure))
 
@@ -1025,9 +1057,9 @@ def train_direct_only():
     print("Done!")
     #print(prof.key_averages(group_by_stack_n=5).table(sort_by='self_cpu_time_total', row_limit=5))
 
-def get_weight_profile(y,device):
-    rsd = torch.from_numpy(y[:,:,1]).float().to(device)
-    rsu = torch.from_numpy(y[:,:,2]).float().to(device)
+def get_weight_profile(y_flux,device):
+    rsd = torch.from_numpy(y_flux[:,:,1]).float().to(device)
+    rsu = torch.from_numpy(y_flux[:,:,2]).float().to(device)
     flux = torch.concat((rsd,rsu),dim=1)
     weight_profile = 1.0 / torch.mean(flux,dim=0,keepdim=True)
     return weight_profile
@@ -1042,15 +1074,16 @@ def train_full():
     filename_training = datadir + "/RADSCHEME_data_g224_CAMS_2009-2018_sans_2014-2015.2.nc"
     filename_validation = datadir + "/RADSCHEME_data_g224_CAMS_2014.2.nc"
     filename_testing = datadir + "/RADSCHEME_data_g224_CAMS_2015_true_solar_angles.nc"
-    filename_full_model = datadir + "/Full_Torch."
+    filename_full_model = datadir + "/Full_Torch.3."
 
     batch_size = 2048
     n_channel = 30
     n_constituent = 8
     checkpoint_period = 100
     epochs = 4000
+    dropout = 0.0
 
-    model = FullNet(n_channel,n_constituent,device).to(device=device)
+    model = FullNet(n_channel,n_constituent,dropout,device).to(device=device)
     optimizer = torch.optim.Adam(model.parameters())
 
     (x_layers, x_surface, x_toa, x_delta_pressure, 
@@ -1088,9 +1121,13 @@ def train_full():
     start = torch.cuda.Event(enable_timing=True)
     end = torch.cuda.Event(enable_timing=True)
 
-    loss_functions = (loss_henry_wrapper, loss_heating_rate_full_wrapper,
-                      loss_heating_rate_direct_full_wrapper, loss_flux_full_wrapper)
-    loss_names = ("Loss", "Heating Rate Loss", "Direct Heating Rate Loss", "Flux Loss")
+    loss_functions = (loss_henry_full_wrapper, loss_flux_full_wrapper_2, loss_heating_rate_full_wrapper,
+                      loss_heating_rate_direct_full_wrapper, loss_flux_full_wrapper,
+                      )
+    loss_names = ("Loss", "Flux Loss (weight profile)", "Heating Rate Loss", 
+                  "Direct Heating Rate Loss", 
+                    "Flux Loss (TOA weighting)")
+
 
     if True:
         t = 0
@@ -1106,7 +1143,7 @@ def train_full():
         print(f"Epoch {t}\n-------------------------------")
         #with profiler.profile(with_stack=True, profile_memory=True) as prof:
         start.record()
-        train_loop(train_dataloader, model, optimizer, loss_henry_wrapper, weight_profile)
+        train_loop(train_dataloader, model, optimizer, loss_henry_full_wrapper, weight_profile)
 
         loss = test_loop(validation_dataloader, model, loss_functions, loss_names,weight_profile)
         end.record()
@@ -1125,6 +1162,50 @@ def train_full():
     print("Done!")
     #print(prof.key_averages(group_by_stack_n=5).table(sort_by='self_cpu_time_total', row_limit=5))
 
+def test_full():
+
+    print("Pytorch version:", torch.__version__)
+    device = ("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using {device} device")
+
+    datadir     = "/home/hws/tmp/"
+
+    filename_testing = datadir + "/RADSCHEME_data_g224_CAMS_2015_true_solar_angles.nc"
+    filename_full_model = datadir + "/Full_Torch.3."
+
+    batch_size = 2048
+    n_channel = 30
+    n_constituent = 8
+
+    tensorize = convert_to_tensor(device)
+    (x_layers, x_surface, x_toa, x_delta_pressure, 
+     y_flux, y_flux_absorbed) = load_data_full_pytorch_2(filename_testing, n_channel)
+    weight_profile = get_weight_profile(y_flux, device)
+    test_dataset = torch.utils.data.TensorDataset(tensorize(x_layers), 
+                                                   tensorize(x_surface), 
+                                                   tensorize(x_toa), 
+                                                   tensorize(x_delta_pressure), 
+                                                   tensorize(y_flux), 
+                                                   tensorize(y_flux_absorbed))
+    test_dataloader = torch.utils.data.DataLoader(test_dataset, batch_size, shuffle=True)
+
+    model = FullNet(n_channel,n_constituent,device)
+    model = model.to(device=device)
+
+    loss_functions = (loss_henry_full_wrapper, loss_heating_rate_full_wrapper,
+                      loss_heating_rate_direct_full_wrapper, loss_flux_full_wrapper)
+    loss_names = ("Loss", "Heating Rate Loss", "Direct Heating Rate Loss", "Flux Loss")
+
+    for t in range(900,1300,100):
+
+        checkpoint = torch.load(filename_full_model + str(t))
+        print(f"Loaded Model: epoch = {t}")
+        model.load_state_dict(checkpoint['model_state_dict'])
+
+        loss = test_loop (test_dataloader, model, loss_functions, loss_names, weight_profile)
+ 
+
 if __name__ == "__main__":
     #train_direct_only()
     train_full()
+    #test_full()
