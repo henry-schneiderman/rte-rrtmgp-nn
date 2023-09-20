@@ -14,7 +14,7 @@ class MLP(nn.Module):
 
     Fully connected layers
     
-    Uses SoftPlus() activation for hidden units
+    Uses ReLU() activation for hidden units
     No activation for output unit
     
     Initialization of all weights with uniform distribution with 'lower' 
@@ -64,7 +64,7 @@ class LayerDistributed(nn.Module):
     Adapted from:
     https://stackoverflow.com/questions/62912239/tensorflows-timedistributed-equivalent-in-pytorch
 
-    The input and output may each be a single single
+    The input and output may each be a single
     tensor or a list of tensors.
 
     Each tensor has dimensions: (n_samples, n_layers, data's dimensions. . .)
@@ -129,7 +129,8 @@ class Extinction(nn.Module):
         self.n_channel = n_channel
         self.device = device
 
-        # Computes extinction coeffient for each constituent for each channel
+        # Computes a scalar extinction coeffient for each constituent 
+        # for each channel
         self.net_lw  = nn.Linear(1,self.n_channel,bias=False,device=device)
         self.net_iw  = nn.Linear(1,self.n_channel,bias=False,device=device)
         self.net_h2o = nn.Linear(1,self.n_channel,bias=False,device=device)
@@ -1079,9 +1080,21 @@ def train_full():
     batch_size = 2048
     n_channel = 30
     n_constituent = 8
-    checkpoint_period = 100
+    checkpoint_period = 50
     epochs = 4000
-    dropout = 0.0
+    t = 700
+
+    dropout_values = (0.0, 0.15, 0.075, 0.0) # 400
+    dropout_epochs = (-1, 400, 550, 650, epochs + 1)
+
+    is_valid = True
+    ii = 0
+    while is_valid:
+        if t < dropout_epochs[ii]:
+            is_valid = False
+        else:
+            dropout = dropout_values[ii]
+            ii += 1
 
     model = FullNet(n_channel,n_constituent,dropout,device).to(device=device)
     optimizer = torch.optim.Adam(model.parameters())
@@ -1128,19 +1141,26 @@ def train_full():
                   "Direct Heating Rate Loss", 
                     "Flux Loss (TOA weighting)")
 
-
-    if True:
-        t = 0
-    else:   
-        t = 100
+    if t > 0:
         checkpoint = torch.load(filename_full_model + str(t))
         print(f"Loaded Model: epoch = {t}")
         model.load_state_dict(checkpoint['model_state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         #epoch = checkpoint['epoch']
+
+    print(f"       dropout = {dropout}")
     while t < epochs:
         t += 1
+        is_valid = True
+        ii = 0
+        while is_valid:
+            if t < dropout_epochs[ii]:
+                is_valid = False
+            else:
+                dropout = dropout_values[ii]
+                ii += 1
         print(f"Epoch {t}\n-------------------------------")
+        print(f"Dropout: {dropout}")
         #with profiler.profile(with_stack=True, profile_memory=True) as prof:
         start.record()
         train_loop(train_dataloader, model, optimizer, loss_henry_full_wrapper, weight_profile)
@@ -1148,7 +1168,7 @@ def train_full():
         loss = test_loop(validation_dataloader, model, loss_functions, loss_names,weight_profile)
         end.record()
         torch.cuda.synchronize()
-        print(f" Elapsed time in seconds: {start.elapsed_time(end) / 1000.0}\n")
+        print(f"\n Elapsed time in seconds: {start.elapsed_time(end) / 1000.0}\n")
 
         if t % checkpoint_period == 0:
             torch.save({
@@ -1189,14 +1209,14 @@ def test_full():
                                                    tensorize(y_flux_absorbed))
     test_dataloader = torch.utils.data.DataLoader(test_dataset, batch_size, shuffle=True)
 
-    model = FullNet(n_channel,n_constituent,device)
+    model = FullNet(n_channel,n_constituent,dropout=0,device=device)
     model = model.to(device=device)
 
     loss_functions = (loss_henry_full_wrapper, loss_heating_rate_full_wrapper,
                       loss_heating_rate_direct_full_wrapper, loss_flux_full_wrapper)
     loss_names = ("Loss", "Heating Rate Loss", "Direct Heating Rate Loss", "Flux Loss")
 
-    for t in range(900,1300,100):
+    for t in range(100,500,100):
 
         checkpoint = torch.load(filename_full_model + str(t))
         print(f"Loaded Model: epoch = {t}")

@@ -64,10 +64,15 @@ def symbolic_verification():
     total_2 = sy.symbols('total_2')
     e10b = sy.Eq(total_2, 1 - t_direct - t_multi_direct + r_bottom_multi_direct - r_multi_direct - a_top_multi_direct)
 
+    if False:
+        total_3 = sy.symbols('total_3')
+        e10c = sy.Eq(total_3, 1 - t_direct - t_multi_direct - r_multi_direct - a_top_multi_direct)
+
     equations = (e1, e2, e3a, e3b, e4, e5, e6, e7a, e7b, e8a, e8b, e9, e10a, e10b)
     solutions = sy.solve(equations, dict=True, manual=True)
     #pp = pprint.PrettyPrinter(indent=4, sort_dicts=False)
     #pp.pprint(solutions)
+    print("Direct solutions:")
     print(solutions)
 
     # Multireflection for diffuse flux:
@@ -96,6 +101,7 @@ def symbolic_verification():
     equations_diffuse = (e1, e2, e3a, e3b, e4, e5, e6, e11a, e11b, e12a, e12b, e13, e14a, e14b)
     solutions_diffuse = sy.solve(equations_diffuse, dict=True, manual=True)
     #pp.pprint(solutions_diffuse)
+    print("Solutions Diffuse:")
     print(solutions_diffuse)
 
     # input fluxes

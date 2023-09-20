@@ -24,7 +24,7 @@ class MLP(nn.Module):
     Hidden units initial bias with uniform distribution 0.9 < x < 1.1
     Output unit initial bias with uniform distribution -0.1 < x <0.1
     """
-    def __init__(self, n_hidden, n_input, n_output, device, lower=-0.1, upper=0.1, is_ELU_activation=False):
+    def __init__(self, n_hidden, n_input, n_output, dropout, device, lower=-0.1, upper=0.1, is_ELU_activation=False):
         super(MLP, self).__init__()
         self.n_hidden = n_hidden
         self.n_outputs = n_output
@@ -44,19 +44,22 @@ class MLP(nn.Module):
             self.activation = nn.Softplus()
         else:
             self.activation = nn.ReLU()
+        self.dropout = nn.Dropout(dropout)
         self.output = nn.Linear(n_last, n_output, bias=True, device=device)
         torch.nn.init.uniform_(self.output.weight, a=lower, b=upper)
         torch.nn.init.uniform_(self.output.bias, a=-0.1, b=0.1)
 
+    @torch.compile
     def forward(self, x):
         for hidden in self.hidden:
             x = hidden(x)
+            x = self.dropout(x)
             x = self.activation(x)
         return self.output(x)
     
 class OpticalDepth(nn.Module):
 
-    def __init__(self, n_channel, device):
+    def __init__(self, n_channel, dropout, device):
         super(OpticalDepth, self).__init__()
         self.n_channel = n_channel
         self.device = device
@@ -86,12 +89,12 @@ class OpticalDepth(nn.Module):
         torch.nn.init.uniform_(self.net_n2o.weight, a=lower, b=upper)
         torch.nn.init.uniform_(self.net_ch4.weight, a=lower, b=upper)
 
-        self.net_ke_h2o = MLP(n_hidden=(6,4,4),n_input=3,n_output=1,device=device)
-        self.net_ke_o3  = MLP(n_hidden=(6,4,4),n_input=3,n_output=1,device=device)
-        self.net_ke_co2 = MLP(n_hidden=(6,4,4),n_input=3,n_output=1,device=device)
-        self.net_ke_u   = MLP(n_hidden=(6,4,4),n_input=3,n_output=1,device=device)
-        self.net_ke_n2o = MLP(n_hidden=(6,4,4),n_input=3,n_output=1,device=device)
-        self.net_ke_ch4 = MLP(n_hidden=(6,4,4),n_input=3,n_output=1,device=device)
+        self.net_ke_h2o = MLP(n_hidden=(6,4,4),n_input=3,n_output=1,dropout=dropout,device=device)
+        self.net_ke_o3  = MLP(n_hidden=(6,4,4),n_input=3,n_output=1,dropout=dropout,device=device)
+        self.net_ke_co2 = MLP(n_hidden=(6,4,4),n_input=3,n_output=1,dropout=dropout,device=device)
+        self.net_ke_u   = MLP(n_hidden=(6,4,4),n_input=3,n_output=1,dropout=dropout,device=device)
+        self.net_ke_n2o = MLP(n_hidden=(6,4,4),n_input=3,n_output=1,dropout=dropout,device=device)
+        self.net_ke_ch4 = MLP(n_hidden=(6,4,4),n_input=3,n_output=1,dropout=dropout,device=device)
 
         self.filter_h2o = torch.tensor([1,1,1,1,1, 1,1,1,1,1, 1,1,1,1,1,
                                        1,1,1,1,1, 1,1,0,0,0, 0,0,0,1,1,],
@@ -123,6 +126,7 @@ class OpticalDepth(nn.Module):
         self.activation_1 = torch.exp
         self.activation_2 = nn.Sigmoid()
 
+    @torch.compile
     def forward(self, x):
         t_p, c = x
 
@@ -174,6 +178,7 @@ class TimeDistributed(nn.Module):
         super(TimeDistributed, self).__init__()
         self.module = module
 
+    #@torch.compile
     def forward(self, x):
 
         if torch.is_tensor(x):
@@ -216,6 +221,7 @@ class LayerPropertiesDirect(nn.Module):
     def __init__(self):
         super(LayerPropertiesDirect, self).__init__()
 
+    @torch.compile
     def forward(self, x):
         mu, tau = x
         
@@ -230,18 +236,18 @@ class LayerPropertiesFull_1(nn.Module):
     and absorption
     Uses a separate net for each channel
     """
-    def __init__(self, n_channel, n_constituent, device):
+    def __init__(self, n_channel, n_constituent, dropout, device):
         super(LayerPropertiesFull_1, self).__init__()
         self.n_channel = n_channel
         n_hidden = [5, 4, 4]
         """ Computes split of extinguished radiation into absorbed, diffuse transmitted, and
         diffuse reflected """
-        self.net_direct = nn.ModuleList([MLP(n_hidden, n_constituent + 1,3,device,lower=-1.0,upper=1.0) for _ in range(self.n_channel)])
-        self.net_diffuse = nn.ModuleList([MLP(n_hidden, n_constituent,3,device, lower=-1.0,upper=1.0) for _ in range(self.n_channel)])
+        self.net_direct = nn.ModuleList([MLP(n_hidden, n_constituent + 1,3,dropout, device,lower=-1.0,upper=1.0) for _ in range(self.n_channel)])
+        self.net_diffuse = nn.ModuleList([MLP(n_hidden, n_constituent,3,dropout, device, lower=-1.0,upper=1.0) for _ in range(self.n_channel)])
         self.softmax = nn.Softmax(dim=-1)
 
+    @torch.compile
     def forward(self, x):
-
 
         tau, mu, mu_bar, constituents = x
 
@@ -271,7 +277,7 @@ class LayerPropertiesFull_2(nn.Module):
     and absorption
     Uses a single net for scattering for all channels
     """
-    def __init__(self, n_channel, n_constituent, n_coarse_code, device):
+    def __init__(self, n_channel, n_constituent, n_coarse_code, dropout, device):
         super(LayerPropertiesFull_2, self).__init__()
         self.n_channel = n_channel
         self.n_coarse_code = n_coarse_code
@@ -279,11 +285,11 @@ class LayerPropertiesFull_2(nn.Module):
         """ Computes split of extinguished radiation into absorbed, diffuse transmitted, and
         diffuse reflected """
         self.net_direct = MLP(n_hidden, n_constituent + 1 + n_coarse_code,
-                              3,
+                              3, dropout,
                               device,lower=-1.0,upper=1.0,
                               is_ELU_activation=False)
         self.net_diffuse = MLP(n_hidden, n_constituent + n_coarse_code,
-                               3,device, lower=-1.0,upper=1.0,
+                               3,dropout, device, lower=-1.0,upper=1.0,
                                is_ELU_activation=False) 
         self.softmax = nn.Softmax(dim=-1)
 
@@ -296,6 +302,7 @@ class LayerPropertiesFull_2(nn.Module):
                 jj = j / n_coarse_code
                 self.coarse_code_template[:,i,j] = const_1 * np.exp(-0.5 * np.square((ii - jj)/sigma))
 
+    #@torch.compile
     def forward(self, x):
 
         tau, mu, mu_bar, constituents = x
@@ -330,6 +337,8 @@ class LayerPropertiesFull_2(nn.Module):
         layer_properties = [t_direct, t_diffuse, e_split_direct, e_split_diffuse]
 
         return layer_properties
+    
+@torch.compile
 def propagate_layer_up (t_direct, t_diffuse, e_split_direct, e_split_diffuse, r_bottom_direct, r_bottom_diffuse, a_bottom_direct, a_bottom_diffuse):
     """
     Combines the properties of two atmospheric layers within a column: 
@@ -496,16 +505,18 @@ def propagate_layer_up (t_direct, t_diffuse, e_split_direct, e_split_diffuse, r_
 
     #tf.debugging.assert_near(r_multi_diffuse + a_top_multi_diffuse + a_bottom_multi_diffuse, 1.0, rtol=1e-2, atol=1e-2, message="Top Diffuse", summarize=5)
 
-    return t_multi_direct, t_multi_diffuse, \
-            r_multi_direct, r_multi_diffuse, \
-            r_bottom_multi_direct, r_bottom_multi_diffuse, \
-            a_top_multi_direct, a_top_multi_diffuse, \
-            a_bottom_multi_direct, a_bottom_multi_diffuse
+    return [t_multi_direct, t_multi_diffuse, 
+            r_multi_direct, r_multi_diffuse, 
+            r_bottom_multi_direct, r_bottom_multi_diffuse, 
+            a_top_multi_direct, a_top_multi_diffuse, 
+            a_bottom_multi_direct, a_bottom_multi_diffuse]
+
 
 class UpwardPropagation(nn.Module):
     def __init__(self):
         super(UpwardPropagation, self).__init__()
 
+    @torch.compile
     def forward(self, x):
 
         #layer_properties, surface_properties = x
@@ -578,6 +589,7 @@ class DownwardPropagation(nn.Module):
         super(DownwardPropagation, self).__init__()
         self.n_channel = n_channel
 
+    @torch.compile
     def forward(self, x):
 
         multireflection_layer_properties, r_multi_direct, input_fluxes = x
@@ -633,6 +645,7 @@ class DownwardPropagationDirect(nn.Module):
         super(DownwardPropagationDirect, self).__init__()
         self.n_channel = n_channel
 
+    @torch.compile
     def forward(self, x):
         flux_down_above_direct_channels, t_direct = x
         flux_down_direct_channels = [flux_down_above_direct_channels]
@@ -658,6 +671,7 @@ class DirectDownwardNet(nn.Module):
         self.layer_properties_net = TimeDistributed(LayerPropertiesDirect())
         self.downward_propagate = DownwardPropagationDirect(n_channel)
 
+    @torch.compile
     def forward(self, x):
         mu, temperature_pressure, constituents = x[:,:,0:1], x[:,:,1:4], x[:,:,4:]
         #with profiler.record_function("Spectral Decomposition"):
@@ -676,7 +690,7 @@ class DirectDownwardNet(nn.Module):
 
 class FullNet(nn.Module):
 
-    def __init__(self, n_channel, n_constituent, device):
+    def __init__(self, n_channel, n_constituent, dropout, device):
         super(FullNet, self).__init__()
         self.device = device
         self.n_channel = n_channel
@@ -687,11 +701,11 @@ class FullNet(nn.Module):
         self.spectral_net = nn.Linear(1,n_channel,bias=False,device=device)
         torch.nn.init.uniform_(self.spectral_net.weight, a=0.4, b=0.6)
         self.softmax = nn.Softmax(dim=-1)
-        self.optical_depth_net = TimeDistributed(OpticalDepth(n_channel,device))
+        self.optical_depth_net = TimeDistributed(OpticalDepth(n_channel,dropout,device))
         if False:
-            self.layer_properties_net = TimeDistributed(LayerPropertiesFull_1(n_channel,n_constituent, self.device))
+            self.layer_properties_net = TimeDistributed(LayerPropertiesFull_1(n_channel,n_constituent, dropout, self.device))
         else:
-            self.layer_properties_net = TimeDistributed(LayerPropertiesFull_2(n_channel,n_constituent, n_coarse_code, self.device))
+            self.layer_properties_net = TimeDistributed(LayerPropertiesFull_2(n_channel,n_constituent, n_coarse_code, dropout, self.device))
         #self.upward_net = torch.jit.script(UpwardPropagation())
         self.upward_net = UpwardPropagation()
         self.downward_net = DownwardPropagation(n_channel)
@@ -708,7 +722,7 @@ class FullNet(nn.Module):
         mu_bar = torch.unsqueeze(mu_bar,dim=2)
         #with profiler.record_function("Optical Depth"):
         if True:
-            tau = self.optical_depth_net((temperature_pressure, constituents))
+            tau = self.optical_depth_net([temperature_pressure, constituents])
         else:   
             with torch.profiler.profile(
                 activities=[
@@ -720,7 +734,7 @@ class FullNet(nn.Module):
             print(p.key_averages().table(
                 sort_by="cpu_time_total", row_limit=25))
         #with profiler.record_function("Layer Properties"):
-        layer_properties = self.layer_properties_net((tau, mu, mu_bar, constituents))
+        layer_properties = self.layer_properties_net([tau, mu, mu_bar, constituents])
 
         if True:
             multireflection_layer_properties = self.upward_net([layer_properties,surface_properties])
@@ -979,6 +993,14 @@ def train_full():
     device = ("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using {device} device")
 
+    if torch.cuda.is_available():
+        device_cap = torch.cuda.get_device_capability()
+        if device_cap in ((7, 0), (8, 0), (9, 0)):
+            gpu_ok = True
+            print("GPU-OK")
+        else:
+            print("GPU SLOW!")
+
     datadir     = "/home/hws/tmp/"
     filename_training = datadir + "/RADSCHEME_data_g224_CAMS_2009-2018_sans_2014-2015.2.nc"
     filename_validation = datadir + "/RADSCHEME_data_g224_CAMS_2014.2.nc"
@@ -988,12 +1010,18 @@ def train_full():
     batch_size = 2048
     n_channel = 30
     n_constituent = 8
-    model = FullNet(n_channel,n_constituent,device)
+    #dropout = 0.15 #1000 -1100
+    #dropout = 0.075    #1100 - 1150
+    dropout = 0.0
+
+    #model = torch.compile(FullNet(n_channel,n_constituent,dropout, device))
+    model = FullNet(n_channel,n_constituent,dropout,device)
     model = model.to(device=device)
+
 
     optimizer = torch.optim.Adam(model.parameters())
 
-    checkpoint_period = 100
+    checkpoint_period = 50
     epochs = 4000
 
     x_train, surface_properties_train, y_train, absorbed_flux_train, toa_train, delta_pressure_train = load_data_full_pytorch(filename_training, n_channel)
@@ -1016,13 +1044,13 @@ def train_full():
                                                         torch.from_numpy(delta_pressure_valid).float().to(device))
 
     validation_dataloader = torch.utils.data.DataLoader(validation_dataset, batch_size, shuffle=True)
-    #start = torch.cuda.Event(enable_timing=True)
-    #end = torch.cuda.Event(enable_timing=True)
+    start = torch.cuda.Event(enable_timing=True)
+    end = torch.cuda.Event(enable_timing=True)
 
-    if True:
+    if False:
         t = 0
     else:   
-        t = 3600
+        t = 1150
         checkpoint = torch.load(filename_full_model + str(t))
         print(f"Loaded Model: epoch = {t}")
         model.load_state_dict(checkpoint['model_state_dict'])
@@ -1036,7 +1064,7 @@ def train_full():
             with torch.profiler.profile(
                 activities=[
                     torch.profiler.ProfilerActivity.CPU,
-                    torch.profiler.ProfilerActivity.CUDA,
+                    #torch.profiler.ProfilerActivity.CUDA,
                 ]
             ) as p:
                 start.record()
@@ -1044,8 +1072,8 @@ def train_full():
                 loss = test_full_loop(validation_dataloader, model, weight_profile)
                 end.record()
                 torch.cuda.synchronize()
-                print(p.key_averages().table(
-                    sort_by="self_cuda_time_total", row_limit=-1))
+            print(p.key_averages().table(
+                    sort_by="self_cpu_time_total", row_limit=30))
             print(f" Elapsed time in seconds: {start.elapsed_time(end) / 1000.0}\n")
             sys.stdout.flush()
         else:
@@ -1098,10 +1126,10 @@ def test_full():
 
     test_dataloader = torch.utils.data.DataLoader(test_dataset, batch_size, shuffle=True)
 
-    model = FullNet(n_channel,n_constituent,device)
+    model = FullNet(n_channel,n_constituent,dropout=0.0, device=device)
     model = model.to(device=device)
 
-    for t in range(700,1400,100):
+    for t in range(1000,1750,50):
 
         checkpoint = torch.load(filename_full_model + str(t))
         print(f"Loaded Model: epoch = {t}")
@@ -1140,5 +1168,5 @@ def test_full():
 
 if __name__ == "__main__":
     #train_direct_only()
-    train_full()
-    #test_full()
+    #train_full()
+    test_full()
