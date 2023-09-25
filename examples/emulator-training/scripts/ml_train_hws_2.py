@@ -3,7 +3,7 @@
 """
 Adapted from ml_train_radscheme_brnn2.py by Henry Schneiderman
 
-Modifies original Ukkonen approach by shifting downward radiation and
+- Modifies original Ukkonen approach by shifting downward radiation and
 handling boundary conditions (surface and upper atmosphere) differently
 
 Python framework for developing neural networks to replace radiative
@@ -290,22 +290,8 @@ if hre_loss:
     dp_test  = pres_test[:,1:] - pres_test[:,0:-1] 
 
 
-# rsd_mean_tr = y_tr[:,:,0].mean(axis=0)
-# rsu_mean_tr = y_tr[:,:,1].mean(axis=0)
-# yy = 0.01*pres_tr[:,1:].mean(axis=0)
-# fig, ax = plt.subplots()
-# ax.plot(rsd_mean_tr,  yy, label='RSD')
-# ax.plot(rsu_mean_tr,  yy, label='RSU')
-# ax.invert_yaxis()
-# ax.set_ylabel('Pressure (hPa)',fontsize=15)
-# in the loss function, test a weight profile to normalize 
-# everything to 1 (so that different levels have equal contributions)
-weight_prof = 1/y_tr.mean(axis=0)
-# ax.plot(weight_prof[:,0],yy,label='RSD weight')
-# ax.plot(weight_prof[:,1],yy,label='RSU weight')
-# ax.legend(); ax.grid()
 
-# Ready for training
+weight_prof = 1/y_tr.mean(axis=0)
 
 
 import tensorflow as tf
@@ -317,27 +303,7 @@ from tensorflow.keras.layers import Dense,TimeDistributed
 mymetrics   = ['mean_absolute_error']
 valfunc     = 'val_mean_absolute_error'
 
-# if use_gpu:
-#     devstr = '/gpu:0'
-#     # os.environ['CUDA_VISIBLE_DEVICES'] = '1'
-# else:
-#     num_cpu_threads = 12
-#     devstr = '/cpu:0'
-#     # Maximum number of threads to use for OpenMP parallel regions.
-#     os.environ["OMP_NUM_THREADS"] = str(num_cpu_threads)
-#     # Without setting below 2 environment variables, it didn't work for me. Thanks to @cjw85 
-#     os.environ["TF_NUM_INTRAOP_THREADS"] = str(num_cpu_threads)
-#     os.environ["TF_NUM_INTEROP_THREADS"] = str(1)
-#     os.environ['KMP_BLOCKTIME'] = '1' 
 
-#     tf.config.threading.set_intra_op_parallelism_threads(
-#         num_cpu_threads
-#     )
-#     tf.config.threading.set_inter_op_parallelism_threads(
-#         1
-#     )
-#     tf.config.set_soft_device_placement(True)
-#     os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 
 def my_gradient_tf(a):
     return a[:,1:] - a[:,0:-1]
@@ -387,17 +353,7 @@ def rmse_hr(y_true, y_pred, dp, rsd_top):
     # return tf.math.sqrt(tf.math.reduce_mean(tf.math.square(HR_true - HR_pred),axis=-1))
     return K.sqrt(K.mean(K.square(HR_true - HR_pred)))
 
-# def my_sigmoid(x):
-#     x = tf.keras.activations.sigmoid(x)
-#     xshape = tf.shape(x) # = (batch_size, 61, 2)
-#     xones = tf.ones(xshape)
 
-#     boolmask = tf.expand_dims(boolmask,2)
-#     boolmask = tf.transpose(boolmask, perm=[2, 1,0])
-#     boolmask = tf.repeat(boolmask, xshape[0],axis=0)
-#     xn = tf.where(boolmask, xones, x)
-
-#     return xn
 
 # MODEL TRAINING CODE
 if not final_evaluation:
@@ -541,55 +497,7 @@ if not final_evaluation:
     callbacks = [EarlyStopping(monitor='rmse_hr',  patience=patience, verbose=1, \
                                  mode='min',restore_best_weights=True)]
     
-    # 16 GRU - BackGRU - GRU
-    #     Epoch 10/100000
-    # 320/320 [==============================] - 12s 39ms/step - loss: 0.0161 - rmse_hr: 14.5004 - val_loss: 0.0149 - val_rmse_hr: 12.7390
-    # stopped at 
-    # Epoch 493/100000
-    # 320/320 [==============================] - 5s 16ms/step - loss: 5.6712e-04 - rmse_hr: 1.4174 - val_loss: 5.2206e-04 - val_rmse_hr: 1.2316
-    
-    # 16 GRU - BackGRU - GRU with concatenated albedo layer and predicting all levels
-    # Epoch 430/100000
-    # 320/320 [==============================] - 5s 17ms/step - loss: 4.5091e-04 - rmse_hr: 1.2175 - val_loss: 4.9115e-04 - val_rmse_hr: 1.1969
-    # with concat of the first GRU and BackGRU:
-    # Epoch 335/100000
-    # 320/320 [==============================] - 6s 17ms/step - loss: 1.9770e-04 - rmse_hr: 1.0664 - val_loss: 2.8051e-04 - val_rmse_hr: 1.0551
-    
-    # 16 GRU - BackGRU concat
-    # Epoch 482/100000
-    # 320/320 [==============================] - 4s 11ms/step - loss: 3.3122e-04 - rmse_hr: 0.8857 - val_loss: 4.0671e-04 - val_rmse_hr: 1.0161
-    
-    # same but tanh activation in surface layer instead of linear
-    # Epoch 336/100000
-    # 320/320 [==============================] - 4s 13ms/step - loss: 5.5611e-04 - rmse_hr: 1.3147 - val_loss: 5.5451e-04 - val_rmse_hr: 1.1525
-    
-    # 8 Gru - BackGru - Gru
-    # Epoch 424/100000
-    # 320/320 [==============================] - 6s 17ms/step - loss: 3.4476e-04 - rmse_hr: 1.2941 - val_loss: 3.3049e-04 - val_rmse_hr: 1.2892
-    
-    # 16 Gru - Backgru - Gru with coldry
-    # Epoch 485/100000
-    # 320/320 [==============================] - 5s 16ms/step - loss: 1.5262e-04 - rmse_hr: 0.8288 - val_loss: 1.4025e-04 - val_rmse_hr: 0.8467
-    # Restoring model weights from the end of the best epoch.
-    
-    # 12 Gru - Backgru - Gru with coldry: stuck at RMSE hr 1.01
-    
-    # 16 Gru - Backgru - Gru with coldry and no flux weights
-    # rmse_hr: 0.8889
-    
-    # 12 Gru BackGru
-    # Epoch 756/100000
-    # 320/320 [==============================] - 4s 12ms/step - loss: 2.4949e-04 - rmse_hr: 0.7504 - val_loss: 2.7354e-04 - val_rmse_hr: 0.6899
-    # 1 core 1.253s (val)
-    
-    # 24 Gru BackGru : 4.8s,  HR RMSE 0.2-0.3
-    # 24 Gru BackGru-16 : 4s
-    
-    # 16 Gru - Backgru - Gru without coldry and with flux weights, TF 2.50
-    # loss 1.13e-04, val rmse 0.23974052; Total params: 5,698
-    
-    # START TRAINING
-    # with tf.device(devstr):
+ 
     
     epoch_period = 200
     n_epochs = 0

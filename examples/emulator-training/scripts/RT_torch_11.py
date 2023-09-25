@@ -297,9 +297,9 @@ class LayerPropertiesFull_2(nn.Module):
         sigma = 0.25
         const_1 = 1.0 / (sigma * np.sqrt(6.28)) # 2 * pi
         for i in range(n_channel):
-            ii = i / n_channel
+            ii = i / (n_channel - 1)
             for j in range(n_coarse_code):
-                jj = j / n_coarse_code
+                jj = j / (n_coarse_code - 1)
                 self.coarse_code_template[:,i,j] = const_1 * np.exp(-0.5 * np.square((ii - jj)/sigma))
 
     #@torch.compile
@@ -1134,6 +1134,9 @@ def test_full():
         checkpoint = torch.load(filename_full_model + str(t))
         print(f"Loaded Model: epoch = {t}")
         model.load_state_dict(checkpoint['model_state_dict'])
+
+        num = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        print(f"Number of parameters = {num}")
 
         model.eval()
         num_batches = len(test_dataloader)

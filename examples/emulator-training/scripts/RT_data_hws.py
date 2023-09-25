@@ -156,7 +156,7 @@ def load_data_2(file_name, n_channels):
     o = [outputs[0]]
     return i, o
 
-def load_data_full(file_name, n_channels, n_coarse_code, use_ratio=False):
+def load_data_full(file_name, n_channels, n_coarse_code):
     data = xr.open_dataset(file_name)
     composition = data.variables['rrtmgp_sw_input'][:].data
     (n_exp,n_col,n_layers,n_composition) = composition.shape
@@ -207,10 +207,8 @@ def load_data_full(file_name, n_channels, n_coarse_code, use_ratio=False):
     # o3 co2 n2o ch4 
     mass_factor = np.array([47.99820, 44.0095, 44.01280, 16.0425]) / m_dry
     composition = composition[:,:,3:] * np.reshape(mass_factor, (1, 1, -1))
-    if use_ratio:
-        composition = composition * dry_mass / (1.0 + composition)
-    else:
-        composition = composition * dry_mass
+
+    composition = composition * dry_mass
 
     #composition  h2o o3 co2 n2o ch4 mass lwp iwp;
     #max = [7.7918200e+00 5.4156192e-04 1.6818701e-01 1.3688966e-04 
