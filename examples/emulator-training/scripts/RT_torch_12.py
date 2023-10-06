@@ -1,8 +1,9 @@
 import numpy as np
+import time
 from typing import List
 import torch
 from torch import nn
-import torch.profiler as profiler
+from torch.profiler import profile, record_function, ProfilerActivity
 import torch.nn.functional as F
 
 from RT_data_hws import load_data_direct_pytorch, load_data_full_pytorch_2, absorbed_flux_to_heating_rate
@@ -51,6 +52,7 @@ class MLP(nn.Module):
     def reset_dropout(self,dropout_p):
         self.dropout_p = dropout_p
 
+    #@torch.compile
     def forward(self, x):
         for hidden in self.hidden:
             x = hidden(x)
@@ -224,7 +226,7 @@ class Extinction(nn.Module):
         t_p = temperature_pressure_log_pressure
 
         a = torch.exp
-        b = F.sigmoid
+        b = torch.sigmoid
 
         one = torch.ones((c.shape[0],1),dtype=torch.float32,device=self.device)
         tau_lw  = a(self.net_lw (one)) * (c[:,0:1])
@@ -437,6 +439,82 @@ class Scattering_v2(nn.Module):
 
         e_split_direct = F.softmax(self.net_direct(constituents_direct), dim=-1) 
         e_split_diffuse = F.softmax(self.net_diffuse(constituents_diffuse), dim=-1)
+
+        layers = [t_direct, t_diffuse, e_split_direct, e_split_diffuse]
+
+        return layers
+    
+
+class Scattering_v3(nn.Module):
+    """ Computes full set of layer properties for
+    direct and diffuse transmission, reflection,
+    and absorption
+    Uses a single net for scattering for all channels
+
+    Same as v2 except uses tau as input instead of constituents
+    """
+    def __init__(self, n_channel, n_constituent, n_coarse_code, dropout_p, device):
+        super(Scattering_v3, self).__init__()
+        self.n_channel = n_channel
+        self.n_coarse_code = n_coarse_code
+        #n_hidden = [10, 6, 6, 6, 6]
+        n_hidden = [10, 8, 8, 8, 8, 8]
+        """ Computes split of extinguished radiation into absorbed, diffuse transmitted, and
+        diffuse reflected """
+        self.net_direct = MLP(n_input=n_constituent + n_coarse_code + 1, 
+                 n_hidden=n_hidden, 
+                 n_output=3,
+                dropout_p=dropout_p,
+                 device=device, 
+                 lower=-1.0,upper=1.0)
+        self.net_diffuse = MLP(n_input=n_constituent + n_coarse_code, 
+                 n_hidden=n_hidden, 
+                 n_output=3,
+                dropout_p=dropout_p,
+                 device=device, 
+                 lower=-1.0,upper=1.0) 
+
+        self.coarse_code_template = torch.ones((1,n_channel,n_coarse_code), dtype=torch.float32,device=device)
+        sigma = 0.25
+        const_1 = 1.0 / (sigma * np.sqrt(6.28)) # 2 * pi
+        for i in range(n_channel):
+            ii = i / (n_channel - 1)
+            for j in range(n_coarse_code):
+                jj = j / (n_coarse_code - 1)
+                self.coarse_code_template[:,i,j] = const_1 * np.exp(-0.5 * np.square((ii - jj)/sigma))
+
+    def reset_dropout(self,dropout_p):
+        self.net_direct.reset_dropout(dropout_p)
+        self.net_diffuse.reset_dropout(dropout_p)
+
+    #@torch.compile
+    def forward(self, x):
+
+        tau, mu_direct, mu_diffuse, constituents = x
+
+        tau_total = torch.sum(tau, dim=2, keepdims=False)
+
+        t_direct = torch.exp(-tau_total / (mu_direct + eps_1))
+        t_diffuse = torch.exp(-tau_total / (mu_diffuse + eps_1))
+
+        mu_direct = torch.unsqueeze(mu_direct,dim=1)
+        #mu_diffuse = torch.unsqueeze(mu_diffuse,dim=1)
+
+        tau_direct = tau / (mu_direct + eps_1)
+        mu_direct = mu_direct.repeat(1,self.n_channel,1)
+        tau_direct = torch.concat((tau_direct, mu_direct),dim=2)
+
+        tau_diffuse = tau 
+
+        # Repeat coarse code over all inputs
+        coarse_code_input = self.coarse_code_template.repeat(constituents.shape[0],1,1)
+
+        # Concatenate coarse code onto inputs
+        tau_direct = torch.concat([tau_direct,coarse_code_input],dim=2)
+        tau_diffuse = torch.concat([tau_diffuse,coarse_code_input],dim=2)
+
+        e_split_direct = F.softmax(self.net_direct(tau_direct), dim=-1) 
+        e_split_diffuse = F.softmax(self.net_diffuse(tau_diffuse), dim=-1)
 
         layers = [t_direct, t_diffuse, e_split_direct, e_split_diffuse]
 
@@ -860,7 +938,7 @@ class FullNet(nn.Module):
                                                           dropout_p,
                                                           device))
         else:
-            self.scattering_net = LayerDistributed(Scattering_v2(n_channel,
+            self.scattering_net = LayerDistributed(Scattering_v3(n_channel,
                                                           n_constituent,
                                                           n_coarse_code,
                                                           dropout_p,
@@ -871,39 +949,41 @@ class FullNet(nn.Module):
         # Propagates radiation from top of atmosphere (TOA) to surface
         self.propagation_net = Propagation(n_channel)
 
+
     def reset_dropout(self,dropout_p):
         self.extinction_net.reset_dropout(dropout_p)
         self.scattering_net.reset_dropout(dropout_p)
 
     def forward(self, x):
+
         x_layers, x_surface, _, _, _, _ = x
 
         (mu_direct, 
-         temperature_pressure_log_pressure, 
-         constituents) = (x_layers[:,:,0:1], 
-                          x_layers[:,:,1:4], 
-                          x_layers[:,:,4:12])
+        temperature_pressure_log_pressure, 
+        constituents) = (x_layers[:,:,0:1], 
+                        x_layers[:,:,1:4], 
+                        x_layers[:,:,4:12])
 
         one = torch.ones((mu_direct.shape[0],1),dtype=torch.float32,
-                         device=self.device)
-        mu_diffuse = F.sigmoid(self.mu_diffuse_net(one))
+                        device=self.device)
+        mu_diffuse = torch.sigmoid(self.mu_diffuse_net(one))
         mu_diffuse = mu_diffuse.repeat([1,mu_direct.shape[1]])
         mu_diffuse = torch.unsqueeze(mu_diffuse,dim=2)
 
         tau = self.extinction_net((temperature_pressure_log_pressure, 
-                                   constituents))
+                                constituents))
 
         layers = self.scattering_net((tau, mu_direct, mu_diffuse, 
                                                 constituents))
 
         (multireflected_layers, 
-         upward_reflection_toa) = self.multireflection_net([layers,
-                                                          x_surface])
+        upward_reflection_toa) = self.multireflection_net([layers,
+                                                        x_surface])
 
         flux_direct = F.softmax(self.spectral_net(one),dim=-1)
         flux_diffuse = torch.zeros((mu_direct.shape[0], self.n_channel),
-                                         dtype=torch.float32,
-                                         device=self.device)
+                                        dtype=torch.float32,
+                                        device=self.device)
         input_flux = [flux_direct, flux_diffuse]
 
         flux = self.propagation_net((multireflected_layers, 
@@ -911,10 +991,11 @@ class FullNet(nn.Module):
                                     input_flux))
 
         (flux_down_direct, flux_down_diffuse, flux_up_diffuse, 
-         flux_absorbed) = flux
+        flux_absorbed) = flux
         
         flux_down = flux_down_direct + flux_down_diffuse
         flux_up = flux_up_diffuse
+
         return [flux_down_direct, flux_down, flux_up, flux_absorbed]
 
 def loss_weighted(y_true, y_pred, weight_profile):
@@ -1067,6 +1148,7 @@ def test_loop(dataloader, model, loss_functions, loss_names, weight_profile, dev
     print(f"Test Error: ")
     for i, value in enumerate(loss):
         print(f" {loss_names[i]}: {value:.8f}")
+    print("")
 
     return loss
 
@@ -1182,20 +1264,29 @@ def train_full():
     filename_training = datadir + "/RADSCHEME_data_g224_CAMS_2009-2018_sans_2014-2015.2.nc"
     filename_validation = datadir + "/RADSCHEME_data_g224_CAMS_2014.2.nc"
     filename_testing = datadir + "/RADSCHEME_data_g224_CAMS_2015_true_solar_angles.nc"
-    filename_full_model = datadir + "/Full_Torch.3."
+    #filename_full_model = datadir + "/Full_Torch.3." # Uses Scattering_V2
+    filename_full_model = datadir + "/Full_Torch.4." # Uses Scattering_V3 and tau input
+    filename_full_model = datadir + "/Full_Torch.5." # Uses Scattering_V3 and tau input and extra layer
+    filename_full_model = datadir + "/Full_Torch.6." # Same as #5 with width of 8 and additional extra layer
 
     batch_size = 2048
     n_channel = 30
     n_constituent = 8
     checkpoint_period = 50
     epochs = 4000
-    t = 300
+    t_start = 0
+    t_warmup = 1
+    t = t_start
 
     #dropout_schedule = (0.0, 0.21, 0.15, 0.1, 0.07, 0.0, 0.0) # 400
     #dropout_epochs = (-1, 50, 200, 300, 400, 500, epochs + 1)
 
     dropout_schedule = (0.0, 0.07, 0.1, 0.15, 0.2, 0.15, 0.1, 0.07, 0.0, 0.0) # 400
-    dropout_epochs =   (-1, 100,   200, 250,  300, 350,  450, 550, 650, epochs + 1)
+    dropout_epochs =   (-1, 200,   300, 350,  400, 450,  550, 650, 750, epochs + 1)
+
+    # "/Full_Torch.4."
+    #dropout_schedule = (0.0, 0.07, 0.1, 0.15, 0.2, 0.15, 0.1, 0.07, 0.0, 0.0) # 400
+    #dropout_epochs =   (-1, 600,   700, 750,  800, 850,  950, 1050, 1150, epochs + 1)
 
     dropout_index = next(i for i, x in enumerate(dropout_epochs) if t <= x) - 1
     dropout_p = dropout_schedule[dropout_index]
@@ -1241,8 +1332,8 @@ def train_full():
                                                         pin_memory=True,
                                                         num_workers=1)
     
-    start = torch.cuda.Event(enable_timing=True)
-    end = torch.cuda.Event(enable_timing=True)
+    #start = torch.cuda.Event(enable_timing=True)
+    #end = torch.cuda.Event(enable_timing=True)
 
     loss_functions = (loss_henry_full_wrapper, loss_flux_full_wrapper_2, loss_heating_rate_full_wrapper,
                       loss_heating_rate_direct_full_wrapper, loss_flux_full_wrapper,
@@ -1269,16 +1360,29 @@ def train_full():
             model.reset_dropout(dropout_p)
         print(f"Epoch {t}\n-------------------------------")
         print(f"Dropout: {dropout_p}")
-        #with profiler.profile(with_stack=True, profile_memory=True) as prof:
-        start.record()
-        train_loop(train_dataloader, model, optimizer, loss_henry_full_wrapper, weight_profile, device)
 
-        loss = test_loop(validation_dataloader, model, loss_functions, loss_names,weight_profile, device)
-        end.record()
-        if use_cuda: 
-            torch.cuda.synchronize()
-        print(f"\n Elapsed time in seconds: {start.elapsed_time(end) / 1000.0}\n")
+        if t < t_start + t_warmup:
+            train_loop(train_dataloader, model, optimizer, loss_henry_full_wrapper, weight_profile, device)
 
+            loss = test_loop(validation_dataloader, model, loss_functions, loss_names,weight_profile, device)
+        else:
+
+            #with profile(
+            #    activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+            #    with_stack=True, with_modules=True,
+            #) as prof:
+            #start.record()
+            train_loop(train_dataloader, model, optimizer, loss_henry_full_wrapper, weight_profile, device)
+
+            loss = test_loop(validation_dataloader, model, loss_functions, loss_names,weight_profile, device)
+
+            #if use_cuda: 
+                #torch.cuda.synchronize()
+            #end.record()
+
+            #print(f"\n Elapsed time in seconds: {start.elapsed_time(end) / 1000.0}\n")
+
+            #print(prof.key_averages(group_by_stack_n=6).table(sort_by='self_cpu_time_total', row_limit=15))
         if t % checkpoint_period == 0:
             torch.save({
             'epoch': t,
@@ -1289,7 +1393,7 @@ def train_full():
             print(f' Wrote Model: epoch = {t}')
 
     print("Done!")
-    #print(prof.key_averages(group_by_stack_n=5).table(sort_by='self_cpu_time_total', row_limit=5))
+
 
 def test_full():
 
@@ -1300,7 +1404,7 @@ def test_full():
     datadir     = "/home/hws/tmp/"
 
     filename_testing = datadir + "/RADSCHEME_data_g224_CAMS_2015_true_solar_angles.nc"
-    filename_full_model = datadir + "/Full_Torch.3."
+    filename_full_model = datadir + "/Full_Torch.6."
 
     batch_size = 2048
     n_channel = 30
@@ -1324,7 +1428,7 @@ def test_full():
                       loss_heating_rate_direct_full_wrapper, loss_flux_full_wrapper)
     loss_names = ("Loss", "Heating Rate Loss", "Direct Heating Rate Loss", "Flux Loss")
 
-    for t in range(50,5000,50):
+    for t in range(2650,5000,50):
 
         checkpoint = torch.load(filename_full_model + str(t))
         print(f"Loaded Model: epoch = {t}")
@@ -1336,4 +1440,5 @@ def test_full():
 if __name__ == "__main__":
     #train_direct_only()
     #train_full()
+    #
     test_full()

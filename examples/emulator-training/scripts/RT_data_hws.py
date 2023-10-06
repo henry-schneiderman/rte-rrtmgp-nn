@@ -187,17 +187,27 @@ def load_data_full(file_name, n_channels, n_coarse_code):
     delta_pressure_2 = np.reshape(np.copy(delta_pressure),(n_samples,n_layers, 1))
 
     # Assumes vmr_h2o = moles-h2o / moles-dry-air
-    vmr_h2o = np.copy(composition[:,:,2:3])
     m_dry = 28.964
     m_h2o =  18.01528
-
-    # mass ratio = mass-h2o / mass-dry-air
-    mass_ratio = vmr_h2o * m_h2o / m_dry
-
-    # Deriving mass coordinate from pressure difference: mass per area
-    # kg / m^2:
     total_mass = (delta_pressure_2 / g) 
-    dry_mass  = total_mass / (1.0 + mass_ratio)
+    if True:
+        # The radiative heat simulation (which is our target) treats 
+        # this variable as a VMR even though it is really the specific humidity
+        vmr_h2o = np.copy(composition[:,:,2:3])
+        # mass ratio = mass-h2o / mass-dry-air
+        mass_ratio = vmr_h2o * m_h2o / m_dry
+
+        # Deriving mass coordinate from pressure difference: mass per area
+        # kg / m^2:
+
+        dry_mass  = total_mass / (1.0 + mass_ratio)
+
+    else:
+        # Use this when working with a specific humidity
+        q = np.copy(composition[:,:,2:3]) * m_h2o / m_dry
+        dry_mass = total_mass(1.0 - q)
+        mass_ratio = q / (1.0 - q + eps)
+
     #wet_mass = total_mass * mass_ratio / (1.0 + mass_ratio)= mass_ratio * dry_mass
 
     #h2o = composition[:,:,2:3] * dry_mass / np.array([7.7918200],dtype=np.float32)    
