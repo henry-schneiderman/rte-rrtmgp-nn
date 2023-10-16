@@ -205,7 +205,7 @@ def load_data_full(file_name, n_channels, n_coarse_code):
     else:
         # Use this when working with a specific humidity
         q = np.copy(composition[:,:,2:3]) * m_h2o / m_dry
-        dry_mass = total_mass(1.0 - q)
+        dry_mass = total_mass * (1.0 - q)
         mass_ratio = q / (1.0 - q + eps)
 
     #wet_mass = total_mass * mass_ratio / (1.0 + mass_ratio)= mass_ratio * dry_mass
