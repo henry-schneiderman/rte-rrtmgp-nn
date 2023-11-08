@@ -23,7 +23,7 @@
 ! The data comes from CAMS which has been extended into RFMIP-style experiments where gas
 ! concentrations are varied. The large problem is divided into blocks
 !
-! following machine learning methods for shortwave radiation computations could be tested (preliminary ideas):
+! following machine learning methods for longwave radiation computations could be tested (preliminary ideas):
 ! 
 !                   "emulate"   cloud   NN input (shape)	NN output (shape)     	#NN	#NN iterations needed
 !                               optics                                                  models  (= #training samples) 
@@ -41,7 +41,7 @@
 ! however, they could be tested anyway
 !
 ! concs = gas concentrations + temperature + pressure; needed for optical property computations
-! OPs = shortwave optical properties (tau) 
+! OPs = longwave optical properties (tau) 
 ! BC = boundary conditions for radiative transfer (sfc albedo and solar angle; incoming flux at TOA considered constant)
 ! bb = broadband. bb fluxes are obtained by summing fluxes for different g-points together
 ! gp = g-point (pseudo-independent spectral dimension) 
@@ -114,7 +114,7 @@ program rrtmgp_rfmip_lw
   use mo_load_cloud_coefficients, only: load_cld_lutcoeff, load_cld_padecoeff
   !
   !
-  ! RTE shortwave driver
+  ! RTE longwave driver
   !
   use mo_rte_lw,             only: rte_lw
   !
@@ -658,15 +658,11 @@ program rrtmgp_rfmip_lw
     ! RTE inputs and outputs (broadband fluxes), always saved
     call nndev_file_netcdf%define_variable("rsu", &
     &   dim3_name="expt", dim2_name="site", dim1_name="level", &
-    &   long_name="upwelling shortwave flux")
+    &   long_name="upwelling longwave flux")
 
     call nndev_file_netcdf%define_variable("rsd", &
     &   dim3_name="expt", dim2_name="site", dim1_name="level", &
-    &   long_name="downwelling shortwave flux")
-
-    call nndev_file_netcdf%define_variable("rsd_dir", &
-    &   dim3_name="expt", dim2_name="site", dim1_name="level", &
-    &   long_name="direct downwelling shortwave flux")
+    &   long_name="downwelling longwave flux")
 
     call nndev_file_netcdf%define_variable("sfc_alb", &
     &   dim3_name="expt", dim2_name="site", dim1_name="gpt", &
@@ -677,9 +673,9 @@ program rrtmgp_rfmip_lw
     &   long_name="pressure at half-level")
 
     if (preprocess_rrtmgp_inputs) then
-      cmt = "preprocessed inputs for RRTMGP shortwave gas optics"
+      cmt = "preprocessed inputs for RRTMGP longwave gas optics"
     else 
-      cmt = "inputs for RRTMGP shortwave gas optics"
+      cmt = "inputs for RRTMGP longwave gas optics"
     end if
 
     ! RRTMGP inputs
@@ -791,19 +787,13 @@ program rrtmgp_rfmip_lw
       call nndev_file_netcdf%define_variable("rsu_gpt", &
       &   dim4_name="expt", dim3_name="site", &
       &   dim2_name="level", dim1_name="gpt", &
-      &   long_name="upwelling shortwave flux by g-point", &
+      &   long_name="upwelling longwave flux by g-point", &
       &   data_type_name="float")
 
       call nndev_file_netcdf%define_variable("rsd_gpt", &
       &   dim4_name="expt", dim3_name="site", &
       &   dim2_name="level", dim1_name="gpt", &
-      &   long_name="downwelling shortwave flux by g-point", &
-      &   data_type_name="float")
-
-      call nndev_file_netcdf%define_variable("rsd_dir_gpt", &
-      &   dim4_name="expt", dim3_name="site", &
-      &   dim2_name="level", dim1_name="gpt", &
-      &   long_name="direct downwelling shortwave flux by g-point", &
+      &   long_name="downwelling longwave flux by g-point", &
       &   data_type_name="float")
 
       call nndev_file_netcdf%end_define_mode()
