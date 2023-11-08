@@ -1,4 +1,4 @@
-! Henry Schneiderman modified from allsky_lw_gendata.F90
+! Henry Schneiderman modified from allsky_sw_gendata.F90
 ! for long wave radiation
 
 ! This program is for generating training data for neural network emulators of RRTMGP and RTE,
