@@ -41,7 +41,7 @@
 ! however, they could be tested anyway
 !
 ! concs = gas concentrations + temperature + pressure; needed for optical property computations
-! OPs = shortwave optical properties (tau, ssa, g), for gases only first two are needed 
+! OPs = shortwave optical properties (tau) 
 ! BC = boundary conditions for radiative transfer (sfc albedo and solar angle; incoming flux at TOA considered constant)
 ! bb = broadband. bb fluxes are obtained by summing fluxes for different g-points together
 ! gp = g-point (pseudo-independent spectral dimension) 
@@ -178,10 +178,10 @@ program rrtmgp_rfmip_lw
   ! Thermodynamic and other variables
   real(wp), dimension(:,:,:),           allocatable :: p_lay, p_lev, t_lay, t_lev ! nlay, block_size, nblocks
   real(wp), dimension(:,:  ),           allocatable :: t_sfc ! block_size, nblocks
-  real(wp), dimension(:,:,:),           allocatable :: emis_sfc ! nbnd, block_size, nblocks
+  real(wp), dimension(:,:  ),           allocatable :: emis_sfc ! nbnd, block_size
 
-  ! Optical properties for NN development - eiher combined from gas and clouds, or just gas (described by tau and ssa)
-  real(sp), dimension(:,:,:,:),         allocatable :: tau_lw, ssa_lw, g_lw 
+  ! Optical properties for NN development - eiher combined from gas and clouds, or just gas (described by tau)
+  real(sp), dimension(:,:,:,:),         allocatable :: tau_lw 
   real(wp), dimension(:,:,:),           allocatable :: col_dry, vmr_h2o
   ! RRTMGP inputs for NN development
   real(sp), dimension(:,:,:,:),         allocatable :: nn_gasopt_input ! (nfeatures,nlay,block_size,nblocks)
@@ -485,11 +485,7 @@ program rrtmgp_rfmip_lw
       allocate(col_dry(nlay, block_size, nblocks), vmr_h2o(nlay, block_size, nblocks)) 
     end if
     if (save_rrtmgp .or. save_reftrans) then
-      allocate(tau_lw(ngpt, nlay, block_size, nblocks), ssa_lw(ngpt, nlay, block_size, nblocks))
-      ! cloud optical properties
-      if (save_reftrans) then
-        allocate(g_lw(ngpt, nlay, block_size, nblocks))
-      end if
+      allocate(tau_lw(ngpt, nlay, block_size, nblocks))
     end if
   end if
 
@@ -504,9 +500,9 @@ program rrtmgp_rfmip_lw
 
   print *, "-------------------------------------------------------------------------"
   if (include_clouds) then
-    print *, "starting all-sky shortwave computations which includes gases and clouds"
+    print *, "starting all-sky longwave computations which includes gases and clouds"
   else
-    print *, "starting clear-sky shortwave computations which just includes gases"
+    print *, "starting clear-sky longwave computations which just includes gases"
   end if
 
   !
@@ -539,7 +535,7 @@ program rrtmgp_rfmip_lw
     call stop_on_err(k_dist%gas_optics(p_lay(:,:,b), &
                                         p_lev(:,:,b),       &
                                         t_lay(:,:,b),       &
-                                        t_sfc(:,:,b),       &
+                                        t_sfc(:,b),       &
                                         gas_conc_array(b),  &
                                         atmos,      &
                                         lw_sources, &
@@ -562,7 +558,6 @@ program rrtmgp_rfmip_lw
           call stop_on_err(gas_conc_array(b)%get_vmr('h2o', vmr_h2o(:,:,b)))
           call get_col_dry(vmr_h2o(:,:,b), p_lev(:,:,b), col_dry(:,:,b))
           tau_lw(:,:,:,b)     = atmos%tau
-          ssa_lw(:,:,:,b)     = atmos%ssa 
         end if
       end if
 
@@ -575,9 +570,7 @@ program rrtmgp_rfmip_lw
         ! print *, "mean tau after adding clouds", mean_3d(atmos%tau)
         
         if (save_reftrans)  then
-            g_lw(:,:,:,b)       = atmos%g 
             tau_lw(:,:,:,b)     = atmos%tau
-            ssa_lw(:,:,:,b)     = atmos%ssa 
         end if
       end if
 
@@ -593,20 +586,13 @@ program rrtmgp_rfmip_lw
       !
 
 
-      if (save_reftrans) then
-        call stop_on_err(rte_lw(atmos,   &
-                                top_at_1,        &
-                                lw_sources,             &
-                                emis_sfc,        &
-                                fluxes, &
-                                reftrans_vars=reftrans_variables))
-      else
-        call stop_on_err(rte_lw(atmos,   &
+
+      call stop_on_err(rte_lw(atmos,   &
                                 top_at_1,        &
                                 lw_sources,             &
                                 emis_sfc,        &
                                 fluxes))
-      end if
+
       if (save_inputs_outputs) then
 
         if (save_reftrans) then
@@ -710,9 +696,7 @@ program rrtmgp_rfmip_lw
       call nndev_file_netcdf%define_variable("tau_lw_gas", &
       &   dim4_name="expt", dim3_name="site", dim2_name="layer", dim1_name="gpt", &
       &   long_name="gas optical depth", data_type_name="float")
-      call nndev_file_netcdf%define_variable("ssa_lw_gas", &
-      &   dim4_name="expt", dim3_name="site", dim2_name="layer", dim1_name="gpt", &
-      &   long_name="gas single scattering albedo", data_type_name="float")
+      
       call nndev_file_netcdf%define_variable("col_dry", &
       &   dim3_name="expt", dim2_name="site", dim1_name="layer", &
       &   long_name="layer number of dry air molecules")
@@ -732,13 +716,6 @@ program rrtmgp_rfmip_lw
         call nndev_file_netcdf%define_variable("tau_lw", &
         &   dim4_name="expt", dim3_name="site", dim2_name="layer", dim1_name="gpt", &
         &   long_name="optical depth", data_type_name="float")
-        call nndev_file_netcdf%define_variable("ssa_lw", &
-        &   dim4_name="expt", dim3_name="site", dim2_name="layer", dim1_name="gpt", &
-        &   long_name="single scattering albedo", data_type_name="float")
-        call nndev_file_netcdf%define_variable("g_lw", &
-        &   dim4_name="expt", dim3_name="site", dim2_name="layer", dim1_name="gpt", &
-        &   long_name="asymmetry parameter", data_type_name="float")
-
         call nndev_file_netcdf%define_variable("rdif", &
         &   dim4_name="expt", dim3_name="site", dim2_name="layer", dim1_name="gpt", &
         &   long_name="diffuse reflectance", data_type_name="float")
@@ -767,8 +744,6 @@ program rrtmgp_rfmip_lw
       deallocate(col_dry)
 
       call unblock_and_write(trim(nndev_file), 'tau_lw_gas', tau_lw)
-      call unblock_and_write(trim(nndev_file), 'ssa_lw_gas', ssa_lw)
-      deallocate(tau_lw,ssa_lw)
       print *, "Optical properties (RRTMGP output) were successfully saved"
     end if
     if(include_clouds) then
@@ -781,10 +756,7 @@ program rrtmgp_rfmip_lw
     if (save_reftrans) then
       call unblock_and_write(trim(nndev_file), 'tau_lw', tau_lw)
       deallocate(tau_lw)
-      call unblock_and_write(trim(nndev_file), 'ssa_lw', ssa_lw)
-      deallocate(ssa_lw)
-      call unblock_and_write(trim(nndev_file), 'g_lw',   g_lw)
-      deallocate(g_lw)
+
       print *, "Optical properties (RRTMGP+cloud optics) were successfully saved"
 
       print *,  "minmax Rdif", minval(Rdif_save), maxval(Rdif_save), &
@@ -848,17 +820,6 @@ program rrtmgp_rfmip_lw
 
   end if
 
-  !
-  ! Zero out fluxes for which the original solar zenith angle is > 90 degrees.
-  !
-  do b = 1, nblocks
-    do icol = 1, block_size
-      if(.not. usecol(icol,b)) then
-        flux_up(:,icol,b)  = 0._wp
-        flux_dn(:,icol,b)  = 0._wp
-      end if
-    end do
-  end do
 
   print *, "mean of flux_down is:", mean_3d(flux_dn)  ! mean of flux_down is:   292.71945410963957     
   print *, "mean of flux_up is:", mean_3d(flux_up)    ! mean of flux_up is:   41.835381782065106 
