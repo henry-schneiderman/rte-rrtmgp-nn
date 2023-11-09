@@ -151,7 +151,7 @@ def download_cams_year(directory, year):
     #timestr = ['03:00', '09:00',  '15:00',   '21:00']
     #stepstr = ['3','9','15','21']
     # Every third hour
-    hours = [i for i in range(0,25,3)]
+    hours = [i for i in range(0,24,3)]
     # Every 4th day
     for day_num in range(1,366,4):
         d = datetime.datetime(year,1,1) + datetime.timedelta(day_num - 1)
