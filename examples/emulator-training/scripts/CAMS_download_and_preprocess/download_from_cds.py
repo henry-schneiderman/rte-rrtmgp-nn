@@ -2,7 +2,6 @@ import numpy as np
 import cdsapi
 import yaml
 import time
-import os
 import datetime
 
 def get_dict_eac4_sfc(year, month, day, hour):
@@ -42,6 +41,18 @@ def get_dict_egg4_sfc(year, month, day, hour):
          'format': 'grib', 
           'variable': [
             '2m_temperature', 'forecast_albedo', 'toa_incident_solar_radiation',
+            'skin_temperature'
+        ],
+        'step': str(hour),
+        'date': f'{year}-{month}-{day}',
+    }
+    return mydict
+
+def get_dict_egg4_sfc_st(year, month, day, hour):
+    mydict =     {
+         'format': 'grib', 
+          'variable': [
+            'skin_temperature'
         ],
         'step': str(hour),
         'date': f'{year}-{month}-{day}',
@@ -113,6 +124,35 @@ def download_cams(directory,date_list,hours):
             et = time.perf_counter()
             print(f" Elapsed Time: {et - st:0.4f} seconds", flush=True)
 
+
+# Downloads skin temperature only
+def download_cams_st(directory,date_list,hours):
+
+    c = cdsapi.Client()
+
+    with open('/home/hws/ADS/.cdsapirc', 'r') as f:
+                credentials = yaml.safe_load(f)
+
+    c = cdsapi.Client(url=credentials['url'], key=credentials['key'])
+
+    for i, d in enumerate(date_list):
+        year = d[0]
+        month = d[1]
+        day = d[2]
+        data_directory = directory + year + '/' + month +'/'
+        for hour in hours:
+            s_hour = str(hour).zfill(2)
+            st = time.perf_counter()
+
+            dict_egg4 = get_dict_egg4_sfc_st(year,month,day,hour)
+            c.retrieve(
+                'cams-global-ghg-reanalysis-egg4', dict_egg4,
+                data_directory + f'CAMS_egg4_sfc_st_{year}-{month}-{day}-{s_hour}.grb')
+
+            print(f"Downloaded {i+1}: {year}-{month}-{day}-{s_hour}")
+            et = time.perf_counter()
+            print(f" Elapsed Time: {et - st:0.4f} seconds", flush=True)
+
 def download_greenhouse_gas_inversion(directory,year):
 
     c = cdsapi.Client()
@@ -148,8 +188,7 @@ def download_greenhouse_gas_inversion(directory,year):
 def download_cams_year(directory, year):
 
     date_list = []
-    #timestr = ['03:00', '09:00',  '15:00',   '21:00']
-    #stepstr = ['3','9','15','21']
+
     # Every third hour
     hours = [i for i in range(0,24,3)]
     # Every 4th day
@@ -160,6 +199,20 @@ def download_cams_year(directory, year):
         date_list.append((str(year),month,day))
     download_cams(directory,date_list,hours)
 
+# Downloads skin temperature only
+def download_cams_year_st(directory, year):
+
+    date_list = []
+
+    # Every third hour
+    hours = [i for i in range(0,24,3)]
+    # Every 4th day
+    for day_num in range(1,366,4):
+        d = datetime.datetime(year,1,1) + datetime.timedelta(day_num - 1)
+        month = d.strftime("%m")
+        day = d.strftime("%d")
+        date_list.append((str(year),month,day))
+    download_cams_st(directory,date_list,hours)
 
 if __name__ == "__main__":
     directory = "/data-T1/hws/CAMS/original_data/"
@@ -167,5 +220,22 @@ if __name__ == "__main__":
     year = 2008
     download_cams_year(directory, year)
     download_greenhouse_gas_inversion(directory, year)
+    #download_cams_year_st(directory, year)
+    if False:
+        month = '01'
+        day = '02'
+        hour = 3
+        s_hour = '03'
+
+        c = cdsapi.Client()
+
+        with open('/home/hws/ADS/.cdsapirc', 'r') as f:
+                    credentials = yaml.safe_load(f)
+
+        c = cdsapi.Client(url=credentials['url'], key=credentials['key'])
+        dict_egg4 = get_dict_egg4_sfc(year,month,day,hour)
+        c.retrieve(
+                    'cams-global-ghg-reanalysis-egg4', dict_egg4,
+                    directory + f'CAMS_egg4_sfc_{year}-{month}-{day}-{s_hour}.grb')
     et = time.perf_counter()
     print(f"\nDownloaded one year of data in {et - st:0.4f} seconds", flush=True)

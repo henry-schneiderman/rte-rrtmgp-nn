@@ -118,6 +118,10 @@ allsky_sw_gendata:   allsky_sw_gendata.o   $(ADDITIONS) $(RRTMGP_BUILD)/librte.a
 
 allsky_sw_gendata.o: allsky_sw_gendata.F90 $(ADDITIONS)
 
+allsky_lw_gendata:   allsky_lw_gendata.o   $(ADDITIONS) $(RRTMGP_BUILD)/librte.a $(RRTMGP_BUILD)/librrtmgp.a $(RRTMGP_BUILD)/libneural.a
+
+allsky_lw_gendata.o: allsky_lw_gendata.F90 $(ADDITIONS)
+
 allsky_sw_testmodels:   allsky_sw_testmodels.o   $(ADDITIONS) $(RRTMGP_BUILD)/librte.a $(RRTMGP_BUILD)/librrtmgp.a $(RRTMGP_BUILD)/libneural.a
 
 allsky_sw_testmodels.o: allsky_sw_testmodels.F90 $(ADDITIONS)
@@ -134,4 +138,4 @@ mo_load_cloud_coefficients.o: mo_simple_netcdf.o mo_cloud_optics.o mo_load_cloud
 
 
 clean:
-	-rm allsky_sw_gendata allsky_sw_testmodels *.o *.mod *.optrpt
+	-rm allsky_sw_gendata allsky_lw_gendata allsky_sw_testmodels *.o *.mod *.optrpt
