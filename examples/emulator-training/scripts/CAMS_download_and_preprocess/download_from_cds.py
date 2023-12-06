@@ -1,3 +1,4 @@
+# use conda activate pytorch2.0
 import numpy as np
 import cdsapi
 import yaml
@@ -41,7 +42,7 @@ def get_dict_egg4_sfc(year, month, day, hour):
          'format': 'grib', 
           'variable': [
             '2m_temperature', 'forecast_albedo', 'toa_incident_solar_radiation',
-            'skin_temperature'
+            'skin_temperature', 'snow_albedo', 'snow_depth',
         ],
         'step': str(hour),
         'date': f'{year}-{month}-{day}',
@@ -52,13 +53,51 @@ def get_dict_egg4_sfc_st(year, month, day, hour):
     mydict =     {
          'format': 'grib', 
           'variable': [
-            'skin_temperature'
+            'skin_temperature',  'snow_albedo', 'snow_depth',
         ],
         'step': str(hour),
         'date': f'{year}-{month}-{day}',
     }
     return mydict
 
+def get_dict_era5_sfc(year, month, day, hour):
+
+    mydict =     {
+        'product_type': 'reanalysis',
+        'format': 'grib',
+        'variable': [
+            'near_ir_albedo_for_diffuse_radiation', 'near_ir_albedo_for_direct_radiation', 'uv_visible_albedo_for_diffuse_radiation',
+            'uv_visible_albedo_for_direct_radiation',
+        ],
+        'year': year,
+        'month': month,
+        'day': [
+            day,
+        ],
+        'time': [
+            str(hour).zfill(2) + ':00',
+        ],
+    }
+    return mydict
+
+def get_dict_era5_sfc_z(year, month, day, hour):
+
+    mydict =     {
+        'product_type': 'reanalysis',
+        'format': 'grib',
+        'variable': [
+            'geopotential', 
+        ],
+        'year': year,
+        'month': month,
+        'day': [
+            day,
+        ],
+        'time': [
+            str(hour).zfill(2) + ':00',
+        ],
+    }
+    return mydict
 def get_dict_egg4_ml(year, month, day, hour):
     mydict =     {
         'format': 'grib', #'netcdf', 
@@ -81,12 +120,11 @@ def get_dict_egg4_ml(year, month, day, hour):
 
 def download_cams(directory,date_list,hours):
 
-    c = cdsapi.Client()
 
     with open('/home/hws/ADS/.cdsapirc', 'r') as f:
                 credentials = yaml.safe_load(f)
 
-    c = cdsapi.Client(url=credentials['url'], key=credentials['key'])
+    c = cdsapi.Client(url=credentials['url'], key=credentials['key'], timeout=600,quiet=False,debug=True)
 
     for i, d in enumerate(date_list):
         year = d[0]
@@ -126,14 +164,15 @@ def download_cams(directory,date_list,hours):
 
 
 # Downloads skin temperature only
-def download_cams_st(directory,date_list,hours):
+def download_cams_st(directory,date_list,hours, is_era5=False, is_era5_z=False):
 
-    c = cdsapi.Client()
+    if is_era5:
+        c_era = cdsapi.Client()
 
-    with open('/home/hws/ADS/.cdsapirc', 'r') as f:
-                credentials = yaml.safe_load(f)
-
-    c = cdsapi.Client(url=credentials['url'], key=credentials['key'])
+    else:
+        with open('/home/hws/ADS/.cdsapirc', 'r') as f:
+            credentials = yaml.safe_load(f)
+        c_ads = cdsapi.Client(url=credentials['url'], key=credentials['key'])
 
     for i, d in enumerate(date_list):
         year = d[0]
@@ -144,10 +183,23 @@ def download_cams_st(directory,date_list,hours):
             s_hour = str(hour).zfill(2)
             st = time.perf_counter()
 
-            dict_egg4 = get_dict_egg4_sfc_st(year,month,day,hour)
-            c.retrieve(
+            if not is_era5:
+                dict_egg4 = get_dict_egg4_sfc_st(year,month,day,hour)
+                c_ads.retrieve(
                 'cams-global-ghg-reanalysis-egg4', dict_egg4,
                 data_directory + f'CAMS_egg4_sfc_st_{year}-{month}-{day}-{s_hour}.grb')
+            elif not is_era5_z:
+                dict_era5 = get_dict_era5_sfc(year, month, day, hour)
+                c_era.retrieve(
+                 'reanalysis-era5-single-levels',
+                 dict_era5,
+                 data_directory + f'era5_sfc_{year}-{month}-{day}-{s_hour}.grb')
+            else:
+                dict_era5 = get_dict_era5_sfc_z(year, month, day, hour)
+                c_era.retrieve(
+                 'reanalysis-era5-single-levels',
+                 dict_era5,
+                 data_directory + f'era5_sfc_z_{year}-{month}-{day}-{s_hour}.grb')
 
             print(f"Downloaded {i+1}: {year}-{month}-{day}-{s_hour}")
             et = time.perf_counter()
@@ -166,7 +218,7 @@ def download_greenhouse_gas_inversion(directory,year):
     for month in months:
         st = time.perf_counter()
         data_directory = directory + str(year) + '/' + month +'/'
-        file_name = data_directory + f'CAMS_n2o_{year}-{month}.tar.gz'
+        file_name = data_directory + f'CAMS_n2o_{year}-{month}.tar.latest.gz'
 
         c.retrieve(
             'cams-global-greenhouse-gas-inversion',
@@ -175,7 +227,7 @@ def download_greenhouse_gas_inversion(directory,year):
                 'quantity': 'concentration',
                 'input_observations': 'surface',
                 'time_aggregation': 'instantaneous',
-                'version': 'v16r1', #'latest',
+                'version': 'latest', #'v20r1', #v16r1', #'latest',
                 'year': f'{year}',
                 'month': [month,
                 ],
@@ -199,8 +251,25 @@ def download_cams_year(directory, year):
         date_list.append((str(year),month,day))
     download_cams(directory,date_list,hours)
 
+def download_cams_year_cross_validation(directory, year, day_start, is_st=False):
+
+    date_list = []
+
+    # Every third hourq
+    hours = [i for i in range(0,24,3)]
+    # Every 4th day
+    for day_num in range(day_start,366,28):
+        d = datetime.datetime(year,1,1) + datetime.timedelta(day_num - 1)
+        month = d.strftime("%m")
+        day = d.strftime("%d")
+        date_list.append((str(year),month,day))
+    if is_st:
+        download_cams_st(directory,date_list,hours)
+    else:
+        download_cams(directory,date_list,hours)
+
 # Downloads skin temperature only
-def download_cams_year_st(directory, year):
+def download_cams_year_st(directory, year, is_era5=False, is_era5_z=False):
 
     date_list = []
 
@@ -212,15 +281,29 @@ def download_cams_year_st(directory, year):
         month = d.strftime("%m")
         day = d.strftime("%d")
         date_list.append((str(year),month,day))
-    download_cams_st(directory,date_list,hours)
+    download_cams_st(directory,date_list,hours,is_era5=is_era5,is_era5_z=is_era5_z)
 
 if __name__ == "__main__":
     directory = "/data-T1/hws/CAMS/original_data/"
     st = time.perf_counter()
-    year = 2008
-    download_cams_year(directory, year)
-    download_greenhouse_gas_inversion(directory, year)
-    #download_cams_year_st(directory, year)
+    year = 2009
+    #download_cams_year(directory, year)
+    #download_greenhouse_gas_inversion(directory, year=2008)
+    #download_greenhouse_gas_inversion(directory + "testing/", year=2009)
+    #download_cams_year_cross_validation(directory + "cross_validation/", year=2008, day_start=3)
+
+    #download_cams_year_cross_validation(directory + "testing/", year=2020, day_start=4)
+
+    #download_greenhouse_gas_inversion(directory + "testing/", year=2020)
+
+    download_cams_year_st(directory + "training/", year=2008, is_era5=True, is_era5_z=True)
+
+    #download_cams_year_cross_validation(directory + "cross_validation/", year=2008, day_start=3, is_st=True)
+
+    #download_cams_year_cross_validation(directory + "testing/", year=2009, day_start=4, is_st=True)
+
+    #download_cams_year_cross_validation(directory + "testing/", year=2020, day_start=4, is_st=True)
+
     if False:
         month = '01'
         day = '02'
@@ -229,13 +312,13 @@ if __name__ == "__main__":
 
         c = cdsapi.Client()
 
-        with open('/home/hws/ADS/.cdsapirc', 'r') as f:
-                    credentials = yaml.safe_load(f)
+        # with open('/home/hws/ADS/.cdsapirc', 'r') as f:
+        #credentials = yaml.safe_load(f)
 
-        c = cdsapi.Client(url=credentials['url'], key=credentials['key'])
-        dict_egg4 = get_dict_egg4_sfc(year,month,day,hour)
+        #c = cdsapi.Client(url=credentials['url'], key=credentials['key'])
+        dict_egg4 = get_dict_era5_sfc(year,month,day,hour)
         c.retrieve(
-                    'cams-global-ghg-reanalysis-egg4', dict_egg4,
-                    directory + f'CAMS_egg4_sfc_{year}-{month}-{day}-{s_hour}.grb')
+                    'reanalysis-era5-single-levels', dict_egg4,
+                    directory + f'CAMS_era5_sfc_{year}-{month}-{day}-{s_hour}.grb')
     et = time.perf_counter()
     print(f"\nDownloaded one year of data in {et - st:0.4f} seconds", flush=True)
