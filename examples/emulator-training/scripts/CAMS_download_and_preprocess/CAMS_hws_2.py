@@ -244,7 +244,7 @@ def process_n2o(year):
 
     # Almost done - now remap to the higher resolution vertical grid 
     # used by the main CAMS data
-    fname_tmp2 = "CAMS_n2o_{}_tmp2.nc".format(year)
+    fname_tmp2 = "CAMS_n2o_{}_tmp2which.nc".format(year)
     fname_n2o = "CAMS_{}_n2o.nc".format(year)
     os.system("cdo remapeta,../newvct {} {}".format(fname_tmp,fname_tmp2))
 

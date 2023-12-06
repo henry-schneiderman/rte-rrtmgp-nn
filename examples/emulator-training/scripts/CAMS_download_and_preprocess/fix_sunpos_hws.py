@@ -22,7 +22,7 @@ fpath = "/data-T1/hws/CAMS/original_data/n2o/tmp.7.nc"
 
 dat         = Dataset(fpath,'a')
 
-p   = dat.variables['pressure'][:,:,:].data
+p   = dat.variables['pressure'][:,:,:].data  # pres_level
 lon = np.rad2deg(dat.variables['clon'][:].data)
 lat = np.rad2deg(dat.variables['clat'][:].data)
 timedat = dat.variables['time'][:]
