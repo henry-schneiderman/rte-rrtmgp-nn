@@ -2,7 +2,7 @@ from netCDF4 import Dataset
 import numpy as np
 import xarray as xr
 
-data_dir       = "/home/hws/tmp/"
+data_dir       = "/data-T1/hws/tmp/"
 #file_name_in   = data_dir + "CAMS_2014_RFMIPstyle.nc"
 #file_name_in   = data_dir + "CAMS_2009-2018_sans_2014-2015_RFMIPstyle.nc"
 #file_name_out  = data_dir + "RADSCHEME_data_g224_CAMS_2014.nc"
@@ -10,8 +10,8 @@ data_dir       = "/home/hws/tmp/"
 #file_name_out2  = data_dir + "RADSCHEME_data_g224_CAMS_2014.2.nc"
 
 
-file_name_out1 = "/data-T1/hws/CAMS/processed_data/CAMS_2015.final.nc"
-file_name_out1a = "/data-T1/hws/CAMS/processed_data/CAMS_2015.final.n2o.nc"
+file_name_out1 = "/data-T1/hws/CAMS/processed_data/old2/CAMS_2015.final.nc"
+file_name_out1a = "/data-T1/hws/CAMS/processed_data/old2/CAMS_2015.final.n2o.nc"
 file_name_out2  = data_dir + "RADSCHEME_data_g224_CAMS_2015_true_solar_angles.nc"
 
 n = 130

@@ -973,7 +973,7 @@ def train():
     epochs_period = 100
     patience    = 1000 #25
 
-    datadir     = "/home/hws/tmp/"
+    datadir     = "/data-T1/hws/tmp/"
     filename_training       = datadir + "/RADSCHEME_data_g224_CAMS_2009-2018_sans_2014-2015.2.nc"
     filename_validation   = datadir + "/RADSCHEME_data_g224_CAMS_2014.2.nc"
     filename_testing  = datadir +  "/RADSCHEME_data_g224_CAMS_2015_true_solar_angles.nc"

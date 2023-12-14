@@ -2,7 +2,7 @@ from netCDF4 import Dataset
 import numpy as np
 import xarray as xr
 
-data_dir       = "/home/hws/tmp/"
+data_dir       = "/data-T1/hws/tmp/"
 #file_name_in   = data_dir + "CAMS_2014_RFMIPstyle.nc"
 #file_name_in   = data_dir + "CAMS_2009-2018_sans_2014-2015_RFMIPstyle.nc"
 #file_name_out  = data_dir + "RADSCHEME_data_g224_CAMS_2014.nc"
@@ -24,6 +24,19 @@ pres_layer = data.variables['rrtmgp_sw_input'][:,:,:,1]
 temp_layer = data.variables['rrtmgp_sw_input'][:,:,:,0]
 clwp = data.variables['cloud_lwp']
 ciwp = data.variables['cloud_iwp']
+
+file_name_3 = data_dir + '../CAMS/processed_data/training/2008/Flux_sw-2008-01.nc'
+dt3 = xr.open_dataset(file_name_3)
+rsd3 = dt3['rsd'].data
+
+file_name_4 = data_dir + '../CAMS/processed_data/training/2008/Flux_sw-2008-01.2.nc'
+dt4 = xr.open_dataset(file_name_4)
+rsd4 = dt4['rsd'].data
+
+diff = rsd3 - rsd4
+abs_diff = np.abs(diff)
+print(f'max and min of diff = {np.max(diff)} and {np.min(diff)}')
+print(f'mean of abs diff = {np.mean(abs_diff)}')
 
 n = rsd.data / rsd[:,:,0:1].data
 print(f"rsd mean = {np.mean(n,axis=(0,1))}")

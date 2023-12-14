@@ -909,7 +909,7 @@ def train_direct_only():
     device = ("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using {device} device")
 
-    datadir     = "/home/hws/tmp/"
+    datadir     = "/data-T1/hws/tmp/"
     filename_training = datadir + "/RADSCHEME_data_g224_CAMS_2009-2018_sans_2014-2015.2.nc"
     filename_validation = datadir + "/RADSCHEME_data_g224_CAMS_2014.2.nc"
     filename_testing = datadir + "/RADSCHEME_data_g224_CAMS_2015_true_solar_angles.nc"
@@ -1001,7 +1001,7 @@ def train_full():
         else:
             print("GPU SLOW!")
 
-    datadir     = "/home/hws/tmp/"
+    datadir     = "/data-T1/hws/tmp/"
     filename_training = datadir + "/RADSCHEME_data_g224_CAMS_2009-2018_sans_2014-2015.2.nc"
     filename_validation = datadir + "/RADSCHEME_data_g224_CAMS_2014.2.nc"
     filename_testing = datadir + "/RADSCHEME_data_g224_CAMS_2015_true_solar_angles.nc"
@@ -1105,7 +1105,7 @@ def test_full():
     device = ("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using {device} device")
 
-    datadir     = "/home/hws/tmp/"
+    datadir     = "/data-T1/hws/tmp/"
     filename_training = datadir + "/RADSCHEME_data_g224_CAMS_2009-2018_sans_2014-2015.2.nc"
     filename_validation = datadir + "/RADSCHEME_data_g224_CAMS_2014.2.nc"
     filename_testing = datadir + "/RADSCHEME_data_g224_CAMS_2015_true_solar_angles.nc"
