@@ -105,48 +105,45 @@ def reconcile_time_samples(file_name_1, file_name_2, output_name_1, output_name_
     xr.Dataset.to_netcdf(sampled_dt_1, output_name_1)
     xr.Dataset.to_netcdf(sampled_dt_2, output_name_2)
 
-def regrid_n2o(original_data_dir, processed_data_dir, mode, year):
+def regrid_n2o(original_data_dir, processed_data_dir, mode, month, year):
 
-    months = [str(m).zfill(2) for m in range(1,13)]
-    for month in months[:1]:
+    input_directory=f'{original_data_dir}{mode}/{year}/{month}/'
 
-        input_directory=f'{original_data_dir}{mode}/{year}/{month}/'
+    file_name = f"{input_directory}CAMS_n2o_{year}-{month}.tar.latest.gz"
 
-        file_name = f"{input_directory}CAMS_n2o_{year}-{month}.tar.latest.gz"
+    output_directory=f'{processed_data_dir}{mode}/{year}/{month}/'
 
-        output_directory=f'{processed_data_dir}{mode}/{year}/{month}/'
+    cmd = f'tar -xvzf {file_name} -C {output_directory}'
+    os.system(cmd)
 
-        cmd = f'tar -xvzf {file_name} -C {output_directory}'
-        os.system(cmd)
+    cmd = f'cp {output_directory}cams73_latest_n2o_conc_surface_inst_{year}{month}.nc {output_directory}tmp.n2o.1.nc'
+    os.system(cmd)
 
-        cmd = f'cp {output_directory}cams73_latest_n2o_conc_surface_inst_{year}{month}.nc {output_directory}tmp.n2o.1.nc'
-        os.system(cmd)
+    assign_hybrid_coordinates_and_flip(f'{output_directory}tmp.n2o.1.nc')
 
-        assign_hybrid_coordinates_and_flip(f'{output_directory}tmp.n2o.1.nc')
+    cmd = f'ncks -O -x -v ap,bp {output_directory}tmp.n2o.1.nc {output_directory}tmp.n2o.2.nc'
+    os.system(cmd)
 
-        cmd = f'ncks -O -x -v ap,bp {output_directory}tmp.n2o.1.nc {output_directory}tmp.n2o.2.nc'
-        os.system(cmd)
+    cmd = f'cdo remapbil,{original_data_dir}../icon_grid_0009_R02B03_R.nc {output_directory}tmp.n2o.2.nc {output_directory}tmp.n2o.3.nc'
+    os.system(cmd)
 
-        cmd = f'cdo remapbil,{original_data_dir}../icon_grid_0009_R02B03_R.nc {output_directory}tmp.n2o.2.nc {output_directory}tmp.n2o.3.nc'
-        os.system(cmd)
+    reconcile_time_samples(f'{output_directory}CAMS_{year}-{month}.2.nc', f'{output_directory}tmp.n2o.3.nc', f'{output_directory}CAMS_{year}-{month}.3.nc', f'{output_directory}tmp.n2o.4.nc')
 
-        reconcile_time_samples(f'{output_directory}CAMS_{year}-{month}.2.nc', f'{output_directory}tmp.n2o.3.nc', f'{output_directory}CAMS_{year}-{month}.3.nc', f'{output_directory}tmp.n2o.4.nc')
+    print("time samples reconciled")
 
-        print("time samples reconciled")
+    cmd = f'ncks -A -v sp {output_directory}CAMS_{year}-{month}.3.nc {output_directory}tmp.n2o.4.nc'
+    os.system(cmd)
 
-        cmd = f'ncks -A -v sp {output_directory}CAMS_{year}-{month}.3.nc {output_directory}tmp.n2o.4.nc'
-        os.system(cmd)
+    print("copied from n2o to gases")
 
-        print("copied from n2o to gases")
+    cmd = f'cdo remapeta,{original_data_dir}../newvct {output_directory}tmp.n2o.4.nc {output_directory}tmp.n2o.5.nc'
+    os.system(cmd)
 
-        cmd = f'cdo remapeta,{original_data_dir}../newvct {output_directory}tmp.n2o.4.nc {output_directory}tmp.n2o.5.nc'
-        os.system(cmd)
+    cmd = f'ncrename -d lev,layer {output_directory}tmp.n2o.5.nc'
+    os.system(cmd)
 
-        cmd = f'ncrename -d lev,layer {output_directory}tmp.n2o.5.nc'
-        os.system(cmd)
-
-        cmd = f'ncks -A -v N2O {output_directory}tmp.n2o.5.nc {output_directory}CAMS_{year}-{month}.3.nc'
-        os.system(cmd)
+    cmd = f'ncks -A -v N2O {output_directory}tmp.n2o.5.nc {output_directory}CAMS_{year}-{month}.3.nc'
+    os.system(cmd)
 
 
 def evaluate_clat_bnds(cell, file_name_1, file_name_2):
@@ -172,9 +169,9 @@ if __name__ == "__main__":
     original_data_dir = '/data-T1/hws/CAMS/original_data/'
     processed_data_dir = '/data-T1/hws/CAMS/processed_data/'
 
-    if True:
-        if len(sys.argv) != 3:
-            print("Usage: regrid_n2o mode year")
+    if False:
+        if len(sys.argv) != 4:
+            print("Usage: regrid_n2o mode month year")
             print("Mode must be one of the following: 'training', 'testing', or 'cross_validation'")
             sys.exit(1)
         elif sys.argv[1] not in ['training','testing','cross_validation']:
@@ -182,15 +179,16 @@ if __name__ == "__main__":
             sys.exit(1)
 
         mode = sys.argv[1]
-        year = sys.argv[2]
+        month = sys.argv[2]
+        year = sys.argv[3]
     else:
         mode = "training"
         year = "2008"
         month = '01'
         output_directory=f'{processed_data_dir}{mode}/{year}/{month}/'
 
-    regrid_gases('/data-T1/hws/CAMS/',mode, year)
-    regrid_n2o(original_data_dir, processed_data_dir, mode, year)
+    regrid_gases('/data-T1/hws/CAMS/',mode, month, year, use_st=True)
+    regrid_n2o(original_data_dir, processed_data_dir, mode, month, year)
     #evaluate_clat_bnds(130, f"{output_directory}CAMS_{year}-{month}.final.2.nc",
     #f"{output_directory}tmp.n2o.4.nc")
 

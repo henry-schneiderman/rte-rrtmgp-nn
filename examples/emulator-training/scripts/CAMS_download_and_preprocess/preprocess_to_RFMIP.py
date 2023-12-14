@@ -1,18 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-Created on Mon Sep 13 15:01:22 2021
 
-@author: peter
-"""
-
+# Need to fix cloud fraction for long-wave radiation
 
 import os
-#from netCDF4 import Dataset,num2date
 import xarray as xr
 import numpy as np
 
-from hum import esat, mixr2rh
+from regrid_gases import regrid_gases
+from regrid_n2o import regrid_n2o
 
 rd = 2.8705e2 # gas constant of dry air [J/kg/K]
 rv = 4.6150e2 # gas constant water [J/kg/K]
@@ -30,6 +26,7 @@ m_no2 = 46.0055
 co2_scale_factor = 1.0e-6
 no2_scale_factor = 1.0e-6
 n2o_scale_factor = 1.0e-9
+ch4_scale_factor = 1.0e-9
 mole_fraction_o2 = 0.029
 mole_fraction_n2 = 0.781
 
@@ -50,6 +47,11 @@ def saturation_vapor_pressure(t):
     #return e0 * np.exp((ld / rv) * ((1.0/t0) - (1.0/t)))    
 
 def saturation_vapor_pressure_2(T):
+    """
+    Created on Mon Sep 13 15:01:22 2021
+
+    @author: peter
+    """
     ''' get sateration pressure (units [Pa]) for a given air temperature (units [K])'''
     TK = 273.15
     e1 = 101325.0
@@ -134,6 +136,7 @@ def preprocess_to_RFMIP(CAMS_file_name, output_file_name):
     # swap layer and site axes
     q = np.transpose(q,(0,2,1))
     print(f"min q = {np.min(q)}")
+    q[q<0] = 0.0
 
     # mass mixing ratio: water-vapor-mass / dry-air-mass
     # Also known as "humidity mixing ratio (mixr)""
@@ -188,16 +191,16 @@ def preprocess_to_RFMIP(CAMS_file_name, output_file_name):
 
     dt_input['methane'] = dt_input['methane'].transpose("time", "site", "layer")
     methane = dt_input['methane']
-    vmr_methane = methane.data * m_dry / m_ch4
+    vmr_methane = methane.data * (m_dry / m_ch4) / ch4_scale_factor
     methane.data = vmr_methane
     methane.attrs["name"] = "vmr of methane"
     methane.attrs["comment"] = "moles methane / moles of dry air"
-    methane.attrs["units"] = "1"
+    methane.attrs["units"] = f"{ch4_scale_factor}"
     del methane.attrs["long_name"]
     del methane.attrs["standard_name"]
     del methane.attrs["param"]
     #del methane.attrs["coordinates"]
-    dt_input["methane"] = methane
+    dt_input["methane"] = methane 
 
     dt_input['carbon_dioxide'] = dt_input['carbon_dioxide'].transpose("time", "site", "layer")
     carbon_dioxide = dt_input['carbon_dioxide']
@@ -262,12 +265,102 @@ def preprocess_to_RFMIP(CAMS_file_name, output_file_name):
     dt_input.to_netcdf(output_file_name)
     dt_input.close()
 
+def fix_methane(CAMS_file_name, output_file_name):
+
+    dt_input   = xr.open_dataset(CAMS_file_name)
+
+    methane = dt_input['methane']
+    vmr_methane = methane.data / ch4_scale_factor
+    methane.data = vmr_methane
+    methane.attrs["units"] = f"{ch4_scale_factor}"
+    dt_input["methane"] = methane 
+
+    dt_input.to_netcdf(output_file_name)
+    dt_input.close()
+
+def add_is_valid_zenith_angle(input_file_name, output_file_name):
+    dt = xr.open_dataset(input_file_name)
+    mu0 = dt["mu0"].data
+    shape = mu0.shape
+    is_valid_zenith_angle = xr.DataArray(np.ones((shape)), dims=("expt","time"), name="is_valid_zenith_angle")
+    is_valid_zenith_angle.attrs["long_name"] = "True if zenith angle is less than 90 degrees"
+    dt["is_valid_zenith_angle"] = is_valid_zenith_angle
+    data = dt["rrtmgp_sw_input"].data
+    data[:,:,:,-1] = data[:,:,:,-1] * 1.0e-9
+    dt['rrtmgp_sw_input'].data = data
+    dt.to_netcdf(output_file_name)
+    dt.close()
+
+
+def cleanup_intermediate_files(dir, year, month):
+
+    # Do NOT remove {dir}/CAMS_{year}-{month}.final.nc
+    # or {dir}/CAMS_{year}-{month}.4.nc
+
+    cmd = f'rm -f {dir}/CAMS_{year}-{month}.3.nc'
+    os.system(cmd)
+
+    cmd = f'rm -f {dir}/CAMS_{year}-{month}.2.nc {dir}/CAMS_{year}-{month}.1.nc'
+    os.system(cmd)
+
+    cmd = f'rm -f {dir}/tmp.n2o.*.nc'
+    os.system(cmd)
+
+    cmd = f'rm -f {dir}/CAMS_eac*.nc'
+    os.system(cmd)
+
+    cmd = f'rm -f {dir}/CAMS_egg*.nc'
+    os.system(cmd)
+
+    cmd = f'rm -f {dir}/CAMS_eac*.grb'
+    os.system(cmd)
+
+    cmd = f'rm -f {dir}/CAMS_egg*.grb'
+    os.system(cmd)
+
+    cmd = f'rm -f {dir}/CAMS*pressure*.nc'
+    os.system(cmd)
+
+    cmd = f'rm -f {dir}/era5*.nc'
+    os.system(cmd)
+
+    cmd = f'rm -f {dir}/era5*.grb'
+    os.system(cmd)
+
+    cmd = f'rm -f {dir}/cams73*.nc'
+    os.system(cmd)
+
+
 if __name__ == "__main__":
-    CAMS_file_name = '/data-T1/hws/CAMS/processed_data/training/2008/01/CAMS_2008-01.3.nc'
-    CAMS_file_name_2 = '/data-T1/hws/CAMS/processed_data/training/2008/01/CAMS_2008-01.4.nc'
-    RFMIP_file_name = "../../../rfmip-clear-sky/multiple_input4MIPs_radiation_RFMIP_UColorado-RFMIP-1-2_none.nc"
-    output_file_name = '/data-T1/hws/CAMS/processed_data/training/2008/01/CAMS_2008-01.final.nc'
-    
-    add_coords_to_RFMIP(CAMS_file_name, CAMS_file_name_2)
-    preprocess_to_RFMIP(CAMS_file_name_2, output_file_name)
+
+    year = '2015'
+    mode = 'testing'
+    original_data_dir = '/data-T1/hws/CAMS/original_data/'
+    processed_data_dir = '/data-T1/hws/CAMS/processed_data/'
+    months = [str(m).zfill(2) for m in range(1,13)]
+
+    for month in months:
+
+        dir = f'{processed_data_dir}{mode}/{year}/{month}/'
+
+        if False:
+
+            CAMS_file_name = dir + f'CAMS_{year}-{month}.3.nc'
+            CAMS_file_name_2 = dir + f'CAMS_{year}-{month}.4.nc'
+            output_file_name = dir + f'CAMS_{year}-{month}.final.nc'
+            
+            regrid_gases('/data-T1/hws/CAMS/',mode, month, year, use_st=False)
+            regrid_n2o(original_data_dir, processed_data_dir, mode, month, year)
+            add_coords_to_RFMIP(CAMS_file_name, CAMS_file_name_2)
+            preprocess_to_RFMIP(CAMS_file_name_2, output_file_name)
+
+
+        elif True:
+            year = '2015'
+            mode = 'testing'
+            dir = f'{processed_data_dir}{mode}/{year}/{month}/'
+            cleanup_intermediate_files(dir, year, month)
+        else:
+            add_is_valid_zenith_angle("/data-T1/hws/tmp/RADSCHEME_data_g224_CAMS_2015_true_solar_angles.nc", 
+                                    "/data-T1/hws/tmp/RADSCHEME_data_g224_CAMS_2015_true_solar_angles.2.nc")
 

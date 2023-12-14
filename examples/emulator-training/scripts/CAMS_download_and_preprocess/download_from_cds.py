@@ -49,16 +49,6 @@ def get_dict_egg4_sfc(year, month, day, hour):
     }
     return mydict
 
-def get_dict_egg4_sfc_st(year, month, day, hour):
-    mydict =     {
-         'format': 'grib', 
-          'variable': [
-            'skin_temperature',  'snow_albedo', 'snow_depth',
-        ],
-        'step': str(hour),
-        'date': f'{year}-{month}-{day}',
-    }
-    return mydict
 
 def get_dict_era5_sfc(year, month, day, hour):
 
@@ -120,7 +110,6 @@ def get_dict_egg4_ml(year, month, day, hour):
 
 def download_cams(directory,date_list,hours):
 
-
     with open('/home/hws/ADS/.cdsapirc', 'r') as f:
                 credentials = yaml.safe_load(f)
 
@@ -163,16 +152,9 @@ def download_cams(directory,date_list,hours):
             print(f" Elapsed Time: {et - st:0.4f} seconds", flush=True)
 
 
-# Downloads skin temperature only
-def download_cams_st(directory,date_list,hours, is_era5=False, is_era5_z=False):
+def download_era5(directory,date_list,hours,is_era5_z=False):
 
-    if is_era5:
-        c_era = cdsapi.Client()
-
-    else:
-        with open('/home/hws/ADS/.cdsapirc', 'r') as f:
-            credentials = yaml.safe_load(f)
-        c_ads = cdsapi.Client(url=credentials['url'], key=credentials['key'])
+    c_era = cdsapi.Client()
 
     for i, d in enumerate(date_list):
         year = d[0]
@@ -183,12 +165,7 @@ def download_cams_st(directory,date_list,hours, is_era5=False, is_era5_z=False):
             s_hour = str(hour).zfill(2)
             st = time.perf_counter()
 
-            if not is_era5:
-                dict_egg4 = get_dict_egg4_sfc_st(year,month,day,hour)
-                c_ads.retrieve(
-                'cams-global-ghg-reanalysis-egg4', dict_egg4,
-                data_directory + f'CAMS_egg4_sfc_st_{year}-{month}-{day}-{s_hour}.grb')
-            elif not is_era5_z:
+            if not is_era5_z:
                 dict_era5 = get_dict_era5_sfc(year, month, day, hour)
                 c_era.retrieve(
                  'reanalysis-era5-single-levels',
@@ -237,72 +214,60 @@ def download_greenhouse_gas_inversion(directory,year):
         et = time.perf_counter()
         print(f" Elapsed Time: {et - st:0.4f} seconds", flush=True)
 
-def download_cams_year(directory, year):
-
+def day_list_to_date_list(day_list,year):
     date_list = []
-
-    # Every third hour
-    hours = [i for i in range(0,24,3)]
-    # Every 4th day
-    for day_num in range(1,366,4):
+    for day_num in day_list:
         d = datetime.datetime(year,1,1) + datetime.timedelta(day_num - 1)
         month = d.strftime("%m")
         day = d.strftime("%d")
         date_list.append((str(year),month,day))
-    download_cams(directory,date_list,hours)
-
-def download_cams_year_cross_validation(directory, year, day_start, is_st=False):
-
-    date_list = []
-
-    # Every third hourq
-    hours = [i for i in range(0,24,3)]
-    # Every 4th day
-    for day_num in range(day_start,366,28):
-        d = datetime.datetime(year,1,1) + datetime.timedelta(day_num - 1)
-        month = d.strftime("%m")
-        day = d.strftime("%d")
-        date_list.append((str(year),month,day))
-    if is_st:
-        download_cams_st(directory,date_list,hours)
-    else:
-        download_cams(directory,date_list,hours)
-
-# Downloads skin temperature only
-def download_cams_year_st(directory, year, is_era5=False, is_era5_z=False):
-
-    date_list = []
-
-    # Every third hour
-    hours = [i for i in range(0,24,3)]
-    # Every 4th day
-    for day_num in range(1,366,4):
-        d = datetime.datetime(year,1,1) + datetime.timedelta(day_num - 1)
-        month = d.strftime("%m")
-        day = d.strftime("%d")
-        date_list.append((str(year),month,day))
-    download_cams_st(directory,date_list,hours,is_era5=is_era5,is_era5_z=is_era5_z)
+    return date_list
 
 if __name__ == "__main__":
     directory = "/data-T1/hws/CAMS/original_data/"
     st = time.perf_counter()
-    year = 2009
+
+
     #download_cams_year(directory, year)
     #download_greenhouse_gas_inversion(directory, year=2008)
-    #download_greenhouse_gas_inversion(directory + "testing/", year=2009)
+
     #download_cams_year_cross_validation(directory + "cross_validation/", year=2008, day_start=3)
 
     #download_cams_year_cross_validation(directory + "testing/", year=2020, day_start=4)
 
     #download_greenhouse_gas_inversion(directory + "testing/", year=2020)
 
-    download_cams_year_st(directory + "training/", year=2008, is_era5=True, is_era5_z=True)
+    #download_era5_year(directory + "training/", year=2008, is_era5_z=True)
 
-    #download_cams_year_cross_validation(directory + "cross_validation/", year=2008, day_start=3, is_st=True)
+    hours = [i for i in range(0,24,3)]
 
-    #download_cams_year_cross_validation(directory + "testing/", year=2009, day_start=4, is_st=True)
+    training_days = [day_num for  day_num in range(1,366,4)]
+    training_dates_2008 = day_list_to_date_list(training_days,2008)
 
-    #download_cams_year_cross_validation(directory + "testing/", year=2020, day_start=4, is_st=True)
+    cross_validation_days = [day_num for day_num in range(3,366,28)]
+    cross_validation_dates_2008 = day_list_to_date_list(cross_validation_days, 2008)
+
+    testing_days = [day_num for day_num in range(4,366,28)]
+    testing_days_2009 = day_list_to_date_list(testing_days,2009)
+    testing_dates_2020 = day_list_to_date_list(testing_days,2020) 
+    testing_dates_2015 = day_list_to_date_list(testing_days,2015) 
+
+    #download_cams(directory + "training/",training_dates_2008,hours)
+    #download_cams(directory + "cross_validation/",cross_validation_dates_2008,hours)
+    #download_cams(directory + "testing/", testing_dates_2009, hours)
+    #download_cams(directory + "testing/", testing_dates_2020, hours)
+    download_cams(directory + "testing/", testing_dates_2015, hours)
+
+    #download_greenhouse_gas_inversion(directory + "testing/", year=2008)
+    #download_greenhouse_gas_inversion(directory + "testing/", year=2009)
+    download_greenhouse_gas_inversion(directory + "testing/", year=2015)
+    #download_greenhouse_gas_inversion(directory + "testing/", year=2020)
+
+    #download_era5(directory + "training/",training_dates_2008,hours)
+    #download_era5(directory + "cross_validation/",cross_validation_dates_2008,hours)
+    #download_era5(directory + "testing/", testing_dates_2009, hours)
+    download_era5(directory + "testing/", testing_dates_2015, hours)
+    #download_era5(directory + "testing/", testing_dates_2020, hours)
 
     if False:
         month = '01'
