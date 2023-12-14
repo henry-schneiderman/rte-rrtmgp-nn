@@ -7,6 +7,7 @@ from torch.profiler import profile, record_function, ProfilerActivity
 import torch.nn.functional as F
 
 from RT_data_hws import load_data_direct_pytorch, load_data_full_pytorch_2, absorbed_flux_to_heating_rate
+import RT_data_hws_2
 
 eps_1 = 0.0000001
 
@@ -1162,7 +1163,7 @@ def train_direct_only():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using {device} device")
 
-    datadir     = "/home/hws/tmp/"
+    datadir     = "/data-T1/hws/tmp/"
     filename_training = datadir + "/RADSCHEME_data_g224_CAMS_2009-2018_sans_2014-2015.2.nc"
     filename_validation = datadir + "/RADSCHEME_data_g224_CAMS_2014.2.nc"
     filename_testing = datadir + "/RADSCHEME_data_g224_CAMS_2015_true_solar_angles.nc"
@@ -1245,6 +1246,26 @@ def get_weight_profile(y_flux,device):
     weight_profile = 1.0 / torch.mean(flux,dim=0,keepdim=True)
     return weight_profile
 
+def get_weight_profile_2(device):
+    import xarray as xr
+    datadir     = "/data-T1/hws/tmp/"
+    filename_training = datadir + "/RADSCHEME_data_g224_CAMS_2009-2018_sans_2014-2015.2.nc"
+    dt = xr.open_dataset(filename_training)
+    rsd = dt['rsd'].data
+    rsu = dt['rsu'].data
+    shape = rsd.shape
+    rsd = np.reshape(rsd, (shape[0]*shape[1], shape[2]))
+    rsu = np.reshape(rsu, (shape[0]*shape[1], shape[2]))
+    toa = np.copy(rsd[:,0:1])
+    rsu = rsu / toa
+    rsd = rsd / toa
+    rsd = torch.from_numpy(rsd).float().to(device)
+    rsu = torch.from_numpy(rsu).float().to(device)
+    flux = torch.concat((rsd,rsu),dim=1)
+    weight_profile = 1.0 / torch.mean(flux,dim=0,keepdim=True)
+    dt.close()
+    return weight_profile
+
 def train_full():
 
     print("Pytorch version:", torch.__version__)
@@ -1260,7 +1281,7 @@ def train_full():
     else:
         use_cuda = False
 
-    datadir     = "/home/hws/tmp/"
+    datadir     = "/data-T1/hws/tmp/"
     filename_training = datadir + "/RADSCHEME_data_g224_CAMS_2009-2018_sans_2014-2015.2.nc"
     filename_validation = datadir + "/RADSCHEME_data_g224_CAMS_2014.2.nc"
     filename_testing = datadir + "/RADSCHEME_data_g224_CAMS_2015_true_solar_angles.nc"
@@ -1395,13 +1416,132 @@ def train_full():
     print("Done!")
 
 
+def train_full_dataloader():
+
+    print("Pytorch version:", torch.__version__)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using {device} device")
+
+    if torch.cuda.is_available():
+        print('__CUDNN VERSION:', torch.backends.cudnn.version())
+        print('__Number CUDA Devices:', torch.cuda.device_count())
+        print('__CUDA Device Name:',torch.cuda.get_device_name(0))
+        print('__CUDA Device Total Memory [GB]:',torch.cuda.get_device_properties(0).total_memory/1e9)
+        use_cuda = True
+    else:
+        use_cuda = False
+
+    datadir     = "/data-T1/hws/tmp/"
+    train_input_dir = "/data-T1/hws/CAMS/processed_data/training/2008/"
+    cross_input_dir = "/data-T1/hws/CAMS/processed_data/cross_validation/2008/"
+    months = [str(m).zfill(2) for m in range(1,13)]
+    train_input_files = [f'{train_input_dir}Flux_sw-2008-{month}.2.nc' for month in months]
+    cross_input_files = [f'{cross_input_dir}Flux_sw-2008-{month}.2.nc' for month in months]
+    filename_full_model = datadir + "/Torch.Dataloader.2." 
+
+    batch_size = 2048
+    n_channel = 30
+    n_constituent = 8
+    checkpoint_period = 5
+    epochs = 4000
+    t_start = 195
+    t_warmup = 1
+    t = t_start
+
+    dropout_schedule = (0.0, 0.07, 0.1, 0.15, 0.2, 0.15, 0.1, 0.07, 0.0, 0.0) # 400
+    #dropout_epochs =   (-1, 200,   300, 350,  400, 450,  550, 650, 750, epochs + 1)
+    dropout_epochs =   (-1, 40,   60, 70,  80, 90,  110, 130, 150, epochs + 1)
+
+    dropout_index = next(i for i, x in enumerate(dropout_epochs) if t <= x) - 1
+    dropout_p = dropout_schedule[dropout_index]
+    last_dropout_index = dropout_index
+
+    model = FullNet(n_channel,n_constituent,dropout_p,device).to(device=device)
+    optimizer = torch.optim.Adam(model.parameters())
+
+    weight_profile = get_weight_profile_2(device)
+
+    train_dataset = RT_data_hws_2.RTDataSet(train_input_files,n_channel)
+
+    train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size, 
+                                                   shuffle=False,
+                                                        num_workers=1)
+    
+    validation_dataset = RT_data_hws_2.RTDataSet(cross_input_files,n_channel)
+
+    validation_dataloader = torch.utils.data.DataLoader(validation_dataset, batch_size, 
+                                                   shuffle=False,
+                                                        num_workers=1)
+    
+    #start = torch.cuda.Event(enable_timing=True)
+    #end = torch.cuda.Event(enable_timing=True)
+
+    loss_functions = (loss_henry_full_wrapper, loss_flux_full_wrapper_2, loss_heating_rate_full_wrapper,
+                      loss_heating_rate_direct_full_wrapper, loss_flux_full_wrapper,
+                      )
+    loss_names = ("Loss", "Flux Loss (weight profile)", "Heating Rate Loss", 
+                  "Direct Heating Rate Loss", 
+                    "Flux Loss (TOA weighting)")
+
+    if t > 0:
+        checkpoint = torch.load(filename_full_model + str(t))
+        print(f"Loaded Model: epoch = {t}")
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        #epoch = checkpoint['epoch']
+
+    print(f"       dropout = {dropout_p}")
+    while t < epochs:
+        t += 1
+
+        dropout_index = next(i for i, x in enumerate(dropout_epochs) if t <= x) - 1
+        if dropout_index != last_dropout_index:
+            last_dropout_index = dropout_index
+            dropout_p = dropout_schedule[dropout_index]
+            model.reset_dropout(dropout_p)
+        print(f"Epoch {t}\n-------------------------------")
+        print(f"Dropout: {dropout_p}")
+
+        if t < t_start + t_warmup:
+            train_loop(train_dataloader, model, optimizer, loss_henry_full_wrapper, weight_profile, device)
+
+            loss = test_loop(validation_dataloader, model, loss_functions, loss_names,weight_profile, device)
+        else:
+
+            #with profile(
+            #    activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+            #    with_stack=True, with_modules=True,
+            #) as prof:
+            #start.record()
+            train_loop(train_dataloader, model, optimizer, loss_henry_full_wrapper, weight_profile, device)
+
+            loss = test_loop(validation_dataloader, model, loss_functions, loss_names,weight_profile, device)
+
+            #if use_cuda: 
+                #torch.cuda.synchronize()
+            #end.record()
+
+            #print(f"\n Elapsed time in seconds: {start.elapsed_time(end) / 1000.0}\n")
+
+            #print(prof.key_averages(group_by_stack_n=6).table(sort_by='self_cpu_time_total', row_limit=15))
+        if t % checkpoint_period == 0:
+            torch.save({
+            'epoch': t,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'loss': loss,
+            }, filename_full_model + str(t))
+            print(f' Wrote Model: epoch = {t}')
+
+    print("Done!")
+
 def test_full():
 
     print("Pytorch version:", torch.__version__)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using {device} device")
 
-    datadir     = "/home/hws/tmp/"
+    datadir     = "/data-T1/hws/tmp/"
 
     filename_testing = datadir + "/RADSCHEME_data_g224_CAMS_2015_true_solar_angles.nc"
     filename_full_model = datadir + "/Full_Torch.6."
@@ -1437,8 +1577,55 @@ def test_full():
         loss = test_loop (test_dataloader, model, loss_functions, loss_names, weight_profile, device)
  
 
+def test_full_dataloader():
+
+    print("Pytorch version:", torch.__version__)
+    device = "cpu"
+    print(f"Using {device} device")
+
+    datadir     = "/data-T1/hws/tmp/"
+    year = "2009"
+
+    filename_full_model = datadir + "/Torch.Dataloader.1." 
+
+    datadir     = "/data-T1/hws/tmp/"
+    test_input_dir = f"/data-T1/hws/CAMS/processed_data/testing/{year}/"
+    months = [str(m).zfill(2) for m in range(1,13)]
+    test_input_files = [f'{test_input_dir}Flux_sw-{year}-{month}.nc' for month in months]
+    #test_input_files = ["/data-T1/hws/tmp/RADSCHEME_data_g224_CAMS_2015_true_solar_angles.2.nc"]
+    batch_size = 2048 
+    n_channel = 30
+    n_constituent = 8
+
+    weight_profile = get_weight_profile_2(device)
+    test_dataset = RT_data_hws_2.RTDataSet(test_input_files,n_channel)
+
+    test_dataloader = torch.utils.data.DataLoader(test_dataset, batch_size, 
+                                                   shuffle=False,
+                                                        num_workers=1)
+
+    model = FullNet(n_channel,n_constituent,dropout_p=0,device=device)
+    model = model.to(device=device)
+
+    loss_functions = (loss_henry_full_wrapper, loss_heating_rate_full_wrapper,
+                      loss_heating_rate_direct_full_wrapper, loss_flux_full_wrapper)
+    loss_names = ("Loss", "Heating Rate Loss", "Direct Heating Rate Loss", "Flux Loss")
+
+    print(f"Testing error, Year = {year}")
+    for t in range(375,450,5):
+
+        checkpoint = torch.load(filename_full_model + str(t), map_location=torch.device(device))
+        print(f"Loaded Model: epoch = {t}")
+        model.load_state_dict(checkpoint['model_state_dict'])
+
+        loss = test_loop (test_dataloader, model, loss_functions, loss_names, weight_profile, device)
+ 
+
 if __name__ == "__main__":
     #train_direct_only()
     #train_full()
     #
-    test_full()
+    #test_full()
+
+    train_full_dataloader()
+    #test_full_dataloader()
