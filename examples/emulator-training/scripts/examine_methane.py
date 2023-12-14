@@ -2,7 +2,7 @@ from netCDF4 import Dataset
 import numpy as np
 import xarray as xr
 
-data_dir       = "/home/hws/tmp/"
+data_dir       = "/data-T1/hws/tmp/"
 file_name_original   = data_dir + "CAMS_2014_RFMIPstyle.nc"
 file_name_in   = data_dir + "CAMS_2009-2018_sans_2014-2015_RFMIPstyle.nc"
 file_name_out  = data_dir + "RADSCHEME_data_g224_CAMS_2014.nc"
@@ -10,6 +10,15 @@ file_name_out  = data_dir + "RADSCHEME_data_g224_CAMS_2009-2018_sans_2014-2015.n
 file_name_input  = data_dir + "RADSCHEME_data_g224_CAMS_2014.2.nc"
 file_name_out2  = data_dir + "RADSCHEME_data_g224_CAMS_2009-2018_sans_2014-2015.2.nc"
 
+file_name_3 = data_dir + '../CAMS/processed_data/training/2008/Flux_sw-2008-01.nc'
+dt3 = xr.open_dataset(file_name_3)
+
+methane_3 = dt3['rrtmgp_sw_input'].data[:,:,:,-1]
+
+file_name_4 = data_dir + '../CAMS/processed_data/training/2008/Flux_sw-2008-01.2.nc'
+dt4 = xr.open_dataset(file_name_4)
+
+methane_4 = dt4['rrtmgp_sw_input'].data[:,:,:,-1]
 
 data_original = xr.open_dataset(file_name_original) #Dataset(file_name_in)
 
@@ -24,6 +33,9 @@ gases = data_input.variables["rrtmgp_sw_input"].data
 
 print("!")
 print(f"methane = {gases[1, 2, 10:20, 6]}")
+
+print(f"methane3 = {methane_3[1, 2, 10:20]}")
+print(f"methane4 = {methane_4[1, 2, 10:20]}")
 
 ######
 

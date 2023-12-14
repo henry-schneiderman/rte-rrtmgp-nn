@@ -17,6 +17,7 @@ import os, subprocess, argparse
 import sys
 import numpy as np
 from netCDF4 import Dataset
+import xarray as xr
 # from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
 def preproc_divbymax(x,xmax=None):
@@ -42,7 +43,21 @@ def preproc_divbymax(x,xmax=None):
                 x_scaled[:,i] =  x_scaled[:,i] / xmax[i]
                 
         return x_scaled
-    
+
+def get_weight_profile(file_name):
+        dt = xr.open_dataset(file_name)
+        rsd = dt['rsd'].data
+        s = rsd.shape
+        rsd = np.reshape(rsd, (s[0]*s[1],s[2]))
+        rsu = dt['rsu'].data
+        rsu = np.reshape(rsu, (s[0]*s[1],s[2]))
+        rsd0 = rsd[:,0]
+        y = np.concatenate((np.expand_dims(rsd,2), np.expand_dims(rsu,2)),axis=2)
+        y = y / np.reshape(rsd0, (-1, 1, 1))
+        dt.close()
+        return 1/y.mean(axis=0)
+
+
 def load_radscheme_rnn(fname, predictand='rsu_rsd', scale_p_h2o_o3=True, \
                                 return_p=False, return_coldry=False):
     # Load data for training a RADIATION SCHEME (RTE+RRTMGP) emulator,
@@ -126,7 +141,7 @@ def load_radscheme_rnn(fname, predictand='rsu_rsd', scale_p_h2o_o3=True, \
     x       = np.concatenate((x_gas,lwp,iwp,mu0,sfc_alb),axis=2)
     y       = np.concatenate((rsd,rsu),axis=2)
 
-    print( "there are {} profiles in this dataset ({} experiments, {} columns)".format(nexp*ncol,nexp,ncol))
+    #print( "there are {} profiles in this dataset ({} experiments, {} columns)".format(nexp*ncol,nexp,ncol))
     
     pres = dat.variables['pres_level'][:,:,:].data       # (nexp,ncol, nlev)
     pres = np.reshape(pres,(ns,nlev))
@@ -286,7 +301,7 @@ def get_col_dry(vmr_h2o, plev):
 
 def get_max():
 
-    datadir     = "/home/hws/tmp/"
+    datadir     = "/data-T1/hws/tmp/"
     filename_training       = datadir + "/RADSCHEME_data_g224_CAMS_2009-2018_sans_2014-2015.2.nc"
     filename_validation   = datadir + "/RADSCHEME_data_g224_CAMS_2014.2.nc"
     filename_testing  = datadir +  "/RADSCHEME_data_g224_CAMS_2015_true_solar_angles.nc"

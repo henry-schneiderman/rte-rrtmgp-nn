@@ -112,7 +112,7 @@ def plot_flux_and_hr_error(rsu_true, rsd_true, rsu_pred, rsd_pred, pres):
 #  ----------------- File paths -----------------
 datadir     = "/media/peter/samsung/data/CAMS/ml_training/"
 datadir     = "/home/peter/data/"
-datadir     = "/home/hws/tmp/"
+datadir     = "/data-T1/hws/tmp/"
 fpath       = datadir + "/RADSCHEME_data_g224_CAMS_2009-2018_sans_2014-2015.2.nc"
 fpath_val   = datadir + "/RADSCHEME_data_g224_CAMS_2014.2.nc"
 fpath_test  = datadir +  "/RADSCHEME_data_g224_CAMS_2015_true_solar_angles.nc"

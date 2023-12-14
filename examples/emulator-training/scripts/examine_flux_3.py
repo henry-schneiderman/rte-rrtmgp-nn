@@ -3,7 +3,7 @@ import numpy as np
 import xarray as xr
 import matplotlib.pyplot as plt
 
-data_dir       = "/home/hws/tmp/"
+data_dir       = "/data-T1/hws/tmp/"
 #file_name_in   = data_dir + "CAMS_2014_RFMIPstyle.nc"
 file_name_in   = data_dir + "CAMS_2009-2018_sans_2014-2015_RFMIPstyle.nc"
 #file_name_out  = data_dir + "RADSCHEME_data_g224_CAMS_2014.nc"

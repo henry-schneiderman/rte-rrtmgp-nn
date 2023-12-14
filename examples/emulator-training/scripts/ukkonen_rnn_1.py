@@ -101,7 +101,7 @@ def plot_flux_and_hr_error(rsu_true, rsd_true, rsu_pred, rsd_pred, pres):
 
 #  ----------------- File paths -----------------
 
-datadir     = "/home/hws/tmp/"
+datadir     = "/data-T1/hws/tmp/"
 fpath       = datadir + "/RADSCHEME_data_g224_CAMS_2009-2018_sans_2014-2015.2.nc"
 fpath_val   = datadir + "/RADSCHEME_data_g224_CAMS_2014.2.nc"
 fpath_test  = datadir +  "/RADSCHEME_data_g224_CAMS_2015_true_solar_angles.nc"
@@ -135,7 +135,7 @@ final_evaluation = False
 
 is_mass_weighted = False
 model_name = 'MODEL.RNN_1.'
-is_train = False
+is_train = True
 #is_mass_weighted = True
 #model_name = 'MODEL.RNN_2.'
 
@@ -468,6 +468,7 @@ if not final_evaluation:
             
             #print(history.history.keys())
             #print("number of epochs = " + str(history.history['epoch']))
+
             print(str(history.history['rmse_hr']))
 
             nn_epochs = len(history.history['rmse_hr'])
