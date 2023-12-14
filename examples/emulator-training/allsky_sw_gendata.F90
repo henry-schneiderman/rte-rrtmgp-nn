@@ -163,7 +163,7 @@ program rrtmgp_rfmip_sw
   character(len=132)  ::  flx_file, timing_file, nndev_file='', nn_input_str, cmt
   integer             ::  nargs, ncol, nlay, nbnd, ngpt, nexp, nblocks, block_size
   logical             ::  top_at_1, do_scattering
-  integer             ::  b, icol, ilay, igpt, igas, ngas, ninputs, num_gases, ret, i, istat
+  integer             ::  b, icol, ilay, igpt, igas, ngas, ninputs, num_gases, ret, i, istat, m
   character(len=4)    ::  block_size_char
   character(len=6)    ::  emulated_component
   character(len=32 ), dimension(:),     allocatable :: kdist_gas_names, input_file_gas_names, gasopt_input_names
@@ -206,6 +206,7 @@ program rrtmgp_rfmip_sw
   real(wp), dimension(:,:), allocatable         :: toa_flux       ! block_size, ngpt
   real(wp), dimension(:  ), allocatable         :: def_tsi, mu0   ! block_size
   logical , dimension(:,:), allocatable         :: usecol         ! block_size, nblocks
+  integer , dimension(:,:), allocatable         :: is_valid_zenith         ! block_size, nblocks
   !
   ! ty_gas_concentration holds multiple columns; we make an array of these objects to
   !   leverage what we know about the input file
@@ -338,8 +339,8 @@ program rrtmgp_rfmip_sw
   !   print *, "max of gas ", gas_conc_array(1)%gas_name(b), ":", maxval(gas_conc_array(1)%concs(b)%conc)
   ! end do
 
-  call read_and_block_sw_bc(input_file, block_size, surface_albedo, total_solar_irradiance, solar_zenith_angle,  sza_fill_randoms_in=.true.)
-  ! call read_and_block_sw_bc(input_file, block_size, surface_albedo, total_solar_irradiance, solar_zenith_angle)
+  !call read_and_block_sw_bc(input_file, block_size, surface_albedo, total_solar_irradiance, solar_zenith_angle,  sza_fill_randoms_in=.true.)
+  call read_and_block_sw_bc(input_file, block_size, surface_albedo, total_solar_irradiance, solar_zenith_angle)
 
   !
   ! Read k-distribution information. load_and_init() reads data from netCDF and calls
@@ -351,7 +352,8 @@ program rrtmgp_rfmip_sw
   ngpt = k_dist%get_ngpt()
 
   allocate(toa_flux(k_dist%get_ngpt(), block_size), &
-           def_tsi(block_size), usecol(block_size,nblocks))
+           def_tsi(block_size), usecol(block_size,nblocks), &
+           is_valid_zenith(block_size,nblocks))
   !$acc enter data create (toa_flux, def_tsi)
 
   !
@@ -446,6 +448,13 @@ program rrtmgp_rfmip_sw
   !
   do b = 1, nblocks
     usecol(1:block_size,b)  = solar_zenith_angle(1:block_size,b) < 90._wp - 2._wp * spacing(90._wp)
+    do m = 1, block_size
+      if(usecol(m,b)) then
+        is_valid_zenith(m,b) = 1  ! Python convention for booleans
+      else
+        is_valid_zenith(m,b) = 0
+      end if
+    end do
   end do
 
   !
@@ -739,6 +748,10 @@ program rrtmgp_rfmip_sw
     &   dim2_name="expt", dim1_name="site", &
     &   long_name="cosine of solar zenith angle")
 
+    call nndev_file_netcdf%define_variable("is_valid_zenith_angle", &
+    &   dim2_name="expt", dim1_name="site", &
+    &   long_name="True if zenith angle is less than 90 degrees")
+
     call nndev_file_netcdf%define_variable("pres_level", &
     &   dim3_name="expt", dim2_name="site", dim1_name="level", &
     &   long_name="pressure at half-level")
@@ -868,6 +881,7 @@ program rrtmgp_rfmip_sw
     call unblock_and_write(trim(nndev_file), 'toa_flux', toa_flux_save)
     call unblock_and_write(trim(nndev_file), 'sfc_alb', sfc_alb_spec_save)
     call unblock_and_write(trim(nndev_file), 'mu0', mu0_save)
+    call unblock_and_write(trim(nndev_file), 'is_valid_zenith_angle', is_valid_zenith)
     deallocate(toa_flux_save, sfc_alb_spec_save, mu0_save)
 
     if (do_gpt_flux) then

@@ -37,6 +37,7 @@ module mo_io_rfmipstyle_generic
 
   interface unblock_and_write
     module procedure unblock_and_write_2D_dp, unblock_and_write_2D_sp, &
+      unblock_and_write_2D_integer, &
       unblock_and_write_3D_dp, unblock_and_write_3D_sp, &
       unblock_and_write_4D_dp, unblock_and_write_4D_sp
   end interface
@@ -823,6 +824,35 @@ contains
     ncid = nf90_close(ncid)
     deallocate(temp1d)
   end subroutine unblock_and_write_2D_sp
+
+  subroutine unblock_and_write_2D_integer(fileName, varName, values)
+    character(len=*),           intent(in   ) :: fileName, varName
+    integer, dimension(:,:),  intent(in   ) :: values
+    ! ---------------------------
+    integer :: ncid
+    integer :: b, blocksize, nlev, nblocks
+    integer, dimension(:), allocatable :: temp1d
+    ! ---------------------------
+    if(any([ncol_l, nlay_l, nexp_l]  == 0)) call stop_on_err("unblock_and_write: Haven't read problem size yet.")
+    blocksize = size(values,1)
+    nblocks   = size(values,2)
+    if(blocksize*nblocks /= ncol_l*nexp_l) call stop_on_err('unblock_and_write: array values has the wrong number of blocks/size')
+
+    allocate(temp1d(ncol_l*nexp_l))
+    do b = 1, nblocks
+      temp1d(((b-1)*blocksize+1):(b*blocksize)) = values(1:blocksize,b)
+    end do
+    !
+    ! Check that output arrays are sized correctly : blocksize, nlay, (ncol * nexp)/blocksize
+    !
+    if(nf90_open(trim(fileName), NF90_WRITE, ncid) /= NF90_NOERR) &
+      call stop_on_err("unblock_and_write: can't find file " // trim(fileName))
+    call stop_on_err(write_field(ncid, varName,  &
+                                 reshape(temp1d, shape = [ncol_l, nexp_l])))
+
+    ncid = nf90_close(ncid)
+    deallocate(temp1d)
+  end subroutine unblock_and_write_2D_integer
 
   !
   ! Reshape values (nominally fluxes) from RTE order (nlev, ncol, nblocks)
