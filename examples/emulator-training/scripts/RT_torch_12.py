@@ -290,6 +290,9 @@ class Scattering_v1(nn.Module):
     Note: The suffixes "_direct" and "_diffuse" specify the type of 
     input radiation.
 
+    Note: Consider re-doing with tau as input to the scattering net similar
+    to v3
+
     Inputs:
 
         mu_direct, mu_diffuse: cosine of zenith angle
@@ -370,11 +373,95 @@ class Scattering_v1(nn.Module):
 
         return layers
     
+
+class Scattering_v1_tau(nn.Module):
+    """ 
+    Same as V1 except instead of using the constituents, combines 
+    the tau's as follows, separating those that scatter from 
+    those that don't.
+    Inputs: tau's of lwp, iwp, sum(o3,co2,n2o,ch4), h2o, u
+    Goal is to separate scatterers from absorbers
+    """
+
+    def __init__(self, n_channel, n_constituent, dropout_p, device):
+
+        super(Scattering_v1_tau, self).__init__()
+        self.n_channel = n_channel
+
+        n_input = 5
+
+        n_hidden = [5, 4, 4]
+        # For direct input
+        # Has additional input for zenith angle ('mu_direct')
+        self.net_direct = nn.ModuleList(
+            [MLP(n_input=n_input + 1,
+                 n_hidden=n_hidden,
+                 n_output=3,
+                 dropout_p=dropout_p,
+                 device=device,
+                 lower=-1.0,upper=1.0) 
+             for _ in range(self.n_channel)])
+        # For diffuse input
+        self.net_diffuse = nn.ModuleList(
+            [MLP(n_input=n_input, 
+                 n_hidden=n_hidden, 
+                 n_output=3,
+                dropout_p=dropout_p,
+                 device=device, 
+                 lower=-1.0,upper=1.0) 
+             for _ in range(self.n_channel)])
+
+    def reset_dropout(self,dropout_p):
+        for net in self.net_direct:
+            net.reset_dropout(dropout_p)
+        for net in self.net_diffuse:
+            net.reset_dropout(dropout_p)
+
+    def forward(self, x):
+        tau, mu_direct, mu_diffuse, _ = x
+
+        tau_total = torch.sum(tau, dim=2, keepdims=False)
+
+        t_direct = torch.exp(-tau_total / (mu_direct + eps_1))
+        t_diffuse = torch.exp(-tau_total / (mu_diffuse + eps_1))
+
+        tau_direct = tau / (mu_direct + eps_1)
+
+        direct_1 = tau_direct[:,:,3] + tau_direct[:,:,4]+ tau_direct[:,:,6] + tau_direct[:,:,7]
+
+        direct_1 = torch.unsqueeze(direct_1,dim=2)
+
+        direct = torch.concat((tau_direct[:,:,0:2], tau_direct[:,:,5:6],tau_direct[:,:,2:3], direct_1, mu_direct),
+                                           dim=2)
+
+        diffuse_1 = tau[:,:,3] + tau[:,:,4]+ tau[:,:,6] + tau[:,:,7]
+
+        diffuse_1 = torch.unsqueeze(diffuse_1,dim=2)
+
+        diffuse = torch.concat((tau[:,:,0:2], tau[:,:,5:6], tau[:,:,2:3], diffuse_1),
+                                           dim=2)
+        
+        e_split_direct = [F.softmax(net(direct),dim=-1) for net 
+                          in self.net_direct]
+        e_split_diffuse = [F.softmax(net(diffuse),dim=-1) for net 
+                           in self.net_diffuse]
+
+        e_split_direct = torch.stack(e_split_direct, dim=1)
+        e_split_diffuse = torch.stack(e_split_diffuse, dim=1)
+
+        layers = [t_direct, t_diffuse, 
+                  e_split_direct, e_split_diffuse]
+
+        return layers
+
 class Scattering_v2(nn.Module):
     """ Computes full set of layer properties for
     direct and diffuse transmission, reflection,
     and absorption
     Uses a single net for scattering for all channels
+    Uses constituent (gas concentration) values as input
+
+    *** No longer used ****
     """
     def __init__(self, n_channel, n_constituent, n_coarse_code, dropout_p, device):
         super(Scattering_v2, self).__init__()
@@ -450,9 +537,12 @@ class Scattering_v3(nn.Module):
     """ Computes full set of layer properties for
     direct and diffuse transmission, reflection,
     and absorption
+
     Uses a single net for scattering for all channels
 
-    Same as v2 except uses tau as input instead of constituents
+    Same as v2 except uses tau as input instead of constituents (gas concentrations)
+    Tau makes more sense since it is the extinction amount rather than
+    the amount of constituent as in v2
     """
     def __init__(self, n_channel, n_constituent, n_coarse_code, dropout_p, device):
         super(Scattering_v3, self).__init__()
@@ -491,7 +581,7 @@ class Scattering_v3(nn.Module):
     #@torch.compile
     def forward(self, x):
 
-        tau, mu_direct, mu_diffuse, constituents = x
+        tau, mu_direct, mu_diffuse, _ = x
 
         tau_total = torch.sum(tau, dim=2, keepdims=False)
 
@@ -508,7 +598,7 @@ class Scattering_v3(nn.Module):
         tau_diffuse = tau 
 
         # Repeat coarse code over all inputs
-        coarse_code_input = self.coarse_code_template.repeat(constituents.shape[0],1,1)
+        coarse_code_input = self.coarse_code_template.repeat(tau.shape[0],1,1)
 
         # Concatenate coarse code onto inputs
         tau_direct = torch.concat([tau_direct,coarse_code_input],dim=2)
@@ -934,7 +1024,7 @@ class FullNet(nn.Module):
         # Learns decomposition of extinguished radiation (into t, r, a)
         # for each channel
         if False:
-            self.scattering_net = LayerDistributed(Scattering_v1(n_channel,
+            self.scattering_net = LayerDistributed(Scattering_v1_tau(n_channel,
                                                           n_constituent,
                                                           dropout_p,
                                                           device))
@@ -1128,7 +1218,7 @@ def train_loop(dataloader, model, optimizer, loss_function, weight_profile, devi
             loss_value = loss.item()
             loss_string += f" {loss_value:.9f}"
 
-    print (loss_string)
+    #print (loss_string)
 
 def test_loop(dataloader, model, loss_functions, loss_names, weight_profile, device):
     """ Generic testing / evaluation loop """
@@ -1435,105 +1525,118 @@ def train_full_dataloader():
     train_input_dir = "/data-T1/hws/CAMS/processed_data/training/2008/"
     cross_input_dir = "/data-T1/hws/CAMS/processed_data/cross_validation/2008/"
     months = [str(m).zfill(2) for m in range(1,13)]
-    train_input_files = [f'{train_input_dir}Flux_sw-2008-{month}.2.nc' for month in months]
-    cross_input_files = [f'{cross_input_dir}Flux_sw-2008-{month}.2.nc' for month in months]
-    filename_full_model = datadir + "/Torch.Dataloader.2." 
+    train_input_files = [f'{train_input_dir}Flux_sw-2008-{month}.nc' for month in months]
+    cross_input_files = [f'{cross_input_dir}Flux_sw-2008-{month}.nc' for month in months]
 
     batch_size = 2048
     n_channel = 30
     n_constituent = 8
-    checkpoint_period = 5
-    epochs = 4000
-    t_start = 195
-    t_warmup = 1
-    t = t_start
+    checkpoint_period = 5 #1 #5
 
-    dropout_schedule = (0.0, 0.07, 0.1, 0.15, 0.2, 0.15, 0.1, 0.07, 0.0, 0.0) # 400
-    #dropout_epochs =   (-1, 200,   300, 350,  400, 450,  550, 650, 750, epochs + 1)
-    dropout_epochs =   (-1, 40,   60, 70,  80, 90,  110, 130, 150, epochs + 1)
+    #for ee in range(100):
+    if True:
+        #print(f"Model = {str(ee).zfill(3)}")
+        is_redo = False
+        filename_full_model_input = datadir + f"/Torch.Dataloader.e{str(8).zfill(3)}."
+        filename_full_model = datadir + f"/Torch.Dataloader.e8." 
+        filename_full_model_input = filename_full_model  #
+        epochs = 2000 #1
+        t_start = 410 #1  #0
+        t_warmup = 1
+        t = t_start
+        dropout_p = 0.00
 
-    dropout_index = next(i for i, x in enumerate(dropout_epochs) if t <= x) - 1
-    dropout_p = dropout_schedule[dropout_index]
-    last_dropout_index = dropout_index
-
-    model = FullNet(n_channel,n_constituent,dropout_p,device).to(device=device)
-    optimizer = torch.optim.Adam(model.parameters())
-
-    weight_profile = get_weight_profile_2(device)
-
-    train_dataset = RT_data_hws_2.RTDataSet(train_input_files,n_channel)
-
-    train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size, 
-                                                   shuffle=False,
-                                                        num_workers=1)
-    
-    validation_dataset = RT_data_hws_2.RTDataSet(cross_input_files,n_channel)
-
-    validation_dataloader = torch.utils.data.DataLoader(validation_dataset, batch_size, 
-                                                   shuffle=False,
-                                                        num_workers=1)
-    
-    #start = torch.cuda.Event(enable_timing=True)
-    #end = torch.cuda.Event(enable_timing=True)
-
-    loss_functions = (loss_henry_full_wrapper, loss_flux_full_wrapper_2, loss_heating_rate_full_wrapper,
-                      loss_heating_rate_direct_full_wrapper, loss_flux_full_wrapper,
-                      )
-    loss_names = ("Loss", "Flux Loss (weight profile)", "Heating Rate Loss", 
-                  "Direct Heating Rate Loss", 
-                    "Flux Loss (TOA weighting)")
-
-    if t > 0:
-        checkpoint = torch.load(filename_full_model + str(t))
-        print(f"Loaded Model: epoch = {t}")
-        model.load_state_dict(checkpoint['model_state_dict'])
-        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        #epoch = checkpoint['epoch']
-
-    print(f"       dropout = {dropout_p}")
-    while t < epochs:
-        t += 1
+        dropout_schedule = (0.0, 0.07, 0.1, 0.15, 0.2, 0.15, 0.1, 0.07, 0.0, 0.0) # 400
+        #dropout_epochs =   (-1, 200,   300, 350,  400, 450,  550, 650, 750, epochs + 1)
+        dropout_epochs =   (-1, 40,   60, 70,  80, 90,  110, 130, 150, epochs + 1)
 
         dropout_index = next(i for i, x in enumerate(dropout_epochs) if t <= x) - 1
-        if dropout_index != last_dropout_index:
-            last_dropout_index = dropout_index
-            dropout_p = dropout_schedule[dropout_index]
-            model.reset_dropout(dropout_p)
-        print(f"Epoch {t}\n-------------------------------")
-        print(f"Dropout: {dropout_p}")
+        dropout_p = dropout_schedule[dropout_index]
+        last_dropout_index = dropout_index
 
-        if t < t_start + t_warmup:
-            train_loop(train_dataloader, model, optimizer, loss_henry_full_wrapper, weight_profile, device)
+        if is_redo:
+            dropout_p = 0.00
 
-            loss = test_loop(validation_dataloader, model, loss_functions, loss_names,weight_profile, device)
-        else:
+        model = FullNet(n_channel,n_constituent,dropout_p,device).to(device=device)
+        optimizer = torch.optim.Adam(model.parameters())
 
-            #with profile(
-            #    activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-            #    with_stack=True, with_modules=True,
-            #) as prof:
-            #start.record()
-            train_loop(train_dataloader, model, optimizer, loss_henry_full_wrapper, weight_profile, device)
+        weight_profile = get_weight_profile_2(device)
 
-            loss = test_loop(validation_dataloader, model, loss_functions, loss_names,weight_profile, device)
+        train_dataset = RT_data_hws_2.RTDataSet(train_input_files,n_channel)
 
-            #if use_cuda: 
-                #torch.cuda.synchronize()
-            #end.record()
+        train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size, 
+                                                    shuffle=False,
+                                                            num_workers=1)
+        
+        validation_dataset = RT_data_hws_2.RTDataSet(cross_input_files,n_channel)
 
-            #print(f"\n Elapsed time in seconds: {start.elapsed_time(end) / 1000.0}\n")
+        validation_dataloader = torch.utils.data.DataLoader(validation_dataset, batch_size, 
+                                                    shuffle=False,
+                                                            num_workers=1)
+        
+        #start = torch.cuda.Event(enable_timing=True)
+        #end = torch.cuda.Event(enable_timing=True)
 
-            #print(prof.key_averages(group_by_stack_n=6).table(sort_by='self_cpu_time_total', row_limit=15))
-        if t % checkpoint_period == 0:
-            torch.save({
-            'epoch': t,
-            'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            'loss': loss,
-            }, filename_full_model + str(t))
-            print(f' Wrote Model: epoch = {t}')
+        loss_functions = (loss_henry_full_wrapper, loss_flux_full_wrapper_2, loss_heating_rate_full_wrapper,
+                        loss_heating_rate_direct_full_wrapper, loss_flux_full_wrapper,
+                        )
+        loss_names = ("Loss", "Flux Loss (weight profile)", "Heating Rate Loss", 
+                    "Direct Heating Rate Loss", 
+                        "Flux Loss (TOA weighting)")
 
-    print("Done!")
+        if t > 0:
+            checkpoint = torch.load(filename_full_model_input + str(t))
+            print(f"Loaded Model: epoch = {t}")
+            model.load_state_dict(checkpoint['model_state_dict'])
+            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            #epoch = checkpoint['epoch']
+
+        print(f"       dropout = {dropout_p}")
+        while t < epochs:
+            t += 1
+
+            dropout_index = next(i for i, x in enumerate(dropout_epochs) if t <= x) - 1
+            if dropout_index != last_dropout_index:
+                last_dropout_index = dropout_index
+                dropout_p = dropout_schedule[dropout_index]
+                if is_redo:
+                    dropout_p = 0.0
+                model.reset_dropout(dropout_p)
+            print(f"Epoch {t}\n-------------------------------")
+            print(f"Dropout: {dropout_p}")
+
+            if t < t_start + t_warmup:
+                train_loop(train_dataloader, model, optimizer, loss_henry_full_wrapper, weight_profile, device)
+
+                loss = test_loop(validation_dataloader, model, loss_functions, loss_names,weight_profile, device)
+            else:
+
+                #with profile(
+                #    activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+                #    with_stack=True, with_modules=True,
+                #) as prof:
+                #start.record()
+                train_loop(train_dataloader, model, optimizer, loss_henry_full_wrapper, weight_profile, device)
+
+                loss = test_loop(validation_dataloader, model, loss_functions, loss_names,weight_profile, device)
+
+                #if use_cuda: 
+                    #torch.cuda.synchronize()
+                #end.record()
+
+                #print(f"\n Elapsed time in seconds: {start.elapsed_time(end) / 1000.0}\n")
+
+                #print(prof.key_averages(group_by_stack_n=6).table(sort_by='self_cpu_time_total', row_limit=15))
+            if t % checkpoint_period == 0:
+                torch.save({
+                'epoch': t,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'loss': loss,
+                }, filename_full_model + str(t))
+                print(f' Wrote Model: epoch = {t}')
+
+        print("Done!")
 
 def test_full():
 
@@ -1584,9 +1687,10 @@ def test_full_dataloader():
     print(f"Using {device} device")
 
     datadir     = "/data-T1/hws/tmp/"
-    year = "2009"
+    year = "2020"
 
     filename_full_model = datadir + "/Torch.Dataloader.1." 
+    #filename_full_model = datadir + "/Torch.Dataloader.e8." 
 
     datadir     = "/data-T1/hws/tmp/"
     test_input_dir = f"/data-T1/hws/CAMS/processed_data/testing/{year}/"
@@ -1612,7 +1716,7 @@ def test_full_dataloader():
     loss_names = ("Loss", "Heating Rate Loss", "Direct Heating Rate Loss", "Flux Loss")
 
     print(f"Testing error, Year = {year}")
-    for t in range(375,450,5):
+    for t in range(360,450,5):
 
         checkpoint = torch.load(filename_full_model + str(t), map_location=torch.device(device))
         print(f"Loaded Model: epoch = {t}")
@@ -1627,5 +1731,6 @@ if __name__ == "__main__":
     #
     #test_full()
 
-    train_full_dataloader()
-    #test_full_dataloader()
+    
+    #train_full_dataloader()
+    test_full_dataloader()

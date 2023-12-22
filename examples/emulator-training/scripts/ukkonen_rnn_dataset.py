@@ -117,7 +117,7 @@ use_gpu = True
 
 
 model_name = 'MODEL.RNN_2_Dataset.'
-is_train = True
+is_train = False
 
 weight_prof = ml_loaddata_rnn.get_weight_profile (fpath)
 
@@ -278,7 +278,7 @@ if True:
     callbacks = [EarlyStopping(monitor='rmse_hr',  patience=patience, verbose=1, \
                                  mode='min',restore_best_weights=True)]
     
-    epoch_period = 200
+    epoch_period = 100
     n_epochs = 0  
     #steps_per_epoch = 924
 
@@ -302,8 +302,7 @@ if True:
         while n_epochs < epochs:
 
             history = model.fit(generator_training, \
-            epochs=epoch_period, batch_size=batch_size, 
-            #shuffle = True,
+            epochs=epoch_period, \
             shuffle=False, verbose=1,  \
             validation_data=generator_cross_validation, callbacks=callbacks)
 
@@ -329,8 +328,11 @@ if True:
         model = tf.keras.models.load_model(datadir + model_name + str(n_epochs))
 
     else:
+        year = '2020'
+        testing_input_dir = f"/data-T1/hws/CAMS/processed_data/testing/{year}/"
+        testing_input_files = [f'{testing_input_dir}Flux_sw-{year}-{month}.2.nc' for month in months]
         n_epochs = 0
-        generator_testing = ml_data_generator.create_data_generator([fpath_test])
+        generator_testing = ml_data_generator.InputSequence(testing_input_files, batch_size)
         while n_epochs < epochs:
             n_epochs = n_epochs + epoch_period
             print(f"n_epochs = {n_epochs}")
