@@ -7,6 +7,7 @@ class BottomUp(nn.Module):
 
     def _compute_surface_reflection(self,r,t):
         """
+        Good!
         In bottom up order compute cumulative surface reflection
         and denominator factor
         """
@@ -17,75 +18,150 @@ class BottomUp(nn.Module):
         rs.append(last_rs)
         d = []
 
-        #for l in range(r.shape[1]-1, -1, -1):
-        for l in reversed(torch.arange(start=0, end=r.shape[1])):
-            dd = 1 - last_rs * r[:,l,:]
+        # Start at bottom of the atmosphere (layer = n-1)
+        for l in reversed(torch.arange(start=0, end=r.shape[1]-1)):
+            dd = 1.0 / (1.0 - last_rs * r[:,l,:])
             d.append(dd)
-            tmp = r[:,l,:] + last_rs * t[:,l,:] * t[:,l,:]
-            last_rs = tmp / dd
+            last_rs = r[:,l,:] + last_rs * t[:,l,:] * t[:,l,:] * dd
             rs.append(last_rs)
+
+        #d.append(torch.ones()) #### ???????
 
         rs = torch.stack(rs,dim=1)  
         d = torch.stack(d,dim=1)  
 
-        rs = torch.flip(rs, dims=(1,))  # n+1 values: 0 .. n
-        d = torch.flip(d, dims=(1,)) # n values: 0 .. n-1
+        rs = torch.flip(rs, dims=(1,))  # n+1 values: 0 .. n (includes surface)
+        d = torch.flip(d, dims=(1,)) # n values: 0 .. n-1 (no surface)
 
         return rs, d
-
-    def _compute_upward_flux (self, s_multi_up, s_multi_down_up, d, t):
-        """ s: 1..n """
-        flux = torch.zeros()
-        result = []
-
-        for l in reversed(torch.arange(s_multi_up.shape[1])):
-            flux += s_multi_up[:,l,:] + s_multi_down_up[:,l,:]
-            result.append(flux)
-            flux = flux * t[:,l,:] / d[:,l,:]  # could be t_multi
-
-        result = torch.stack(result, dim=1)
-        result = torch.flip(result, dims=(1,))
-
-        return result
     
-    def _compute_downward_flux (self, s_multi_down, s_multi_up_down, t_multi):
-        """ s: 1..n """
+    def _compute_top_reflection(self,r,t):
+        """
+        Good
+        In top down order compute cumulative upper layer reflection
+        and denominator factor
+        """
+
+        # Start at top of the atmosphere 
+        rt = []
+        last_rt = r[:,0,:]  # reflectance of top surface is unchanged
+        rt.append(last_rt)
+        d = []
+        d.append(torch.ones())
+
+        for l in torch.arange(start=1, end=r.shape[1]-1):
+            dd = 1.0 / (1.0 - last_rt * r[:,l,:])
+            d.append(dd)
+            last_rt = r[:,l,:] + last_rt * t[:,l,:] * t[:,l,:] * dd
+            rt.append(last_rt)
+
+        dd = 1.0 / (1.0 - last_rt * r[:,-1,:])
+
+        rt = torch.stack(rt,dim=1)  # n values: (excludes surface)
+        d = torch.stack(d,dim=1)  # n + 1 values
+
+        return rt, d
+
+
+    
+    def _compute_upward_flux (self, s_up, rt, dt, t, a):
+        """ 
+        Input:
+            s_up: n+1 elements, from layer+surface
+            
+        Output:
+            flux_up: n+1 elements from layer
+            absorbed_flux: n elements: into surface + layers (surface is zero since going up)
+        """
         flux = torch.zeros()
-        result = []
+        flux_up = []
+        absorbed_flux = []
+        absorbed_flux.append(torch.zeros())
 
-        for l in torch.arange(s_multi_down.shape[1]):
-            flux += s_multi_down[:,l,:] + s_multi_up_down[:,l,:]
-            result.append(flux)
-            flux = flux * t_multi[:,l,:]  # could be t_multi
+        # from n to 1
+        for l in reversed(torch.arange(2,s_up.shape[1])):
+            flux += s_up[:,l,:] 
+            flux_up.append(flux)
+            a_multi = a[:,l-1,:] * (1.0 + t[:,l-1,:] * rt[:,l-2,:] * dt[:,l-1,:])
+            absorbed_flux.append(flux * a_multi) # absorbed at l-1
+            # propagate into next layer
+            flux = flux * t[:,l-1,:] * dt[:,l-1,:]
+        flux += s_up[:,1,:]
+        flux_up.append(flux)
+        absorbed_flux.append(flux * a[:,0,:])
+        flux = flux * t[:,0,:]
 
-        result = torch.stack(result, dim=1)
+        flux += s_up[:,0,:] # from layer zero toward upper atmosphere
+        flux_up.append(flux)
 
-        return result
+        flux_up = torch.stack(flux_up, dim=1) # from layer, n+1 values
+        flux_up = torch.flip(flux_up, dims=(1,))
+
+        absorbed_flux = torch.stack(absorbed_flux, dim=1) # n+1 values for n layers
+        absorbed_flux = torch.flip(absorbed_flux, dims=(1,)) # since includes surface
+
+        return absorbed_flux, flux_up
+    
+    def _compute_downward_flux (self, s_down, rs, ds, t, a):
+        """ 
+        Good
+        Input as flux from layer; n values from n layers (no surface)
+        Output is flux, absorbed_flux into layer; n+1 values = n layers + surface
+        """
+
+        flux = torch.zeros()
+        flux_down = []
+        flux_down.append(flux)
+        absorbed_flux = []
+        absorbed_flux.append(torch.zeros())
+
+        for l in torch.arange(0, s_down.shape[1]-1):
+            flux += s_down[:,l,:]
+            flux_down.append(flux)
+            a_multi = a[:,l+1,:] * (1 + rs[:,l+2,:] * t[:,l+1,:] * ds[:,l+1,:])
+            absorbed_flux.append(a_multi * flux)
+            flux = flux * t[:,l+1,:] * ds[:,l+1,:]
+
+        flux += s_down[:,-1,:]
+        flux_down.append(flux)
+        absorbed_flux.append(a[:,-1,:] * flux)
+
+        absorbed_flux = torch.stack(absorbed_flux, dim=1)
+        flux_down = torch.stack(flux_down, dim=1)
+
+        # n+1 output values
+        return absorbed_flux, flux_down
 
     def _adding_doubling (self, a, r, t, s):
         """
-        Inputs:
+        All inputs:
             Dimensions[examples, layers, channels]
-            n + 1 layers including surfaces: 0 .. n
+            n + 1 layers including surface: 0 .. n
         """
-        rs, d = self._compute_surface_reflection(r,t)
-        # n layers (does not include above top layer (layer=0))
-        tmp = rs[:,1,:]*r[:,:-1,:]
-        s_multi_up = s[:,1:,:] * (1.0 + tmp / (1 + tmp)) # n-1 values: 1..n
-        s_multi_down_up = s[:,:-1,:] * rs[:,1,:] / (1 + tmp) # n-1 values: 1..n
 
-        # used in downward propagation
-        a_multi = a[:,:-1,:] * (1.0 + t[:,:-1,:] * rs[:,1:,:] / (1 + tmp)) # n-1 values: 0..n-1
-        t_multi = t[:,:-1,:] / (1.0 + tmp) # n-1 values: 0..n-1
+        # Bottom up cumulative surface reflection
+        rs, ds = self._compute_surface_reflection(r,t)
 
-        flux_up = self._compute_upward_flux (s_multi_up, s_multi_down_up, d, t)
+        ### Downward flux
 
-        absorbed_flux_up = a[:,:-1,:] * flux_up # n values: 0..n-1
+        s_multi_down = s[:,:-1,:] * ds  # n values, flow from layer
+        s_multi_up_down = s[:,1:,:] * r[:,:-1,:] * ds
 
-        s_multi_down = s[:,:-1,:] * (1.0 + tmp / (1 - tmp))
-        s_multi_up_down = s[:,1:,:] * r[:,:-1,:] / (1 - tmp)
+        s_down = s_multi_down + s_multi_up_down
 
-        flux_down = self._compute_downward_flux (s_multi_down, s_multi_up_down, t_multi)
-        absorbed_flux_down = a_multi * flux_down
+        absorbed_flux_down, flux_down = self._compute_downward_flux (s_down, rs, ds, t, a)
+
+        # Top down cumulative top layer reflection
+        rt, dt = self._compute_top_reflection(r,t)
+
+        # n+1 elements:
+        s_multi_up = s * dt    # from origin surface going up
+        # n elements
+        s_multi_down_up = s[:,:-1,:] * r[:,1:,:] * dt[:,1:,:] # from origin surface going down then up
+        s_up = s_multi_up + torch.cat([torch.zeros(), s_multi_down_up], axis=1) # reconciled with s_multi_up
+
+        absorbed_flux_up, flux_up = self._compute_upward_flux (s_up, rt, dt, t, a)
 
         absorbed_flux = absorbed_flux_down + absorbed_flux_up
+
+        return flux_down, flux_up, absorbed_flux
