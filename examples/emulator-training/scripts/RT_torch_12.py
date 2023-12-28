@@ -388,7 +388,7 @@ class Scattering_v1_tau(nn.Module):
         super(Scattering_v1_tau, self).__init__()
         self.n_channel = n_channel
 
-        n_input = 5
+        n_input = n_constituent #5
 
         n_hidden = [5, 4, 4]
         # For direct input
@@ -420,31 +420,40 @@ class Scattering_v1_tau(nn.Module):
     def forward(self, x):
         tau, mu_direct, mu_diffuse, _ = x
 
+        #print(f"tau.shape = {tau.shape}")
         tau_total = torch.sum(tau, dim=2, keepdims=False)
 
         t_direct = torch.exp(-tau_total / (mu_direct + eps_1))
         t_diffuse = torch.exp(-tau_total / (mu_diffuse + eps_1))
 
+        mu_direct = torch.unsqueeze(mu_direct,dim=1)
         tau_direct = tau / (mu_direct + eps_1)
 
-        direct_1 = tau_direct[:,:,3] + tau_direct[:,:,4]+ tau_direct[:,:,6] + tau_direct[:,:,7]
+        #direct_1 = tau_direct[:,:,3] + tau_direct[:,:,4]+ tau_direct[:,:,6] + tau_direct[:,:,7]
 
-        direct_1 = torch.unsqueeze(direct_1,dim=2)
+        #direct_1 = torch.unsqueeze(direct_1,dim=2)
 
-        direct = torch.concat((tau_direct[:,:,0:2], tau_direct[:,:,5:6],tau_direct[:,:,2:3], direct_1, mu_direct),
+        mu_direct = mu_direct.repeat(1,self.n_channel,1)
+        #direct = torch.concat((tau_direct[:,:,0:2], tau_direct[:,:,5:6],tau_direct[:,:,2:3], direct_1, mu_direct), dim=2)
+
+        #print(f"tau_direct.shape = {tau_direct.shape}")
+        direct = torch.concat((tau_direct, mu_direct),
                                            dim=2)
 
-        diffuse_1 = tau[:,:,3] + tau[:,:,4]+ tau[:,:,6] + tau[:,:,7]
+        #diffuse_1 = tau[:,:,3] + tau[:,:,4]+ tau[:,:,6] + tau[:,:,7]
 
-        diffuse_1 = torch.unsqueeze(diffuse_1,dim=2)
+        #diffuse_1 = torch.unsqueeze(diffuse_1,dim=2)
 
-        diffuse = torch.concat((tau[:,:,0:2], tau[:,:,5:6], tau[:,:,2:3], diffuse_1),
-                                           dim=2)
+        #diffuse = torch.concat((tau[:,:,0:2], tau[:,:,5:6], tau[:,:,2:3], diffuse_1), dim=2)
         
-        e_split_direct = [F.softmax(net(direct),dim=-1) for net 
-                          in self.net_direct]
-        e_split_diffuse = [F.softmax(net(diffuse),dim=-1) for net 
-                           in self.net_diffuse]
+        e_split_direct = [F.softmax(net(direct[:,i,:]),dim=-1) for i, net 
+                          in enumerate(self.net_direct)]
+
+        #print(f"len of e_split_direct = {len(e_split_direct)}")
+        #print(f"shape of e_split_direct[0] = {e_split_direct[0].shape}", flush=True)
+
+        e_split_diffuse = [F.softmax(net(tau[:,i,:]),dim=-1) for i, net 
+                           in enumerate(self.net_diffuse)]
 
         e_split_direct = torch.stack(e_split_direct, dim=1)
         e_split_diffuse = torch.stack(e_split_diffuse, dim=1)
@@ -606,6 +615,97 @@ class Scattering_v3(nn.Module):
 
         e_split_direct = F.softmax(self.net_direct(tau_direct), dim=-1) 
         e_split_diffuse = F.softmax(self.net_diffuse(tau_diffuse), dim=-1)
+
+        layers = [t_direct, t_diffuse, e_split_direct, e_split_diffuse]
+
+        return layers
+
+
+class Scattering_v3_tau(nn.Module):
+    """ 
+    Same as v3 except consolidates the tau's of (o3, c2o, n2o, ch4) into a single input
+
+    Reduces number of inputs from 12 to 9
+    Reduce first layer from 10 to 7 hidden units, reduced other
+    hidden units from 8 to 7
+    """
+    def __init__(self, n_channel, n_constituent, n_coarse_code, dropout_p, device):
+        super(Scattering_v3_tau, self).__init__()
+        self.n_channel = n_channel
+        self.n_coarse_code = n_coarse_code
+        #n_hidden = [10, 6, 6, 6, 6]
+        n_hidden = [10, 8, 8, 8, 8, 8]
+        n_hidden = [7, 7, 7, 7, 7, 7]
+        n_input = 5
+        """ Computes split of extinguished radiation into absorbed, diffuse transmitted, and
+        diffuse reflected """
+        self.net_direct = MLP(n_input=n_input + n_coarse_code + 1, 
+                 n_hidden=n_hidden, 
+                 n_output=3,
+                dropout_p=dropout_p,
+                 device=device, 
+                 lower=-1.0,upper=1.0)
+        self.net_diffuse = MLP(n_input=n_input + n_coarse_code, 
+                 n_hidden=n_hidden, 
+                 n_output=3,
+                dropout_p=dropout_p,
+                 device=device, 
+                 lower=-1.0,upper=1.0) 
+
+        self.coarse_code_template = torch.ones((1,n_channel,n_coarse_code), dtype=torch.float32,device=device)
+        sigma = 0.25
+        const_1 = 1.0 / (sigma * np.sqrt(6.28)) # 2 * pi
+        for i in range(n_channel):
+            ii = i / (n_channel - 1)
+            for j in range(n_coarse_code):
+                jj = j / (n_coarse_code - 1)
+                self.coarse_code_template[:,i,j] = const_1 * np.exp(-0.5 * np.square((ii - jj)/sigma))
+
+    def reset_dropout(self,dropout_p):
+        self.net_direct.reset_dropout(dropout_p)
+        self.net_diffuse.reset_dropout(dropout_p)
+
+    #@torch.compile
+    def forward(self, x):
+
+        tau, mu_direct, mu_diffuse, _ = x
+
+        # sum over gases
+        tau_total = torch.sum(tau, dim=2, keepdims=False)
+
+        t_direct = torch.exp(-tau_total / (mu_direct + eps_1))
+        t_diffuse = torch.exp(-tau_total / (mu_diffuse + eps_1))
+
+        mu_direct = torch.unsqueeze(mu_direct,dim=1)
+        tau_direct = tau / (mu_direct + eps_1)
+
+        direct_1 = tau_direct[:,:,3] + tau_direct[:,:,4]+ tau_direct[:,:,6] + tau_direct[:,:,7]
+
+        direct_1 = torch.unsqueeze(direct_1,dim=2)
+
+        # Add channels
+        mu_direct = mu_direct.repeat(1,self.n_channel,1)
+
+        # lwp, iwp, dry gas, water vapor, (o3, c2o, n2o, ch4)
+        direct = torch.concat((tau_direct[:,:,0:2], tau_direct[:,:,5:6],
+                               tau_direct[:,:,2:3], direct_1, mu_direct),dim=2)
+
+        diffuse_1 = tau[:,:,3] + tau[:,:,4]+ tau[:,:,6] + tau[:,:,7]
+
+        diffuse_1 = torch.unsqueeze(diffuse_1,dim=2)
+
+        diffuse = torch.concat((tau[:,:,0:2], tau[:,:,5:6], 
+                                tau[:,:,2:3], diffuse_1), dim=2)
+
+        # Repeat coarse code over all inputs
+        coarse_code_input = self.coarse_code_template.repeat(tau.shape[0],1,1)
+
+        # Concatenate coarse code onto inputs
+        direct = torch.concat([direct,coarse_code_input],dim=2)
+        diffuse = torch.concat([diffuse,coarse_code_input],dim=2)
+
+        e_split_direct = F.softmax(self.net_direct(direct), dim=-1) 
+        e_split_diffuse = F.softmax(self.net_diffuse(diffuse), dim=-1)
 
         layers = [t_direct, t_diffuse, e_split_direct, e_split_diffuse]
 
@@ -1023,9 +1123,18 @@ class FullNet(nn.Module):
 
         # Learns decomposition of extinguished radiation (into t, r, a)
         # for each channel
-        if False:
+        if True:
             self.scattering_net = LayerDistributed(Scattering_v1_tau(n_channel,
                                                           n_constituent,
+                                                          dropout_p,
+                                                          device))
+
+        elif True:
+                # Corresponds to Torch.Dataloader.2a for starting 
+                # epoch (selects #6) and Torch.Dataloader.2 for remaining epoches
+                self.scattering_net = LayerDistributed(Scattering_v3_tau(n_channel,
+                                    n_constituent,
+                                                          n_coarse_code,
                                                           dropout_p,
                                                           device))
         else:
@@ -1049,6 +1158,7 @@ class FullNet(nn.Module):
 
         x_layers, x_surface, _, _, _, _ = x
 
+        #print(f"x_layers.shape = {x_layers.shape}")
         (mu_direct, 
         temperature_pressure_log_pressure, 
         constituents) = (x_layers[:,:,0:1], 
@@ -1063,6 +1173,8 @@ class FullNet(nn.Module):
 
         tau = self.extinction_net((temperature_pressure_log_pressure, 
                                 constituents))
+        
+        #print(f"First: tau.shape = {tau.shape}")
 
         layers = self.scattering_net((tau, mu_direct, mu_diffuse, 
                                                 constituents))
@@ -1439,7 +1551,7 @@ def train_full():
 
     validation_dataloader = torch.utils.data.DataLoader(validation_dataset, 
                                                         batch_size, 
-                                                        shuffle=True, 
+                                                        shuffle=False, 
                                                         pin_memory=True,
                                                         num_workers=1)
     
@@ -1531,17 +1643,18 @@ def train_full_dataloader():
     batch_size = 2048
     n_channel = 30
     n_constituent = 8
-    checkpoint_period = 5 #1 #5
+    checkpoint_period = 5 #1
 
     #for ee in range(100):
     if True:
         #print(f"Model = {str(ee).zfill(3)}")
         is_redo = False
-        filename_full_model_input = datadir + f"/Torch.Dataloader.e{str(8).zfill(3)}."
-        filename_full_model = datadir + f"/Torch.Dataloader.e8." 
-        filename_full_model_input = filename_full_model  #
+        model_n = 3
+        filename_full_model_input = datadir + f"/Torch.Dataloader.4a-{str(model_n).zfill(3)}."
+        filename_full_model = datadir + f"/Torch.Dataloader.4." 
+        #filename_full_model = filename_full_model_input  #
         epochs = 2000 #1
-        t_start = 410 #1  #0
+        t_start = 0 #510 #1  #0
         t_warmup = 1
         t = t_start
         dropout_p = 0.00
@@ -1689,8 +1802,9 @@ def test_full_dataloader():
     datadir     = "/data-T1/hws/tmp/"
     year = "2020"
 
-    filename_full_model = datadir + "/Torch.Dataloader.1." 
+    #filename_full_model = datadir + "/Torch.Dataloader.1/Torch.Dataloader.1." 
     #filename_full_model = datadir + "/Torch.Dataloader.e8." 
+    filename_full_model = datadir + f"/Torch.Dataloader.4." 
 
     datadir     = "/data-T1/hws/tmp/"
     test_input_dir = f"/data-T1/hws/CAMS/processed_data/testing/{year}/"
@@ -1716,7 +1830,7 @@ def test_full_dataloader():
     loss_names = ("Loss", "Heating Rate Loss", "Direct Heating Rate Loss", "Flux Loss")
 
     print(f"Testing error, Year = {year}")
-    for t in range(360,450,5):
+    for t in range(205,230,5):
 
         checkpoint = torch.load(filename_full_model + str(t), map_location=torch.device(device))
         print(f"Loaded Model: epoch = {t}")

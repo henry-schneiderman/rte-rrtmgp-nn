@@ -256,10 +256,12 @@ class RTDataSet_orig(Dataset):
         elif idx == self.n_data_accumulated[self.i_file]:
             self.i_file = self.i_file + 1
             self.__free_memory()
+
             data = load_data_full_pytorch_2(self.dt[self.i_file],
                              n_channels=self.n_channels) 
                              #n_coarse_code=self.n_coarse_code, 
                              #reshuffle=True)
+
             self.x, self.surface_properties, self.toa, self.delta_pressure, self.y, self.absorbed_flux = data
 
 
@@ -354,6 +356,7 @@ class RTDataSet(Dataset):
                              n_channels=self.n_channels)
                              #n_coarse_code=self.n_coarse_code, 
                              #reshuffle=True)
+            #print(f"Loaded data. i_file = {self.i_file}", flush=True)
             self.x, self.surface_properties, self.toa, self.delta_pressure, self.y, self.absorbed_flux = data
             
 
@@ -361,10 +364,12 @@ class RTDataSet(Dataset):
             self.i_file = self.i_file + 1
             self.dumb_variable += 2
             self.__free_memory()
+            #print(f"Loading data. i_file = {self.i_file}", flush=True)
             data = load_data_full_pytorch_2(self.dt[self.m_shuf[self.i_file]],
                              n_channels=self.n_channels) 
                              #n_coarse_code=self.n_coarse_code, 
                              #reshuffle=True)
+            #print(f"Loaded data. i_file = {self.i_file}", flush=True)
             self.x, self.surface_properties, self.toa, self.delta_pressure, self.y, self.absorbed_flux = data
 
         assert self.x.shape[0] == self.e_shuf[self.i_file].shape[0], f"len of x = {self.x.shape[0]}, len of shuff = {self.e_shuf[self.i_file].shape[0]}"
@@ -388,15 +393,23 @@ class RTDataSet(Dataset):
         return self.x[ii], self.surface_properties[ii], self.toa[ii], self.delta_pressure[ii], self.y[ii], self.absorbed_flux[ii]
     
 if __name__ == "__main__":
-    if False:
+    if True:
+        batch_size = 2048
+        n_channel = 30
         train_input_dir = "/data-T1/hws/CAMS/processed_data/training/2008/"
         cross_input_dir = "/data-T1/hws/CAMS/processed_data/cross_validation/2008/"
         months = [str(m).zfill(2) for m in range(1,13)]
         train_input_files = [f'{train_input_dir}Flux_sw-2008-{month}.nc' for month in months]
 
-        file = xr.open_dataset(train_input_files[0])
+        train_dataset = RTDataSet(train_input_files,n_channel)
 
-        tmp = load_data_full_pytorch_2(file, n_channels=30)
+        train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size, 
+                                                    shuffle=False,
+                                                            num_workers=1)
+        features = next(iter(train_dataloader))
+        print(f"Number of features = {len(features)}")
+        print (f"Shape of features[0] = {features[0].shape}")
+
     elif False:
         a = np.array(list(range(4)))
         print(f"a = {a}")
