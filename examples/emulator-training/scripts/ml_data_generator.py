@@ -44,22 +44,30 @@ class non_sequential_access(Exception):
     "Raised when InputSequence is not sequentially accessed"
     pass
     
+
+
 class InputSequence(tf.keras.utils.Sequence):
 
-    def __make_map(self):
-        self.map = []
-        for c in self.n_data:
+    def __reshuffle(self):
+        self.e_shuffle = []   # Shuffle of examples within each month
+        self.m_shuffle = np.array(list(range(12))) # shuffle of months
+        random.shuffle(self.m_shuffle)
+        acc = 0
+        for i, m in enumerate(self.m_shuffle):
+            c = self.n_data[m]
+            acc += c  // self.batch_size
+            self.n_batch_accumulated[i] = acc
             a = np.array(list(range(c)))
             random.shuffle(a)
-            self.map.append(a)
+            self.e_shuffle.append(a)
 
-    def __remap(self, x_m, x_aux1, y, dp, rsd0_big):
-        m = self.map[self.i_file]
-        self.x_m = tf.convert_to_tensor(x_m[m,:,:])
-        self.x_aux1 = tf.convert_to_tensor(x_aux1[m,:])
-        self.y = tf.convert_to_tensor(y[m,:,:])
-        self.dp = tf.convert_to_tensor(dp[m,:])
-        self.rsd0_big = tf.convert_to_tensor(rsd0_big[m,:])
+    def __shuffle(self, x_m, x_aux1, y, dp, rsd0_big):
+        e = self.e_shuffle[self.i_file]
+        self.x_m = tf.convert_to_tensor(x_m[e,:,:])
+        self.x_aux1 = tf.convert_to_tensor(x_aux1[e,:])
+        self.y = tf.convert_to_tensor(y[e,:,:])
+        self.dp = tf.convert_to_tensor(dp[e,:])
+        self.rsd0_big = tf.convert_to_tensor(rsd0_big[e,:])
 
     def __free_memory(self):
         del self.x_m
@@ -113,25 +121,23 @@ class InputSequence(tf.keras.utils.Sequence):
         if idx == 0:
             if hasattr(self, 'x_m'):
                 self.__free_memory()
-                del self.map
-            self.__make_map()
+                del self.e_shuffle
+                del self.m_shuffle
+            self.__reshuffle()
             self.i_file = 0
-            x_m, x_aux1, y, dp, rsd0_big = load_data(self.file_names[self.i_file])
-            self.__remap(x_m, x_aux1, y, dp, rsd0_big)  
+            x_m, x_aux1, y, dp, rsd0_big = load_data(self.file_names[self.m_shuffle[self.i_file]])
+            self.__shuffle(x_m, x_aux1, y, dp, rsd0_big)  
 
         elif idx == self.n_batch_accumulated[self.i_file]:
             self.i_file = self.i_file + 1
             self.__free_memory()
-            x_m, x_aux1, y, dp, rsd0_big = load_data(self.file_names[self.i_file])
-            self.__remap(x_m, x_aux1, y, dp, rsd0_big)  
+            x_m, x_aux1, y, dp, rsd0_big = load_data(self.file_names[self.m_shuffle[self.i_file]])
+            self.__shuffle(x_m, x_aux1, y, dp, rsd0_big)  
 
         if self.i_file == 0:
             i2 = idx
         else:
             i2 = idx - self.n_batch_accumulated[self.i_file - 1]
-
-        #if idx == self.n_batch_accumulated[-1] - 1:
-        #    self.i_file = 0
 
         i = i2 * self.batch_size
         j = (i2 + 1) * self.batch_size

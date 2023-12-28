@@ -116,7 +116,7 @@ scale_inputs    = True
 use_gpu = True
 
 
-model_name = 'MODEL.RNN_2_Dataset.'
+model_name = 'MODEL.RNN_3_Dataset.'
 is_train = False
 
 weight_prof = ml_loaddata_rnn.get_weight_profile (fpath)
@@ -278,15 +278,15 @@ if True:
     callbacks = [EarlyStopping(monitor='rmse_hr',  patience=patience, verbose=1, \
                                  mode='min',restore_best_weights=True)]
     
-    epoch_period = 100
+    epoch_period = 25
     n_epochs = 0  
     #steps_per_epoch = 924
 
     train_input_dir = "/data-T1/hws/CAMS/processed_data/training/2008/"
     cross_input_dir = "/data-T1/hws/CAMS/processed_data/cross_validation/2008/"
     months = [str(m).zfill(2) for m in range(1,13)]
-    train_input_files = [f'{train_input_dir}Flux_sw-2008-{month}.2.nc' for month in months]
-    cross_input_files = [f'{cross_input_dir}Flux_sw-2008-{month}.2.nc' for month in months]
+    train_input_files = [f'{train_input_dir}Flux_sw-2008-{month}.nc' for month in months]
+    cross_input_files = [f'{cross_input_dir}Flux_sw-2008-{month}.nc' for month in months]
 
     generator_training = ml_data_generator.InputSequence(train_input_files, batch_size)
     #generator_training = generator_training.batch(batch_size)
@@ -328,10 +328,10 @@ if True:
         model = tf.keras.models.load_model(datadir + model_name + str(n_epochs))
 
     else:
-        year = '2020'
+        year = '2009'
         testing_input_dir = f"/data-T1/hws/CAMS/processed_data/testing/{year}/"
         testing_input_files = [f'{testing_input_dir}Flux_sw-{year}-{month}.2.nc' for month in months]
-        n_epochs = 0
+        n_epochs = 800
         generator_testing = ml_data_generator.InputSequence(testing_input_files, batch_size)
         while n_epochs < epochs:
             n_epochs = n_epochs + epoch_period
