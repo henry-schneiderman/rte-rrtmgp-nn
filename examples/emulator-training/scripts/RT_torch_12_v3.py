@@ -1,3 +1,11 @@
+# Same as RT_torch_12 except mass extinction depends only on (T,P) 
+# instead of (T,P,ln(P))
+# Added variants for cost function, cost_henry_2 with various weightings
+# of flux and heating rate and greater weight for direct flux, direct heat
+
+# Same as RT_torch_12_v2 except
+# Except more channels
+
 import numpy as np
 import time
 from typing import List
@@ -165,20 +173,20 @@ class Extinction(nn.Module):
         # and never negative or zero
 
         # Modifies each extinction coeffient as a function of temperature, 
-        # pressure and ln(pressure)
+        # pressure 
         # Seeks to model pressuring broadening of atmospheric absorption lines
         # Single network for each constituent
-        self.net_ke_h2o = MLP(n_input=3,n_hidden=(6,4,4),n_output=1,
+        self.net_ke_h2o = MLP(n_input=2,n_hidden=(6,4,4),n_output=1,
                             dropout_p=dropout_p,device=device)
-        self.net_ke_o3  = MLP(n_input=3,n_hidden=(6,4,4),n_output=1,
+        self.net_ke_o3  = MLP(n_input=2,n_hidden=(6,4,4),n_output=1,
                               dropout_p=dropout_p,device=device)
-        self.net_ke_co2 = MLP(n_input=3,n_hidden=(6,4,4),n_output=1,
+        self.net_ke_co2 = MLP(n_input=2,n_hidden=(6,4,4),n_output=1,
                               dropout_p=dropout_p,device=device)
-        self.net_ke_u   = MLP(n_input=3,n_hidden=(6,4,4),n_output=1,
+        self.net_ke_u   = MLP(n_input=2,n_hidden=(6,4,4),n_output=1,
                               dropout_p=dropout_p,device=device)
-        self.net_ke_n2o = MLP(n_input=3,n_hidden=(6,4,4),n_output=1,
+        self.net_ke_n2o = MLP(n_input=2,n_hidden=(6,4,4),n_output=1,
                               dropout_p=dropout_p,device=device)
-        self.net_ke_ch4 = MLP(n_input=3,n_hidden=(6,4,4),n_output=1,
+        self.net_ke_ch4 = MLP(n_input=2,n_hidden=(6,4,4),n_output=1,
                               dropout_p=dropout_p,device=device)
 
         # Filters select which channels each constituent contributes to
@@ -189,29 +197,54 @@ class Extinction(nn.Module):
         # of Advances in Modeling Earth Systems, 11,3074–3089. 
         # https://doi.org/10.1029/2019MS001621
 
-        self.filter_h2o = torch.tensor([1,1,1,1,1, 1,1,1,1,1, 1,1,1,1,1,
-                                       1,1,1,1,1, 1,1,0,0,0, 0,0,0,1,1,],
-                                       dtype=torch.float32,device=device)
+        #self.filter_h2o = torch.tensor([1,1,1,1,1, 1,1,1,1,1, 1,0,0,0,],
+        #                               dtype=torch.float32,device=device)
 
-        self.filter_o3 = torch.tensor([1,1,0,0,0, 0,0,0,0,0, 0,0,0,0,0,
-                                       0,1,1,1,1, 1,1,0,0,1, 1,1,1,1,1,],
-                                       dtype=torch.float32,device=device)
-
-        self.filter_co2 = torch.tensor([1,1,0,0,1, 1,0,0,1,1, 0,0,1,1,0,
-                                       0,0,0,0,0, 0,0,0,0,0, 0,0,0,1,1,],
+        filter_h2o = torch.tensor([1,1,1,1,1, 1,1,1,1,1, 1,1,1,1,],
                                        dtype=torch.float32,device=device)
         
-        self.filter_u  = torch.tensor([1,1,0,0,0, 0,0,0,0,0, 0,0,0,0,1,
-                                       1,1,1,1,1, 1,1,0,0,0, 0,1,1,1,1,],
+        filter_h2o = torch.stack([filter_h2o, filter_h2o, filter_h2o])
+
+        filter_o3 = torch.tensor([1,0,0,0,0, 0,0,0,1,1, 1,0,1,1,],
                                        dtype=torch.float32,device=device)
 
-        self.filter_n2o = torch.tensor([1,1,0,0,1, 0,0,0,0,0, 0,0,0,0,0,
-                                       0,0,0,0,0, 0,0,0,0,0, 0,0,0,1,1,],
+        filter_o3 = torch.stack([filter_o3, filter_o3, filter_o3])
+
+        filter_co2 = torch.tensor([1,0,1,0,1, 0,1,0,0,0, 0,0,0,0,],
                                        dtype=torch.float32,device=device)
         
-        self.filter_ch4 = torch.tensor([1,1,1,1,0, 0,1,1,0,0, 1,1,0,0,0,
-                                       0,0,0,0,0, 0,0,0,0,0, 0,0,0,1,1,],
+        filter_co2 = torch.stack([filter_co2, filter_co2, filter_co2])
+        
+        #filter_u  = torch.tensor([1,0,0,0,0, 0,0,1,1,1, 1,0,0,1],
+        filter_u  = torch.tensor([1,0,0,0,0, 0,0,1,1,1, 1,1,0,1],
                                        dtype=torch.float32,device=device)
+        
+        filter_u = torch.stack([filter_u, filter_u, filter_u])
+
+        filter_n2o = torch.tensor([1,0,0,0,0, 0,0,0,0,0, 0,0,0,0],
+                                       dtype=torch.float32,device=device)
+
+        filter_n2o = torch.stack([filter_n2o, filter_n2o, filter_n2o])
+        
+        filter_ch4 = torch.tensor([1,1,0,1,0, 1,0,0,0,0, 0,0,0,0,],
+                                       dtype=torch.float32,device=device)
+        
+        filter_ch4 = torch.stack([filter_ch4, filter_ch4, filter_ch4])
+
+        self.filter_h2o = filter_h2o.transpose(1,0).flatten()
+
+        self.filter_o3 = filter_o3.transpose(1,0).flatten()
+
+        #print(f'filter_o3 = {self.filter_o3}')
+
+        self.filter_co2 = filter_co2.transpose(1,0).flatten()
+        
+        self.filter_u  = filter_u.transpose(1,0).flatten()
+
+        self.filter_n2o = filter_n2o.transpose(1,0).flatten()
+        
+        self.filter_ch4 = filter_ch4.transpose(1,0).flatten()
+
     def reset_dropout(self,dropout_p):
         self.net_ke_h2o.reset_dropout(dropout_p)
         self.net_ke_o3.reset_dropout(dropout_p)
@@ -224,7 +257,7 @@ class Extinction(nn.Module):
         temperature_pressure_log_pressure, constituents = x
 
         c = constituents
-        t_p = temperature_pressure_log_pressure
+        t_p = temperature_pressure_log_pressure[:,:2]  #Removing ln-P
 
         a = torch.exp
         b = torch.sigmoid
@@ -1123,7 +1156,7 @@ class FullNet(nn.Module):
 
         # Learns decomposition of extinguished radiation (into t, r, a)
         # for each channel
-        if True:
+        if False:
             self.scattering_net = LayerDistributed(Scattering_v1_tau(n_channel,
                                                           n_constituent,
                                                           dropout_p,
@@ -1202,8 +1235,8 @@ class FullNet(nn.Module):
         return [flux_down_direct, flux_down, flux_up, flux_absorbed]
 
 def loss_weighted(y_true, y_pred, weight_profile):
-    error = torch.mean(torch.square(weight_profile * (y_pred - y_true)), 
-                       dim=(0,1), keepdim=False)
+    error = torch.sqrt(torch.mean(torch.square(weight_profile * (y_pred - y_true)), 
+                       dim=(0,1), keepdim=False))
     return error
 
 def loss_heating_rate_direct(y_true, y_pred, toa, delta_pressure):
@@ -1273,6 +1306,14 @@ def loss_flux_full_wrapper(data, y_pred, weight_profile):
     loss = loss_weighted(flux_true, flux_pred, toa)
     return loss
 
+def loss_flux_direct_wrapper_2(data, y_pred, weight_profile):
+    _, _, toa, _, y_true, _ = data
+    flux_down_direct_pred, _, _, _ = y_pred
+    flux_down_direct_true = y_true[:,:,0]
+    
+    loss = loss_weighted(flux_down_direct_true, flux_down_direct_pred, toa)
+    return loss
+
 def loss_flux_full_wrapper_2(data, y_pred, weight_profile):
     _, _, _, _, y_true, _ = data
     flux_down_true, flux_up_true = y_true[:,:,1], y_true[:,:,2]
@@ -1305,9 +1346,46 @@ def loss_henry(y_true, flux_absorbed_true, y_pred, toa_weighting_profile,
     alpha   = 1.0e-4
     return alpha * (hr_loss + hr_direct_loss) + (1.0 - alpha) * flux_loss
 
+def loss_henry_2(y_true, flux_absorbed_true, y_pred, toa_weighting_profile, 
+               delta_pressure, weight_profile):
+    # Handles flux using TOA weight rather than weight profile
+    
+    (flux_down_direct_pred, flux_down_pred, 
+     flux_up_pred, flux_absorbed_pred) = y_pred
+    
+    (flux_down_direct_true, flux_down_true, 
+     flux_up_true) = (y_true[:,:,0], y_true[:,:,1], y_true[:,:,2])
+    
+    flux_pred = torch.concat((flux_down_pred,flux_up_pred),dim=1)
+    flux_true = torch.concat((flux_down_true,flux_up_true),dim=1)
+
+    flux_loss = loss_weighted(flux_true, flux_pred, toa_weighting_profile)
+    flux_direct_loss = loss_weighted(flux_down_direct_true, flux_down_direct_pred, toa_weighting_profile)
+
+    hr_loss = loss_heating_rate_full(flux_absorbed_true, flux_absorbed_pred,
+                                     toa_weighting_profile, delta_pressure)
+    
+    hr_direct_loss = loss_heating_rate_direct(
+        flux_down_direct_true, flux_down_direct_pred, 
+        toa_weighting_profile, delta_pressure)
+
+    if False:
+        # v5
+        alpha   = 0.3
+        return alpha * (hr_loss + 2.0 * hr_direct_loss) + (1.0 - alpha) * (flux_loss + 2.0 * flux_direct_loss)
+    elif False:
+        # v4
+        alpha   = 0.66667
+        return alpha * (hr_loss + hr_direct_loss) + (1.0 - alpha) * (flux_loss + flux_direct_loss)
+    else:
+        #v6
+        # same as v5 except normalaized
+        alpha   = 0.3
+        return 0.3333 * (alpha * (hr_loss + 2.0 * hr_direct_loss) + (1.0 - alpha) * (flux_loss + 2.0 * flux_direct_loss))
+
 def loss_henry_full_wrapper(data, y_pred, weight_profile):
     _, _, toa, delta_pressure, y_true, flux_absorbed_true = data
-    loss = loss_henry(y_true, flux_absorbed_true, y_pred, toa, 
+    loss = loss_henry_2(y_true, flux_absorbed_true, y_pred, toa, 
                delta_pressure, weight_profile)
     return loss
 
@@ -1464,7 +1542,9 @@ def get_weight_profile_2(device):
     rsd = torch.from_numpy(rsd).float().to(device)
     rsu = torch.from_numpy(rsu).float().to(device)
     flux = torch.concat((rsd,rsu),dim=1)
-    weight_profile = 1.0 / torch.mean(flux,dim=0,keepdim=True)
+    #weight_profile = 1.0 / torch.mean(flux,dim=0,keepdim=True)
+    #weight_profile = 1.0 / torch.mean(flux,dim=(0,1),keepdim=True)
+    weight_profile = 3.0 / torch.mean(flux,dim=(0,1),keepdim=True)
     dt.close()
     return weight_profile
 
@@ -1641,21 +1721,71 @@ def train_full_dataloader():
     cross_input_files = [f'{cross_input_dir}Flux_sw-2008-{month}.nc' for month in months]
 
     batch_size = 2048
-    n_channel = 30
+    n_channel = 42
     n_constituent = 8
-    checkpoint_period = 5 #1
+    #filename_full_model = datadir + f"/Torch.Dataloader.v2_1." # scattering_v3
+    # log_1.txt, log_2.txt
+    #filename_full_model = datadir + f"/Torch.Dataloader.v2_2." # scattering_v3
+    # Uses flat correction for flux weighting, log_v2.txt
 
-    #for ee in range(100):
-    if True:
+    #filename_full_model = datadir + f"/Torch.Dataloader.v2_3." # scattering_v3
+    # Uses flat correction for flux weighting * 3.0
+    # log_v3.txt - initialization
+    # log_v3_1 
+
+    #filename_full_model = datadir + f"/Torch.Dataloader.v2_4." # scattering_v3
+    # Uses loss_henry_2 with 0.667 weight on heating and 0.33 on flux
+    # log_v4-i.txt - initialization
+    # log_v4 
+    # log_v4_results
+
+    #filename_full_model = datadir + f"/Torch.Dataloader.v2_5." # scattering_v3
+    # Uses loss_henry_2 with 0.3 weight on heating and 0.7 on flux
+    # 2X weight on direct
+    # log_v5-i.txt - initialization
+    # log_v5 
+    # log_v5_results
+
+    filename_full_model = datadir + f"/Torch.Dataloader.v3_6." # scattering_v3
+    # Uses loss_henry_2 with 0.3 weight on heating and 0.7 on flux
+    # 2X weight on direct
+    # total loss * 0.3333
+    # 42 channels
+    # log_v6-i.txt - initialization
+    # log_v6 
+    # log_v6_results
+
+    is_initial_condition = False
+    if is_initial_condition:
+        checkpoint_period = 1
+        epochs = 1
+        t_start = 0
+        number_of_tries = 20
+    else:
+        checkpoint_period = 5 
+        epochs = 2000 
+
+        number_of_tries = 1
+
+        if True:
+            #initial_model_n = 0  #4
+            #initial_model_n = 5   #5
+            initial_model_n = 1   #6
+            t_start = 1
+            filename_full_model_input = f'{filename_full_model}i' + str(initial_model_n).zfill(2)
+        else:
+            t_start = 385
+            filename_full_model_input = filename_full_model + str(t_start).zfill(3)
+
+
+    for ee in range(number_of_tries):
+
         #print(f"Model = {str(ee).zfill(3)}")
-        is_redo = False
-        model_n = 3
-        filename_full_model_input = datadir + f"/Torch.Dataloader.4a-{str(model_n).zfill(3)}."
-        filename_full_model = datadir + f"/Torch.Dataloader.4." 
+
+
         #filename_full_model = filename_full_model_input  #
-        epochs = 2000 #1
-        t_start = 0 #510 #1  #0
-        t_warmup = 1
+
+        t_warmup = 1  # for profiling
         t = t_start
         dropout_p = 0.00
 
@@ -1666,9 +1796,6 @@ def train_full_dataloader():
         dropout_index = next(i for i, x in enumerate(dropout_epochs) if t <= x) - 1
         dropout_p = dropout_schedule[dropout_index]
         last_dropout_index = dropout_index
-
-        if is_redo:
-            dropout_p = 0.00
 
         model = FullNet(n_channel,n_constituent,dropout_p,device).to(device=device)
         optimizer = torch.optim.Adam(model.parameters())
@@ -1690,16 +1817,23 @@ def train_full_dataloader():
         #start = torch.cuda.Event(enable_timing=True)
         #end = torch.cuda.Event(enable_timing=True)
 
-        loss_functions = (loss_henry_full_wrapper, loss_flux_full_wrapper_2, loss_heating_rate_full_wrapper,
-                        loss_heating_rate_direct_full_wrapper, loss_flux_full_wrapper,
+        #loss_functions = (loss_henry_full_wrapper, loss_flux_full_wrapper_2, loss_heating_rate_full_wrapper,
+                        #loss_heating_rate_direct_full_wrapper, loss_flux_full_wrapper)
+                     
+        #loss_names = ("Loss", "Flux Loss (weight profile)", "Heating Rate Loss", 
+                    #"Direct Heating Rate Loss", "Flux Loss (TOA weighting)")
+                        
+
+        loss_functions = (loss_henry_full_wrapper, loss_flux_full_wrapper, loss_flux_direct_wrapper_2, loss_heating_rate_full_wrapper,
+                        loss_heating_rate_direct_full_wrapper, 
                         )
-        loss_names = ("Loss", "Flux Loss (weight profile)", "Heating Rate Loss", 
-                    "Direct Heating Rate Loss", 
-                        "Flux Loss (TOA weighting)")
+        loss_names = ("Loss", "Flux Loss", "Flux Loss Direct", "Heating Rate Loss", 
+                    "Heating Rate Loss Direct", 
+                        )
 
         if t > 0:
-            checkpoint = torch.load(filename_full_model_input + str(t))
-            print(f"Loaded Model: epoch = {t}")
+            checkpoint = torch.load(filename_full_model_input)
+            print(f"Loaded Model: epoch = {filename_full_model_input}")
             model.load_state_dict(checkpoint['model_state_dict'])
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
             #epoch = checkpoint['epoch']
@@ -1712,8 +1846,6 @@ def train_full_dataloader():
             if dropout_index != last_dropout_index:
                 last_dropout_index = dropout_index
                 dropout_p = dropout_schedule[dropout_index]
-                if is_redo:
-                    dropout_p = 0.0
                 model.reset_dropout(dropout_p)
             print(f"Epoch {t}\n-------------------------------")
             print(f"Dropout: {dropout_p}")
@@ -1741,13 +1873,22 @@ def train_full_dataloader():
 
                 #print(prof.key_averages(group_by_stack_n=6).table(sort_by='self_cpu_time_total', row_limit=15))
             if t % checkpoint_period == 0:
-                torch.save({
-                'epoch': t,
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'loss': loss,
-                }, filename_full_model + str(t))
-                print(f' Wrote Model: epoch = {t}')
+                if is_initial_condition:
+                    torch.save({
+                    'epoch': t,
+                    'model_state_dict': model.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'loss': loss,
+                    }, filename_full_model + 'i' + str(ee).zfill(2))
+                    print(f' Wrote Initial Model: {ee}')
+                else:
+                    torch.save({
+                    'epoch': t,
+                    'model_state_dict': model.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'loss': loss,
+                    }, filename_full_model + str(t).zfill(3))
+                    print(f' Wrote Model: epoch = {t}')
 
         print("Done!")
 
@@ -1802,27 +1943,9 @@ def test_full_dataloader():
     print(f"Using {device} device")
 
     datadir     = "/data-T1/hws/tmp/"
-    year = "2009"
-
-    #filename_full_model = datadir + "/Torch.Dataloader.1/Torch.Dataloader.1." # Scattering_v3
-    #filename_full_model = datadir + "/Torch.Dataloader.e8/Torch.Dataloader.e8." # Scattering_v3
-    filename_full_model = datadir + f"/Torch.Dataloader.4/Torch.Dataloader.4." # corresponds to Scattering_v1_tau
-
-    datadir     = "/data-T1/hws/tmp/"
-    test_input_dir = f"/data-T1/hws/CAMS/processed_data/testing/{year}/"
-    months = [str(m).zfill(2) for m in range(1,13)]
-    test_input_files = [f'{test_input_dir}Flux_sw-{year}-{month}.nc' for month in months]
-    #test_input_files = ["/data-T1/hws/tmp/RADSCHEME_data_g224_CAMS_2015_true_solar_angles.2.nc"]
     batch_size = 2048 
-    n_channel = 30
+    n_channel = 42 #30
     n_constituent = 8
-
-    weight_profile = get_weight_profile_2(device)
-    test_dataset = RT_data_hws_2.RTDataSet(test_input_files,n_channel)
-
-    test_dataloader = torch.utils.data.DataLoader(test_dataset, batch_size, 
-                                                   shuffle=False,
-                                                        num_workers=1)
 
     model = FullNet(n_channel,n_constituent,dropout_p=0,device=device)
 
@@ -1842,22 +1965,57 @@ def test_full_dataloader():
 
     model = model.to(device=device)
 
-    loss_functions = (loss_henry_full_wrapper, loss_heating_rate_full_wrapper,
-                      loss_heating_rate_direct_full_wrapper, loss_flux_full_wrapper)
-    loss_names = ("Loss", "Heating Rate Loss", "Direct Heating Rate Loss", "Flux Loss")
 
-    print(f"Testing error, Year = {year}")
-    for t in range(450,555,5):
+    #filename_full_model = datadir + "/Torch.Dataloader.1/Torch.Dataloader.1." # Scattering_v3
+    #filename_full_model = datadir + "/Torch.Dataloader.e8/Torch.Dataloader.e8." # Scattering_v3
+    #filename_full_model = datadir + f"/Torch.Dataloader.4/Torch.Dataloader.4." # corresponds to Scattering_v1_tau
 
-        checkpoint = torch.load(filename_full_model + str(t), map_location=torch.device(device))
-        print(f"Loaded Model: epoch = {t}")
-        model.load_state_dict(checkpoint['model_state_dict'])
+    #filename_full_model = datadir + f"/Torch.Dataloader.v2_4." # corresponds to Scattering_v3, two inputs to mass_extinction(t,p)
 
-        print(f"Total number of parameters = {n_parameters}", flush=True)
-        print(f"Spectral decomposition weights = {model.spectral_net.weight}", flush=True)
+    #filename_full_model = datadir + f"/Torch.Dataloader.v2_5." # corresponds to Scattering_v3, two inputs to mass_extinction(t,p)
 
-        loss = test_loop (test_dataloader, model, loss_functions, loss_names, weight_profile, device)
- 
+    filename_full_model = datadir + f"/Torch.Dataloader.v3_6." # scattering_v3
+    # Uses loss_henry_2 with 0.3 weight on heating and 0.7 on flux
+    # 2X weight on direct
+    # total loss * 0.3333
+    # 42 channels
+    # log_v6-i.txt - initialization
+    # log_v6 
+    # log_v6_results
+
+    years = ("2009", "2015", "2020")
+
+    for year in years:
+        test_input_dir = f"/data-T1/hws/CAMS/processed_data/testing/{year}/"
+        months = [str(m).zfill(2) for m in range(1,13)]
+        test_input_files = [f'{test_input_dir}Flux_sw-{year}-{month}.nc' for month in months]
+        #test_input_files = ["/data-T1/hws/tmp/RADSCHEME_data_g224_CAMS_2015_true_solar_angles.2.nc"]
+
+
+        weight_profile = get_weight_profile_2(device)
+        test_dataset = RT_data_hws_2.RTDataSet(test_input_files,n_channel)
+
+        test_dataloader = torch.utils.data.DataLoader(test_dataset, batch_size, 
+                                                    shuffle=False,
+                                                            num_workers=1)
+
+
+        loss_functions = (loss_henry_full_wrapper, loss_heating_rate_full_wrapper,
+                        loss_heating_rate_direct_full_wrapper, loss_flux_full_wrapper)
+        loss_names = ("Loss", "Heating Rate Loss", "Direct Heating Rate Loss", "Flux Loss")
+
+        print(f"Testing error, Year = {year}")
+        for t in range(180,500,5):
+
+            checkpoint = torch.load(filename_full_model + str(t), map_location=torch.device(device))
+            print(f"Loaded Model: epoch = {t}")
+            model.load_state_dict(checkpoint['model_state_dict'])
+
+            print(f"Total number of parameters = {n_parameters}", flush=True)
+            #print(f"Spectral decomposition weights = {model.spectral_net.weight}", flush=True)
+
+            loss = test_loop (test_dataloader, model, loss_functions, loss_names, weight_profile, device)
+    
 
 if __name__ == "__main__":
     #train_direct_only()
@@ -1866,5 +2024,5 @@ if __name__ == "__main__":
     #test_full()
 
     
-    train_full_dataloader()
-    #test_full_dataloader()
+    #train_full_dataloader()
+    test_full_dataloader()

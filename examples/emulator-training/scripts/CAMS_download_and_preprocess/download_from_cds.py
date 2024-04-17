@@ -70,6 +70,53 @@ def get_dict_era5_sfc(year, month, day, hour):
     }
     return mydict
 
+def get_dict_era5_ml(year, month, day, hour):
+    h_string = str(hour).zfill(2)
+    mydict = {
+        "class": "ea",
+        "date": f"{year}-{month}-{day}", #2008-01-01/2008-01-02",
+        "expver": "1",
+        "levelist": "1/2/3/4/5/6/7/8/9/10/11/12/13/14/15/16/17/18/19/20/21/22/23/24/25/26/27/28/29/30/31/32/33/34/35/36/37/38/39/40/41/42/43/44/45/46/47/48/49/50/51/52/53/54/55/56/57/58/59/60/61/62/63/64/65/66/67/68/69/70/71/72/73/74/75/76/77/78/79/80/81/82/83/84/85/86/87/88/89/90/91/92/93/94/95/96/97/98/99/100/101/102/103/104/105/106/107/108/109/110/111/112/113/114/115/116/117/118/119/120/121/122/123/124/125/126/127/128/129/130/131/132/133/134/135/136/137",
+        "levtype": "ml",
+        "param": "248",
+        "stream": "oper",
+        "time": f"{h_string}:00:00", #03:00:00/06:00:00/09:00:00",
+        "type": "an"
+    }
+    return mydict
+
+def get_dict_era5_ml_2(year, month, day):
+
+    mydict = {
+        "class": "ea",
+        "date": f"{year}-{month}-{day}", #2008-01-01/2008-01-02",
+        "expver": "1",
+        "levelist": "1/2/3/4/5/6/7/8/9/10/11/12/13/14/15/16/17/18/19/20/21/22/23/24/25/26/27/28/29/30/31/32/33/34/35/36/37/38/39/40/41/42/43/44/45/46/47/48/49/50/51/52/53/54/55/56/57/58/59/60/61/62/63/64/65/66/67/68/69/70/71/72/73/74/75/76/77/78/79/80/81/82/83/84/85/86/87/88/89/90/91/92/93/94/95/96/97/98/99/100/101/102/103/104/105/106/107/108/109/110/111/112/113/114/115/116/117/118/119/120/121/122/123/124/125/126/127/128/129/130/131/132/133/134/135/136/137",
+        "levtype": "ml",
+        "param": "248",
+        "stream": "oper",
+        "time": "00:00:00/03:00:00/06:00:00/09:00:00/12:00:00/15:00:00/18:00:00/21:00:00",
+        #"time": f"{h_string}:00:00", #03:00:00/06:00:00/09:00:00",
+        "type": "an"
+    }
+    return mydict
+
+def get_dict_era5_ml_clould_water(year, month, day):
+    # temp
+    mydict = {
+        "class": "ea",
+        "date": f"{year}-{month}-{day}", #2008-01-01/2008-01-02",
+        "expver": "1",
+        "levelist": "1/2/3/4/5/6/7/8/9/10/11/12/13/14/15/16/17/18/19/20/21/22/23/24/25/26/27/28/29/30/31/32/33/34/35/36/37/38/39/40/41/42/43/44/45/46/47/48/49/50/51/52/53/54/55/56/57/58/59/60/61/62/63/64/65/66/67/68/69/70/71/72/73/74/75/76/77/78/79/80/81/82/83/84/85/86/87/88/89/90/91/92/93/94/95/96/97/98/99/100/101/102/103/104/105/106/107/108/109/110/111/112/113/114/115/116/117/118/119/120/121/122/123/124/125/126/127/128/129/130/131/132/133/134/135/136/137",
+        "levtype": "ml",
+        "param": "246/247",
+        "stream": "oper",
+        "time": "00:00:00/03:00:00/06:00:00/09:00:00/12:00:00/15:00:00/18:00:00/21:00:00",
+        #"time": f"{h_string}:00:00", #03:00:00/06:00:00/09:00:00",
+        "type": "an"
+    }
+    return mydict
+
 def get_dict_era5_sfc_z(year, month, day, hour):
 
     mydict =     {
@@ -152,6 +199,73 @@ def download_cams(directory,date_list,hours):
             print(f" Elapsed Time: {et - st:0.4f} seconds", flush=True)
 
 
+def download_era5_cloud_fraction (directory,date_list,hours):
+
+    c_era = cdsapi.Client()
+
+    for i, d in enumerate(date_list):
+        year = d[0]
+        month = d[1]
+        day = d[2]
+        data_directory = directory + year + '/' + month +'/'
+        for hour in hours:
+            s_hour = str(hour).zfill(2)
+            st = time.perf_counter()
+
+            dict_era5 = get_dict_era5_ml(year, month, day, hour)
+            c_era.retrieve(
+                'reanalysis-era5-complete',
+                dict_era5,
+                data_directory + f'era5_ml_{year}-{month}-{day}-{s_hour}.grb')
+
+            print(f"Downloaded {i+1}: {year}-{month}-{day}-{s_hour}")
+            et = time.perf_counter()
+            print(f" Elapsed Time: {et - st:0.4f} seconds", flush=True)
+
+def download_era5_cloud_water (directory,date_list):
+    # temp
+    c_era = cdsapi.Client()
+
+    for i, d in enumerate(date_list):
+        year = d[0]
+        month = d[1]
+        day = d[2]
+        data_directory = directory + year + '/' + month +'/'
+        st = time.perf_counter()
+
+        dict_era5 = get_dict_era5_ml_clould_water(year, month, day)
+        c_era.retrieve(
+            'reanalysis-era5-complete',
+            dict_era5,
+            data_directory + f'era5_ml_cloud_water{year}-{month}-{day}.grb')
+
+        print(f"Downloaded {i+1}: {year}-{month}-{day}")
+        et = time.perf_counter()
+        print(f" Elapsed Time: {et - st:0.4f} seconds", flush=True)
+
+
+def download_era5_cloud_fraction_2 (directory,date_list,hours):
+
+    c_era = cdsapi.Client()
+
+    for i, d in enumerate(date_list):
+        year = d[0]
+        month = d[1]
+        day = d[2]
+        data_directory = directory + year + '/' + month +'/'
+        st = time.perf_counter()
+
+        dict_era5 = get_dict_era5_ml_2(year, month, day)
+        c_era.retrieve(
+            'reanalysis-era5-complete',
+            dict_era5,
+            data_directory + f'era5_ml_{year}-{month}-{day}.grb')
+
+        print(f"Downloaded {i+1}: {year}-{month}-{day}")
+        et = time.perf_counter()
+        print(f" Elapsed Time: {et - st:0.4f} seconds", flush=True)
+
+
 def download_era5(directory,date_list,hours,is_era5_z=False):
 
     c_era = cdsapi.Client()
@@ -181,6 +295,7 @@ def download_era5(directory,date_list,hours,is_era5_z=False):
             print(f"Downloaded {i+1}: {year}-{month}-{day}-{s_hour}")
             et = time.perf_counter()
             print(f" Elapsed Time: {et - st:0.4f} seconds", flush=True)
+
 
 def download_greenhouse_gas_inversion(directory,year):
 
@@ -248,7 +363,7 @@ if __name__ == "__main__":
     cross_validation_dates_2008 = day_list_to_date_list(cross_validation_days, 2008)
 
     testing_days = [day_num for day_num in range(4,366,28)]
-    testing_days_2009 = day_list_to_date_list(testing_days,2009)
+    testing_dates_2009 = day_list_to_date_list(testing_days,2009)
     testing_dates_2020 = day_list_to_date_list(testing_days,2020) 
     testing_dates_2015 = day_list_to_date_list(testing_days,2015) 
 
@@ -256,19 +371,32 @@ if __name__ == "__main__":
     #download_cams(directory + "cross_validation/",cross_validation_dates_2008,hours)
     #download_cams(directory + "testing/", testing_dates_2009, hours)
     #download_cams(directory + "testing/", testing_dates_2020, hours)
-    download_cams(directory + "testing/", testing_dates_2015, hours)
+    #download_cams(directory + "testing/", testing_dates_2015, hours)
 
     #download_greenhouse_gas_inversion(directory + "testing/", year=2008)
     #download_greenhouse_gas_inversion(directory + "testing/", year=2009)
-    download_greenhouse_gas_inversion(directory + "testing/", year=2015)
+    #download_greenhouse_gas_inversion(directory + "testing/", year=2015)
     #download_greenhouse_gas_inversion(directory + "testing/", year=2020)
 
     #download_era5(directory + "training/",training_dates_2008,hours)
     #download_era5(directory + "cross_validation/",cross_validation_dates_2008,hours)
     #download_era5(directory + "testing/", testing_dates_2009, hours)
-    download_era5(directory + "testing/", testing_dates_2015, hours)
+    #download_era5(directory + "testing/", testing_dates_2015, hours)
     #download_era5(directory + "testing/", testing_dates_2020, hours)
 
+    #training_days = [day_num for  day_num in range(1,5,4)]
+    #date_list = day_list_to_date_list(training_dates,2008)
+    #download_era5_cloud_fraction_2 (directory  + "cross_validation/",cross_validation_dates_2008,hours)
+    #print("Starting testing data 2009")
+    #download_era5_cloud_fraction_2 (directory  + "testing/",testing_dates_2009,hours)
+    #print("Starting testing data 2015")
+    #download_era5_cloud_fraction_2 (directory  + "testing/",testing_dates_2015,hours)
+    #print("Starting testing data 2020")
+    #download_era5_cloud_fraction_2 (directory  + "testing/",testing_dates_2020,hours)
+
+
+   
+    download_era5_cloud_water (directory  + "training/",training_dates_2008[:9])
     if False:
         month = '01'
         day = '02'

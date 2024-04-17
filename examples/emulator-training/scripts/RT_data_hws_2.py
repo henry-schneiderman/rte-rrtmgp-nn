@@ -323,8 +323,8 @@ class RTDataSet(Dataset):
             self.n_data.append(c)
 
         self.i_file = 0
-        #print(f"Number of valid examples = {self.n_data_accumulated[-1]}")
-        #print(f"Number of valid examples = {acc}", flush=True)
+        print(f"Number of valid examples = {self.n_data_accumulated[-1]}")
+        print(f"Number of valid examples = {acc}", flush=True)
 
     def __len__(self):
         return self.n_data_accumulated[-1]

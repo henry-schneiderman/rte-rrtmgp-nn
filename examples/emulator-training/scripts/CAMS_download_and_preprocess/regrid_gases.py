@@ -3,6 +3,7 @@ import sys
 # run with: conda activate netcdf3.8
 from netCDF4 import Dataset,num2date
 import numpy as np
+import xarray as xr
 from sunposition import sunpos
 
 def add_solar_zenith(file_name):
@@ -47,6 +48,123 @@ def add_solar_zenith(file_name):
     sza.setncattr("units", "degrees")
 
     dt.close()
+
+def reconcile_time_samples_to_2nd_file(file_name_1, file_name_2, output_name_1):
+    """
+    Given two Datasets, each dataset is reduced to the sampling times common to both original sets
+    """
+    dt_1 = xr.open_dataset(file_name_1, engine='netcdf4')
+    dt_2 = xr.open_dataset(file_name_2, engine='netcdf4')
+
+    time_1 = dt_1.coords['time'].values
+    time_2 = dt_2.coords['time'].values
+  
+    time_common = []
+    for t_1 in time_1:
+        if t_1 in time_2:
+            time_common.append(t_1)
+
+    sampled_dt_1 = dt_1.sel(time=time_common)
+
+    if len(time_common) != len(time_2):
+        print(f"Times are incompatible! {file_name_1} and {file_name_2}")
+        sys.exit(1)
+
+    xr.Dataset.to_netcdf(sampled_dt_1, output_name_1)
+
+def reconcile_time_samples(file_name_1, file_name_2, output_name_1, output_name_2):
+    """
+    Given two Datasets, each dataset is reduced to the sampling times common to both original sets
+    """
+    dt_1 = xr.open_dataset(file_name_1, engine='netcdf4')
+    dt_2 = xr.open_dataset(file_name_2, engine='netcdf4')
+
+    time_1 = dt_1.coords['time'].values
+    time_2 = dt_2.coords['time'].values
+  
+    time_common = []
+    for t_1 in time_1:
+        if t_1 in time_2:
+            time_common.append(t_1)
+
+    sampled_dt_1 = dt_1.sel(time=time_common)
+    sampled_dt_2 = dt_2.sel(time=time_common)
+
+    xr.Dataset.to_netcdf(sampled_dt_1, output_name_1)
+    xr.Dataset.to_netcdf(sampled_dt_2, output_name_2)
+
+
+def regrid_cloud_fraction(base_directory,mode,month,year):
+
+    dir_1=f'{base_directory}original_data/{mode}/{year}/{month}/'
+    dir_2=f'{base_directory}processed_data/{mode}/{year}/{month}/'
+
+    if False:
+        ## Merge into single file for each data set for each month
+        print (f"{dir_1}/era5_ml_{year}-{month}-??.grb", flush=True)
+        cmd = f'cdo mergetime {dir_1}/era5_ml_{year}-{month}-??.grb {dir_2}/era5_ml_{year}-{month}.grb'
+        os.system(cmd)
+        print("Completed mergetime")
+
+
+        ## Convert to netCDF files
+        cmd = f'cdo --eccodes -f nc copy {dir_2}/era5_ml_{year}-{month}.grb {dir_2}/era5_ml_{year}-{month}.nc'
+        os.system(cmd)
+        print("Completed conversion to netcdf")
+
+        ## Reduce spatial resolution before attempting other operations
+
+        cmd = f'cdo remapdis,{base_directory}/icon_grid_0009_R02B03_R.nc {dir_2}/era5_ml_{year}-{month}.nc {dir_2}/era5_ml_{year}-{month}.icon.nc'
+        os.system(cmd)
+        print("Completed spatial resolution remap")
+
+    if False:
+
+        reconcile_time_samples_to_2nd_file(f'{dir_2}era5_ml_{year}-{month}.icon.nc',
+                                        f'{dir_2}CAMS_{year}-{month}.final.nc',
+                                            f'{dir_2}era5_ml_{year}-{month}.icon.2.nc')
+        
+        print("reconciled time samples")
+
+        dt   = xr.open_dataset(f'{dir_2}era5_ml_{year}-{month}.icon.2.nc')
+        dt1 = dt.rename_dims({'cell':'site'})
+        # Seems to require a variable named 'site' in order for the rest to work
+        dimension_site = dt1['site'].values
+        site = xr.DataArray(np.arange(1,len(dimension_site)+1), dims=("site",), name="site")
+        dt1['site'] = site
+        dt1.to_netcdf(f'{dir_2}era5_ml_{year}-{month}.icon.3.nc')
+        dt1.close()
+
+        print("renamed cell to site")
+        #cmd = f'ncrename -d cell,site {dir_2}era5_ml_{year}-{month}.icon.2.nc {dir_2}era5_ml_{year}-{month}.icon.3.nc'
+        #os.system(cmd)
+
+
+    if False:
+
+        cmd = f'ncks -A -v sp {dir_2}CAMS_{year}-{month}.final.nc {dir_2}era5_ml_{year}-{month}.icon.3.nc'
+        os.system(cmd)
+
+        print("copied in surface pressure")
+    if True:
+        cmd = f'cdo remapeta,{base_data_dir}newvct {dir_2}era5_ml_{year}-{month}.icon.3.nc {dir_2}era5_ml_{year}-{month}.icon.4.nc'
+        os.system(cmd)
+
+        print("Remapped vertical coordinate")
+
+        cmd = f'ncrename -d lev,layer -v lev,layer {dir_2}era5_ml_{year}-{month}.icon.4.nc'
+        os.system(cmd)
+
+        dt_input   = xr.open_dataset(f'{dir_2}era5_ml_{year}-{month}.icon.4.nc')
+        dt_input['cc'] = dt_input['cc'].transpose("time", "site", "layer")
+        dt_input.to_netcdf(f'{dir_2}era5_ml_{year}-{month}.icon.5.nc')
+        dt_input.close()
+
+        cmd = f'ncks -O -x -v cloud_fraction {dir_2}CAMS_{year}-{month}.final.2.nc {dir_2}CAMS_{year}-{month}.final.3.nc'
+        os.system(cmd)
+
+        cmd = f'ncks -A -v cc {dir_2}era5_ml_{year}-{month}.icon.5.nc {dir_2}CAMS_{year}-{month}.final.3.nc'
+        os.system(cmd)
 
 def regrid_gases(base_directory,mode,month,year,use_st=False):
 
@@ -201,7 +319,7 @@ def regrid_gases(base_directory,mode,month,year,use_st=False):
 if __name__ == "__main__":
     base_data_dir = '/data-T1/hws/CAMS/'
 
-    if True:
+    if False:
         if len(sys.argv) != 4:
             print("Usage: regrid_n2o mode year")
             print("Mode must be one of the following: 'training', 'testing', or 'cross_validation'")
@@ -213,12 +331,22 @@ if __name__ == "__main__":
         mode = sys.argv[1]
         month = sys.argv[2]
         year = sys.argv[3]
+
+        regrid_gases(base_data_dir, mode, month, year, use_st=True)
     else:
         mode = "training"
         year = "2008"
         month = '01'
 
-    regrid_gases(base_data_dir, mode, month, year, use_st=True)
+        regrid_cloud_fraction(base_data_dir, mode, month, year)
+        if False:
+            dir_2=f'{base_data_dir}processed_data/{mode}/{year}/{month}/'
+            reconcile_time_samples(f'{dir_2}tmp/cw.1.nc',
+                                            f'{dir_2}CAMS_{year}-{month}.final.nc',
+                                                f'{dir_2}tmp/cw.2.nc',
+                                                f'{dir_2}tmp/cams.nc')
+
+
     if False:
         month = '01'
         cmd = f'ncrename -v \\2t,t2m {base_data_dir}/CAMS_egg4_sfc_{year}-{month}.icon.nc'

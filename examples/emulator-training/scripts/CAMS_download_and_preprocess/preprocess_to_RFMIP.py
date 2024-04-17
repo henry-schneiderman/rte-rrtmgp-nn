@@ -36,6 +36,10 @@ def gfs_cloud_fraction(RH, saturation_specific_humidity,cloud_condensate):
     print(f"min rh = {np.min(RH)}")
     print(f"max rh = {np.max(RH)}")
     ql = -cloud_condensate * 100.0
+    arg = (1.0 - RH) * saturation_specific_humidity
+    if np.min(arg) < 0.0:
+        
+        print(f"neg arg: {np.min(arg)}", flush=True)
     denom = ((1.0 - RH) * saturation_specific_humidity) ** 0.49
     sigma = RH ** 0.25 * (1.0 - np.exp(ql / denom))
     return sigma
@@ -144,8 +148,8 @@ def preprocess_to_RFMIP(CAMS_file_name, output_file_name):
 
     rh = relative_humidity(w, es, pres_layer)
     qs = saturation_specific_humidity(rh, w)
-    #cloud_fraction = gfs_cloud_fraction(rh, qs, clwc + ciwc)
-    cloud_fraction = np.zeros((len(times.data),len(sites.data),len(layers.data)))
+    cloud_fraction = gfs_cloud_fraction(rh, qs, clwc + ciwc)
+    #cloud_fraction = np.zeros((len(times.data),len(sites.data),len(layers.data)))
 
     cloud_fraction = xr.DataArray(cloud_fraction, dims=("time","site","layer"), name="cloud_fraction")
     cloud_fraction.attrs["units"] = "1"
@@ -343,15 +347,18 @@ if __name__ == "__main__":
 
         dir = f'{processed_data_dir}{mode}/{year}/{month}/'
 
-        if False:
+        if True:
 
             CAMS_file_name = dir + f'CAMS_{year}-{month}.3.nc'
             CAMS_file_name_2 = dir + f'CAMS_{year}-{month}.4.nc'
-            output_file_name = dir + f'CAMS_{year}-{month}.final.nc'
-            
-            regrid_gases('/data-T1/hws/CAMS/',mode, month, year, use_st=False)
-            regrid_n2o(original_data_dir, processed_data_dir, mode, month, year)
-            add_coords_to_RFMIP(CAMS_file_name, CAMS_file_name_2)
+            output_file_name = dir + f'CAMS_{year}-{month}.final.tmp.nc'
+            if False:
+                #output_file_name = dir + f'CAMS_{year}-{month}.final.nc'
+
+                
+                regrid_gases('/data-T1/hws/CAMS/',mode, month, year, use_st=False)
+                regrid_n2o(original_data_dir, processed_data_dir, mode, month, year)
+                add_coords_to_RFMIP(CAMS_file_name, CAMS_file_name_2)
             preprocess_to_RFMIP(CAMS_file_name_2, output_file_name)
 
 

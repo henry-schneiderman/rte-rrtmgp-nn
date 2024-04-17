@@ -64,11 +64,14 @@ def symbolic_verification():
     total_2 = sy.symbols('total_2')
     e10b = sy.Eq(total_2, 1 - t_direct - t_multi_direct + r_bottom_multi_direct - r_multi_direct - a_top_multi_direct)
 
+    total_3 = sy.symbols('total_3')
+    e10c = sy.Eq(total_3, t_multi_direct * r_bottom_diffuse - e_direct*e_t_direct*r_bottom_diffuse*d)
+
     if False:
         total_3 = sy.symbols('total_3')
         e10c = sy.Eq(total_3, 1 - t_direct - t_multi_direct - r_multi_direct - a_top_multi_direct)
 
-    equations = (e1, e2, e3a, e3b, e4, e5, e6, e7a, e7b, e8a, e8b, e9, e10a, e10b)
+    equations = (e1, e2, e3a, e3b, e4, e5, e6, e7a, e7b, e8a, e8b, e9, e10a, e10b, e10c)
     solutions = sy.solve(equations, dict=True, manual=True)
     #pp = pprint.PrettyPrinter(indent=4, sort_dicts=False)
     #pp.pprint(solutions)
