@@ -9,6 +9,10 @@
 # Same as RT_torch_12_v3 except
 # scattering model using m different scattering models, where m < n_channels
 
+# Same as RT_torch_12_v4 except
+# loss separates direct and diffuse components
+# also eliminated some unused functions
+
 import numpy as np
 import time
 from typing import List
@@ -1695,14 +1699,14 @@ class Propagation(nn.Module):
         flux_down_diffuse = [flux_diffuse]
         flux_up_diffuse = [flux_direct * upward_reflection_toa]
 
-        flux_absorbed = []
+        flux_absorbed_direct = []
+        flux_absorbed_diffuse = []
 
         # Propagate downwards through the atmospheric layers
         for i in range(t_direct.shape[1]):
 
-            flux_absorbed.append(
-                flux_direct * a_layer_multi_direct[:,i]  
-                + flux_diffuse * a_layer_multi_diffuse[:,i])
+            flux_absorbed_direct.append(flux_direct * a_layer_multi_direct[:,i])  
+            flux_absorbed_diffuse.append(flux_diffuse * a_layer_multi_diffuse[:,i])
 
             # Will want this later when incorporate surface interactions
             #flux_absorbed_surface = flux_direct * a_surface_multi_direct + \
@@ -1724,16 +1728,18 @@ class Propagation(nn.Module):
         flux_down_direct = torch.stack(flux_down_direct,dim=1)
         flux_down_diffuse = torch.stack(flux_down_diffuse,dim=1)
         flux_up_diffuse = torch.stack(flux_up_diffuse,dim=1)
-        flux_absorbed = torch.stack(flux_absorbed,dim=1)
+        flux_absorbed_direct = torch.stack(flux_absorbed_direct,dim=1)
+        flux_absorbed_diffuse = torch.stack(flux_absorbed_diffuse,dim=1)
 
         # Sum across channels
         flux_down_direct = torch.sum(flux_down_direct,dim=2,keepdim=False)
         flux_down_diffuse = torch.sum(flux_down_diffuse,dim=2,keepdim=False)      
         flux_up_diffuse = torch.sum(flux_up_diffuse,dim=2,keepdim=False)  
-        flux_absorbed = torch.sum(flux_absorbed,dim=2,keepdim=False)  
+        flux_absorbed_direct = torch.sum(flux_absorbed_direct,dim=2,keepdim=False)  
+        flux_absorbed_diffuse = torch.sum(flux_absorbed_diffuse,dim=2,keepdim=False)  
 
         return [flux_down_direct, flux_down_diffuse, flux_up_diffuse, 
-                flux_absorbed]
+                flux_absorbed_direct, flux_absorbed_diffuse]
 
 class DownwardPropagationDirect(nn.Module):
     """    
@@ -1915,15 +1921,14 @@ class FullNet(nn.Module):
                                     input_flux))
 
         (flux_down_direct, flux_down_diffuse, flux_up_diffuse, 
-        flux_absorbed) = flux
+        flux_absorbed_direct, flux_absorbed_diffuse) = flux
         
-        flux_down = flux_down_direct + flux_down_diffuse
-        flux_up = flux_up_diffuse
         torch.cuda.synchronize()
         t_1 = time.time()
         global t_total
         t_total += t_1 - t_0
-        return [flux_down_direct, flux_down, flux_up, flux_absorbed]
+        return [flux_down_direct, flux_down_diffuse, flux_up_diffuse, flux_absorbed_direct,
+                flux_absorbed_diffuse]
 
 def loss_weighted(y_true, y_pred, weight_profile):
     error = torch.sqrt(torch.mean(torch.square(weight_profile * (y_pred - y_true)), 
@@ -1944,9 +1949,9 @@ def loss_heating_rate_direct_wrapper(data, y_pred, weight_profile):
     loss = loss_heating_rate_direct(y,y_pred,x_toa,x_delta_pressure)
     return loss
 
-def loss_heating_rate_direct_full_wrapper(data, y_pred, weight_profile):
+def loss_heating_rate_direct_full_wrapper(data, y_pred):
     _, _, toa, delta_pressure, y_true, _ = data
-    flux_down_direct_pred, _, _, _ = y_pred
+    flux_down_direct_pred, _, _, _, _ = y_pred
     flux_down_direct_true = y_true[:,:,0]
     loss = loss_heating_rate_direct(flux_down_direct_true, 
                                     flux_down_direct_pred, 
@@ -1964,159 +1969,91 @@ def loss_heating_rate_full(flux_absorbed_true, flux_absorbed_pred,
                                   dim=(0,1),keepdim=False))
     return loss
 
-def loss_heating_rate_full_wrapper(data, y_pred, weight_profile):
+def loss_heating_rate_full_wrapper(data, y_pred):
     _, _, toa, delta_pressure, _, flux_absorbed_true = data
-    _, _, _, flux_absorbed_pred = y_pred
+    _, _, _, flux_absorbed_direct_pred, flux_absorbed_diffuse_pred = y_pred
+    flux_absorbed_pred = flux_absorbed_direct_pred + flux_absorbed_diffuse_pred
     loss = loss_heating_rate_full(flux_absorbed_true, flux_absorbed_pred, 
                                   toa, delta_pressure)
     return loss
 
-def loss_ukkonen_direct(y_true, y_pred, toa, delta_pressure, weight_profile):
-    loss_flux = loss_weighted (y_true, y_pred, weight_profile)
-    hr_loss = loss_heating_rate_direct(y_true, y_pred, toa, delta_pressure)
-    alpha   = 1.0e-4
-    return alpha * hr_loss + (1.0 - alpha) * loss_flux
-
-def loss_ukkonen_direct_wrapper(data, y_pred, weight_profile):
-    _, y_true, x_toa, x_delta_pressure = data
-    loss = loss_ukkonen_direct(y_true,y_pred,x_toa,x_delta_pressure,weight_profile)
-    return loss
 
 def loss_flux_direct_wrapper(data, y_pred, weight_profile):
     _, y_true, _, _ = data
     loss = loss_weighted(y_true,y_pred,weight_profile)
     return loss
 
-def loss_flux_full_wrapper(data, y_pred, weight_profile):
+def loss_flux_full_wrapper(data, y_pred):
     _, _, toa, _, y_true, _ = data
     flux_down_true, flux_up_true = y_true[:,:,1], y_true[:,:,2]
-    _, flux_down_pred, flux_up_pred, _ = y_pred
+
+    (flux_down_direct_pred, flux_down_diffuse_pred, 
+     flux_up_diffuse_pred, _, _) = y_pred
+
+    flux_down_pred = flux_down_direct_pred + flux_down_diffuse_pred
+    flux_up_pred = flux_up_diffuse_pred
     
     flux_pred = torch.concat((flux_down_pred,flux_up_pred),dim=1)
     flux_true = torch.concat((flux_down_true,flux_up_true),dim=1)
     loss = loss_weighted(flux_true, flux_pred, toa)
     return loss
 
-def loss_flux_direct_wrapper_2(data, y_pred, weight_profile):
+def loss_flux_direct_wrapper_2(data, y_pred):
     _, _, toa, _, y_true, _ = data
-    flux_down_direct_pred, _, _, _ = y_pred
+    flux_down_direct_pred, _, _, _, _ = y_pred
     flux_down_direct_true = y_true[:,:,0]
     
     loss = loss_weighted(flux_down_direct_true, flux_down_direct_pred, toa)
     return loss
 
-def loss_flux_full_wrapper_2(data, y_pred, weight_profile):
-    _, _, _, _, y_true, _ = data
-    flux_down_true, flux_up_true = y_true[:,:,1], y_true[:,:,2]
-    _, flux_down_pred, flux_up_pred, _ = y_pred
-    
-    flux_pred = torch.concat((flux_down_pred,flux_up_pred),dim=1)
-    flux_true = torch.concat((flux_down_true,flux_up_true),dim=1)
-    loss = loss_weighted(flux_true, flux_pred, weight_profile)
-    return loss
 
-def loss_henry(y_true, flux_absorbed_true, y_pred, toa_weighting_profile, 
-               delta_pressure, weight_profile):
-    
-    (flux_down_direct_pred, flux_down_pred, 
-     flux_up_pred, flux_absorbed_pred) = y_pred
-    
-    (flux_down_direct_true, flux_down_true, 
-     flux_up_true) = (y_true[:,:,0], y_true[:,:,1], y_true[:,:,2])
-    
-    flux_pred = torch.concat((flux_down_pred,flux_up_pred),dim=1)
-    flux_true = torch.concat((flux_down_true,flux_up_true),dim=1)
 
-    flux_loss = loss_weighted(flux_true, flux_pred, weight_profile)
-    hr_loss = loss_heating_rate_full(flux_absorbed_true, flux_absorbed_pred,
-                                     toa_weighting_profile, delta_pressure)
-    hr_direct_loss = loss_heating_rate_direct(
-        flux_down_direct_true, flux_down_direct_pred, 
-        toa_weighting_profile, delta_pressure)
-    
-    alpha   = 1.0e-4
-    return alpha * (hr_loss + hr_direct_loss) + (1.0 - alpha) * flux_loss
-
-def loss_henry_2(y_true, flux_absorbed_true, y_pred, toa_weighting_profile, 
-               delta_pressure, weight_profile):
+def loss_henry_2(y_true, y_pred, toa_weighting_profile, 
+               delta_pressure):
     # Handles flux using TOA weight rather than weight profile
     
-    (flux_down_direct_pred, flux_down_pred, 
-     flux_up_pred, flux_absorbed_pred) = y_pred
+    (flux_down_direct_pred, flux_down_diffuse_pred, 
+     flux_up_diffuse_pred, flux_absorbed_direct_pred,
+     flux_absorbed_diffuse_pred) = y_pred
     
     (flux_down_direct_true, flux_down_true, 
-     flux_up_true) = (y_true[:,:,0], y_true[:,:,1], y_true[:,:,2])
+     flux_up_diffuse_true) = (y_true[:,:,0], y_true[:,:,1], y_true[:,:,2])
+    flux_down_diffuse_true = flux_down_true - flux_down_direct_true
     
-    flux_pred = torch.concat((flux_down_pred,flux_up_pred),dim=1)
-    flux_true = torch.concat((flux_down_true,flux_up_true),dim=1)
+    flux_diffuse_pred = torch.concat((flux_down_diffuse_pred,flux_up_diffuse_pred),dim=1)
+    flux_diffuse_true = torch.concat((flux_down_diffuse_true,flux_up_diffuse_true),dim=1)
 
-    flux_loss = loss_weighted(flux_true, flux_pred, toa_weighting_profile)
+    flux_diffuse_loss = loss_weighted(flux_diffuse_true, flux_diffuse_pred, toa_weighting_profile)
     flux_direct_loss = loss_weighted(flux_down_direct_true, flux_down_direct_pred, toa_weighting_profile)
 
-    hr_loss = loss_heating_rate_full(flux_absorbed_true, flux_absorbed_pred,
-                                     toa_weighting_profile, delta_pressure)
+    flux_absorbed_diffuse_true = (flux_down_diffuse_true[:,:-1] -
+                             flux_down_diffuse_true[:,1:] + 
+                             flux_up_diffuse_true[:,1:] -
+                             flux_up_diffuse_true[:,:-1])
+                         
+    hr_diffuse_loss = loss_heating_rate_full(flux_absorbed_diffuse_true, 
+                                             flux_absorbed_diffuse_pred,toa_weighting_profile, delta_pressure)
     
     hr_direct_loss = loss_heating_rate_direct(
         flux_down_direct_true, flux_down_direct_pred, 
         toa_weighting_profile, delta_pressure)
 
-    if False:
-        # v5
-        alpha   = 0.3
-        return alpha * (hr_loss + 2.0 * hr_direct_loss) + (1.0 - alpha) * (flux_loss + 2.0 * flux_direct_loss)
-    elif False:
-        # v4
-        alpha   = 0.66667
-        return alpha * (hr_loss + hr_direct_loss) + (1.0 - alpha) * (flux_loss + flux_direct_loss)
-    elif True:
-        #v6-v13
-        # same as v5 except normalaized
-        # v15
-        # v17,390+
-        alpha   = 0.3
-        return 0.3333 * (alpha * (hr_loss + 2.0 * hr_direct_loss) + (1.0 - alpha) * (flux_loss + 2.0 * flux_direct_loss))
+    if True:
+        # v18
+        hr_weight   = 0.3
+        direct_weight = 3.0
+        return (1.0 / (1.0 + direct_weight)) * (hr_weight * 
+                         (hr_diffuse_loss + direct_weight * hr_direct_loss) + (1.0 - hr_weight) * (flux_diffuse_loss + direct_weight * flux_direct_loss))
 
-    elif False:
-        #v14 (same as v6-v13 except weight=4.0 on direct, and 0.333 -> 0.2)
-        # same as v5 except normalaized
 
-        alpha   = 0.3
-        return 0.2 * (alpha * (hr_loss + 4.0 * hr_direct_loss) + (1.0 - alpha) * (flux_loss + 4.0 * flux_direct_loss))
-
-    elif False:
-        #v14 (same as v6-v13 except weight=4.0 on direct, and 0.333 -> 0.2)
-        # same as v5 except normalaized
-        # v14 65+
-        # v17 350 - 360
-        alpha   = 0.3
-        return 0.0001 * (alpha * (hr_loss + 10000.0 * hr_direct_loss) + (1.0 - alpha) * (flux_loss + 10000.0 * flux_direct_loss))
-
-    elif False:
-
-        # v17 360 - 375
-        alpha   = 0.3
-        return 0.0025 * (alpha * (hr_loss + 400.0 * hr_direct_loss) + (1.0 - alpha) * (flux_loss + 400.0 * flux_direct_loss))
-
-    elif False:
-        # v17 375 - 390
-        alpha   = 0.3
-        return 0.05 * (alpha * (hr_loss + 20.0 * hr_direct_loss) + (1.0 - alpha) * (flux_loss + 20.0 * flux_direct_loss))
-
-    else:
-        #v14 (same as v6-v13 except weight=4.0 on direct, and 0.333 -> 0.2)
-        # same as v5 except normalaized
-        # v17 iteration 0 - 350
-        alpha   = 0.3
-        return 0.0001 * (alpha * (0.0 * hr_loss + 10000.0 * hr_direct_loss) + (1.0 - alpha) * (0.0 * flux_loss + 10000.0 * flux_direct_loss))
-
-def loss_henry_full_wrapper(data, y_pred, weight_profile):
-    _, _, toa, delta_pressure, y_true, flux_absorbed_true = data
-    loss = loss_henry_2(y_true, flux_absorbed_true, y_pred, toa, 
-               delta_pressure, weight_profile)
+def loss_henry_full_wrapper(data, y_pred):
+    _, _, toa, delta_pressure, y_true, _ = data
+    loss = loss_henry_2(y_true, y_pred, toa, 
+               delta_pressure)
     return loss
 
 
-def train_loop(dataloader, model, optimizer, loss_function, weight_profile, device):
+def train_loop(dataloader, model, optimizer, loss_function, device):
     """ Generic training loop """
 
     torch.cuda.synchronize()
@@ -2129,7 +2066,7 @@ def train_loop(dataloader, model, optimizer, loss_function, weight_profile, devi
         y_pred = model(data)
         torch.cuda.synchronize()
         t_0 = time.time()
-        loss = loss_function(data, y_pred, weight_profile)
+        loss = loss_function(data, y_pred)
         torch.cuda.synchronize()
         t_01 = time.time()
         global t_loss
@@ -2164,7 +2101,7 @@ def train_loop(dataloader, model, optimizer, loss_function, weight_profile, devi
     global t_train
     t_train += t_2 - t_1
 
-def test_loop(dataloader, model, loss_functions, loss_names, weight_profile, device):
+def test_loop(dataloader, model, loss_functions, loss_names, device):
     """ Generic testing / evaluation loop """
     model.eval()
     num_batches = len(dataloader)
@@ -2176,7 +2113,7 @@ def test_loop(dataloader, model, loss_functions, loss_names, weight_profile, dev
             data = [x.to(device) for x in data]
             y_pred = model(data)
             for i, loss_fn in enumerate(loss_functions):
-                loss[i] += loss_fn(data, y_pred, weight_profile).item()
+                loss[i] += loss_fn(data, y_pred).item()
 
     loss /= num_batches
 
@@ -2216,8 +2153,6 @@ def train_direct_only():
 
     x_layers, y_true, x_toa, x_delta_pressure = load_data_direct_pytorch(filename_training, n_channel)
 
-    weight_profile = 1.0 / torch.mean(tensorize(y_true), dim=0, keepdim=True)
-
 
     train_dataset = torch.utils.data.TensorDataset(tensorize(x_layers), 
                                                    tensorize(y_true),
@@ -2255,8 +2190,8 @@ def train_direct_only():
         print(f"Epoch {t}\n-------------------------------")
         #with profiler.profile(with_stack=True, profile_memory=True) as prof:
         start.record()
-        train_loop(train_dataloader, model, optimizer, loss_ukkonen_direct_wrapper,weight_profile, device)
-        loss = test_loop(validation_dataloader, model, loss_functions, loss_names, weight_profile, device)
+        train_loop(train_dataloader, model, optimizer, loss_ukkonen_direct_wrapper,device)
+        loss = test_loop(validation_dataloader, model, loss_functions, loss_names, device)
         end.record()
         torch.cuda.synchronize()
         print(f" Elapsed time in seconds: {start.elapsed_time(end) / 1000.0}\n")
@@ -2272,184 +2207,6 @@ def train_direct_only():
 
     print("Done!")
     #print(prof.key_averages(group_by_stack_n=5).table(sort_by='self_cpu_time_total', row_limit=5))
-
-def get_weight_profile(y_flux,device):
-    rsd = torch.from_numpy(y_flux[:,:,1]).float().to(device)
-    rsu = torch.from_numpy(y_flux[:,:,2]).float().to(device)
-    flux = torch.concat((rsd,rsu),dim=1)
-    weight_profile = 1.0 / torch.mean(flux,dim=0,keepdim=True)
-    return weight_profile
-
-def get_weight_profile_2(device):
-    import xarray as xr
-    datadir     = "/data-T1/hws/tmp/"
-    filename_training = datadir + "/RADSCHEME_data_g224_CAMS_2009-2018_sans_2014-2015.2.nc"
-    dt = xr.open_dataset(filename_training)
-    rsd = dt['rsd'].data
-    rsu = dt['rsu'].data
-    shape = rsd.shape
-    rsd = np.reshape(rsd, (shape[0]*shape[1], shape[2]))
-    rsu = np.reshape(rsu, (shape[0]*shape[1], shape[2]))
-    toa = np.copy(rsd[:,0:1])
-    rsu = rsu / toa
-    rsd = rsd / toa
-    rsd = torch.from_numpy(rsd).float().to(device)
-    rsu = torch.from_numpy(rsu).float().to(device)
-    flux = torch.concat((rsd,rsu),dim=1)
-    #weight_profile = 1.0 / torch.mean(flux,dim=0,keepdim=True)
-    #weight_profile = 1.0 / torch.mean(flux,dim=(0,1),keepdim=True)
-    weight_profile = 3.0 / torch.mean(flux,dim=(0,1),keepdim=True)
-    dt.close()
-    return weight_profile
-
-def train_full():
-
-    print("Pytorch version:", torch.__version__)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using {device} device")
-
-    if torch.cuda.is_available():
-        print('__CUDNN VERSION:', torch.backends.cudnn.version())
-        print('__Number CUDA Devices:', torch.cuda.device_count())
-        print('__CUDA Device Name:',torch.cuda.get_device_name(0))
-        print('__CUDA Device Total Memory [GB]:',torch.cuda.get_device_properties(0).total_memory/1e9)
-        use_cuda = True
-    else:
-        use_cuda = False
-
-    datadir     = "/data-T1/hws/tmp/"
-    filename_training = datadir + "/RADSCHEME_data_g224_CAMS_2009-2018_sans_2014-2015.2.nc"
-    filename_validation = datadir + "/RADSCHEME_data_g224_CAMS_2014.2.nc"
-    filename_testing = datadir + "/RADSCHEME_data_g224_CAMS_2015_true_solar_angles.nc"
-    #filename_full_model = datadir + "/Full_Torch.3." # Uses Scattering_V2
-    filename_full_model = datadir + "/Full_Torch.4." # Uses Scattering_V3 and tau input
-    filename_full_model = datadir + "/Full_Torch.5." # Uses Scattering_V3 and tau input and extra layer
-    filename_full_model = datadir + "/Full_Torch.6." # Same as #5 with width of 8 and additional extra layer
-
-    batch_size = 2048
-    n_channel = 30
-    n_constituent = 8
-    checkpoint_period = 50
-    epochs = 4000
-    t_start = 0
-    t_warmup = 1
-    t = t_start
-
-    #dropout_schedule = (0.0, 0.21, 0.15, 0.1, 0.07, 0.0, 0.0) # 400
-    #dropout_epochs = (-1, 50, 200, 300, 400, 500, epochs + 1)
-
-    dropout_schedule = (0.0, 0.07, 0.1, 0.15, 0.2, 0.15, 0.1, 0.07, 0.0, 0.0) # 400
-    dropout_epochs =   (-1, 200,   300, 350,  400, 450,  550, 650, 750, epochs + 1)
-
-    # "/Full_Torch.4."
-    #dropout_schedule = (0.0, 0.07, 0.1, 0.15, 0.2, 0.15, 0.1, 0.07, 0.0, 0.0) # 400
-    #dropout_epochs =   (-1, 600,   700, 750,  800, 850,  950, 1050, 1150, epochs + 1)
-
-    dropout_index = next(i for i, x in enumerate(dropout_epochs) if t <= x) - 1
-    dropout_p = dropout_schedule[dropout_index]
-    last_dropout_index = dropout_index
-
-
-    model = FullNet(n_channel,n_constituent,dropout_p,device).to(device=device)
-    optimizer = torch.optim.Adam(model.parameters())
-
-    (x_layers, x_surface, x_toa, x_delta_pressure, 
-     y_flux, y_flux_absorbed) = load_data_full_pytorch_2(filename_training, 
-                                                         n_channel)
-
-    weight_profile = get_weight_profile(y_flux, device)
-
-    train_dataset = torch.utils.data.TensorDataset(tensorize(x_layers), 
-                                                   tensorize(x_surface), 
-                                                   tensorize(x_toa), 
-                                                   tensorize(x_delta_pressure), 
-                                                   tensorize(y_flux), 
-                                                   tensorize(y_flux_absorbed))
-
-
-    train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size, 
-                                                   shuffle=True,
-                                                   pin_memory=True,
-                                                        num_workers=1)
-
-    (x_layers, x_surface, x_toa, x_delta_pressure, 
-     y_flux, y_flux_absorbed) = load_data_full_pytorch_2(filename_validation, 
-                                                         n_channel)
-    
-    validation_dataset = torch.utils.data.TensorDataset(tensorize(x_layers),
-                                                        tensorize(x_surface), 
-                                                        tensorize(x_toa), 
-                                                        tensorize(x_delta_pressure), 
-                                                        tensorize(y_flux), 
-                                                        tensorize(y_flux_absorbed))
-
-    validation_dataloader = torch.utils.data.DataLoader(validation_dataset, 
-                                                        batch_size, 
-                                                        shuffle=False, 
-                                                        pin_memory=True,
-                                                        num_workers=1)
-    
-    #start = torch.cuda.Event(enable_timing=True)
-    #end = torch.cuda.Event(enable_timing=True)
-
-    loss_functions = (loss_henry_full_wrapper, loss_flux_full_wrapper_2, loss_heating_rate_full_wrapper,
-                      loss_heating_rate_direct_full_wrapper, loss_flux_full_wrapper,
-                      )
-    loss_names = ("Loss", "Flux Loss (weight profile)", "Heating Rate Loss", 
-                  "Direct Heating Rate Loss", 
-                    "Flux Loss (TOA weighting)")
-
-    if t > 0:
-        checkpoint = torch.load(filename_full_model + str(t))
-        print(f"Loaded Model: epoch = {t}")
-        model.load_state_dict(checkpoint['model_state_dict'])
-        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        #epoch = checkpoint['epoch']
-
-    print(f"       dropout = {dropout_p}")
-    while t < epochs:
-        t += 1
-
-        dropout_index = next(i for i, x in enumerate(dropout_epochs) if t <= x) - 1
-        if dropout_index != last_dropout_index:
-            last_dropout_index = dropout_index
-            dropout_p = dropout_schedule[dropout_index]
-            model.reset_dropout(dropout_p)
-        print(f"Epoch {t}\n-------------------------------")
-        print(f"Dropout: {dropout_p}")
-
-        if t < t_start + t_warmup:
-            train_loop(train_dataloader, model, optimizer, loss_henry_full_wrapper, weight_profile, device)
-
-            loss = test_loop(validation_dataloader, model, loss_functions, loss_names,weight_profile, device)
-        else:
-
-            #with profile(
-            #    activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-            #    with_stack=True, with_modules=True,
-            #) as prof:
-            #start.record()
-            train_loop(train_dataloader, model, optimizer, loss_henry_full_wrapper, weight_profile, device)
-
-            loss = test_loop(validation_dataloader, model, loss_functions, loss_names,weight_profile, device)
-
-            #if use_cuda: 
-                #torch.cuda.synchronize()
-            #end.record()
-
-            #print(f"\n Elapsed time in seconds: {start.elapsed_time(end) / 1000.0}\n")
-
-            #print(prof.key_averages(group_by_stack_n=6).table(sort_by='self_cpu_time_total', row_limit=15))
-        if t % checkpoint_period == 0:
-            torch.save({
-            'epoch': t,
-            'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            'loss': loss,
-            }, filename_full_model + str(t))
-            print(f' Wrote Model: epoch = {t}')
-
-    print("Done!")
 
 
 def train_full_dataloader():
@@ -2567,7 +2324,7 @@ def train_full_dataloader():
     # log_v14 
     # log_v14_results
 
-    filename_full_model = datadir + f"/Torch.Dataloader.v3_15." # scattering_v2_efficient
+    #filename_full_model = datadir + f"/Torch.Dataloader.v3_15." # scattering_v2_efficient
     # Same as v3_14 except uses standard loss and lr=0.001
     # to direct terms in henry_loss_2
     # log_v15-i.txt - initialization
@@ -2588,6 +2345,13 @@ def train_full_dataloader():
     # log_v17 
     # log_v17_results
 
+    filename_full_model = datadir + f"/Torch.Dataloader.v5_18." # scattering_v2_efficient
+    # Similiar to v15 except separates out direct and diffuse losses
+    # to direct terms in henry_loss_2
+    # log_v18-i.txt - initialization
+    # log_v18 
+    # log_v18_results
+
     is_initial_condition = False
     if is_initial_condition:
         checkpoint_period = 1
@@ -2601,7 +2365,7 @@ def train_full_dataloader():
         number_of_tries = 1
         
 
-        if False:
+        if True:
             #initial_model_n = 0  #4
             #initial_model_n = 5   #5
             #initial_model_n = 1   #6
@@ -2614,6 +2378,7 @@ def train_full_dataloader():
             #initial_model_n = 0   #14
             #initial_model_n = 2   #15
             initial_model_n = 2   #17
+            initial_model_n = 0   #18
             t_start = 1
             filename_full_model_input = f'{filename_full_model}i' + str(initial_model_n).zfill(2)
         else:
@@ -2693,8 +2458,6 @@ def train_full_dataloader():
         # v14 @ 65 lr = 0.001
         optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
-        weight_profile = get_weight_profile_2(device)
-
         train_dataset = RT_data_hws_2.RTDataSet(train_input_files,n_channel)
 
         train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size, 
@@ -2751,7 +2514,7 @@ def train_full_dataloader():
                 #    with_stack=True, with_modules=True,
                 #) as prof:
                 #start.record() loss_flux_full_wrapper
-                train_loop(train_dataloader, model, optimizer, loss_henry_full_wrapper, weight_profile, device)
+                train_loop(train_dataloader, model, optimizer, loss_henry_full_wrapper, device)
                 
                 if False:
                     print(f"Total Train time= {t_train}")
@@ -2764,7 +2527,7 @@ def train_full_dataloader():
                     print(f"Time for scattering = {t_direct_scattering}")
                     print(f"Time for split = {t_direct_split}")
 
-                loss = test_loop(validation_dataloader, model, loss_functions, loss_names,weight_profile, device)
+                loss = test_loop(validation_dataloader, model, loss_functions, loss_names, device)
 
                 #if use_cuda: 
                     #torch.cuda.synchronize()
@@ -2793,46 +2556,7 @@ def train_full_dataloader():
 
         print("Done!")
 
-def test_full():
 
-    print("Pytorch version:", torch.__version__)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using {device} device")
-
-    datadir     = "/data-T1/hws/tmp/"
-
-    filename_testing = datadir + "/RADSCHEME_data_g224_CAMS_2015_true_solar_angles.nc"
-    filename_full_model = datadir + "/Full_Torch.6."
-
-    batch_size = 2048
-    n_channel = 30
-    n_constituent = 8
-
-    (x_layers, x_surface, x_toa, x_delta_pressure, 
-     y_flux, y_flux_absorbed) = load_data_full_pytorch_2(filename_testing, n_channel)
-    weight_profile = get_weight_profile(y_flux, device)
-    test_dataset = torch.utils.data.TensorDataset(tensorize(x_layers), 
-                                                   tensorize(x_surface), 
-                                                   tensorize(x_toa), 
-                                                   tensorize(x_delta_pressure), 
-                                                   tensorize(y_flux), 
-                                                   tensorize(y_flux_absorbed))
-    test_dataloader = torch.utils.data.DataLoader(test_dataset, batch_size, shuffle=True)
-
-    model = FullNet(n_channel,n_constituent,dropout_p=0,device=device)
-    model = model.to(device=device)
-
-    loss_functions = (loss_henry_full_wrapper, loss_heating_rate_full_wrapper,
-                      loss_heating_rate_direct_full_wrapper, loss_flux_full_wrapper)
-    loss_names = ("Loss", "Heating Rate Loss", "Direct Heating Rate Loss", "Flux Loss")
-
-    for t in range(2650,5000,50):
-
-        checkpoint = torch.load(filename_full_model + str(t))
-        print(f"Loaded Model: epoch = {t}")
-        model.load_state_dict(checkpoint['model_state_dict'])
-
-        loss = test_loop (test_dataloader, model, loss_functions, loss_names, weight_profile, device)
 
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -2922,7 +2646,6 @@ def test_full_dataloader():
         #test_input_files = ["/data-T1/hws/tmp/RADSCHEME_data_g224_CAMS_2015_true_solar_angles.2.nc"]
 
 
-        weight_profile = get_weight_profile_2(device)
         test_dataset = RT_data_hws_2.RTDataSet(test_input_files,n_channel)
 
         test_dataloader = torch.utils.data.DataLoader(test_dataset, batch_size, 
@@ -2951,7 +2674,7 @@ def test_full_dataloader():
             print(f"Total number of parameters = {n_parameters}", flush=True)
             #print(f"Spectral decomposition weights = {model.spectral_net.weight}", flush=True)
 
-            loss = test_loop (test_dataloader, model, loss_functions, loss_names, weight_profile, device)
+            loss = test_loop (test_dataloader, model, loss_functions, loss_names, device)
     
 
 if __name__ == "__main__":
@@ -2964,5 +2687,5 @@ if __name__ == "__main__":
     #global t_direct_split = 0.0
     #t_scattering_v2_tau = 0.0
     
-    #train_full_dataloader()
-    test_full_dataloader()
+    train_full_dataloader()
+    #test_full_dataloader()
