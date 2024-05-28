@@ -1699,14 +1699,13 @@ class Propagation(nn.Module):
         flux_down_diffuse = [flux_diffuse]
         flux_up_diffuse = [flux_direct * upward_reflection_toa]
 
-        flux_absorbed_direct = []
-        flux_absorbed_diffuse = []
+        flux_absorbed = []
+
 
         # Propagate downwards through the atmospheric layers
         for i in range(t_direct.shape[1]):
 
-            flux_absorbed_direct.append(flux_direct * a_layer_multi_direct[:,i])  
-            flux_absorbed_diffuse.append(flux_diffuse * a_layer_multi_diffuse[:,i])
+            flux_absorbed.append(flux_direct * a_layer_multi_direct[:,i] + flux_diffuse * a_layer_multi_diffuse[:,i])
 
             # Will want this later when incorporate surface interactions
             #flux_absorbed_surface = flux_direct * a_surface_multi_direct + \
@@ -1728,18 +1727,17 @@ class Propagation(nn.Module):
         flux_down_direct = torch.stack(flux_down_direct,dim=1)
         flux_down_diffuse = torch.stack(flux_down_diffuse,dim=1)
         flux_up_diffuse = torch.stack(flux_up_diffuse,dim=1)
-        flux_absorbed_direct = torch.stack(flux_absorbed_direct,dim=1)
-        flux_absorbed_diffuse = torch.stack(flux_absorbed_diffuse,dim=1)
-
+        flux_absorbed = torch.stack(flux_absorbed,dim=1)
+  
         # Sum across channels
         flux_down_direct = torch.sum(flux_down_direct,dim=2,keepdim=False)
         flux_down_diffuse = torch.sum(flux_down_diffuse,dim=2,keepdim=False)      
         flux_up_diffuse = torch.sum(flux_up_diffuse,dim=2,keepdim=False)  
-        flux_absorbed_direct = torch.sum(flux_absorbed_direct,dim=2,keepdim=False)  
-        flux_absorbed_diffuse = torch.sum(flux_absorbed_diffuse,dim=2,keepdim=False)  
+        flux_absorbed = torch.sum(flux_absorbed,dim=2,keepdim=False)  
+
 
         return [flux_down_direct, flux_down_diffuse, flux_up_diffuse, 
-                flux_absorbed_direct, flux_absorbed_diffuse]
+                flux_absorbed]
 
 class DownwardPropagationDirect(nn.Module):
     """    
@@ -1921,14 +1919,13 @@ class FullNet(nn.Module):
                                     input_flux))
 
         (flux_down_direct, flux_down_diffuse, flux_up_diffuse, 
-        flux_absorbed_direct, flux_absorbed_diffuse) = flux
+        flux_absorbed) = flux
         
         torch.cuda.synchronize()
         t_1 = time.time()
         global t_total
         t_total += t_1 - t_0
-        return [flux_down_direct, flux_down_diffuse, flux_up_diffuse, flux_absorbed_direct,
-                flux_absorbed_diffuse]
+        return [flux_down_direct, flux_down_diffuse, flux_up_diffuse, flux_absorbed]
 
 def loss_weighted(y_true, y_pred, weight_profile):
     error = torch.sqrt(torch.mean(torch.square(weight_profile * (y_pred - y_true)), 
@@ -1951,7 +1948,7 @@ def loss_heating_rate_direct_wrapper(data, y_pred, weight_profile):
 
 def loss_heating_rate_direct_full_wrapper(data, y_pred):
     _, _, toa, delta_pressure, y_true, _ = data
-    flux_down_direct_pred, _, _, _, _ = y_pred
+    flux_down_direct_pred, _, _, _ = y_pred
     flux_down_direct_true = y_true[:,:,0]
     loss = loss_heating_rate_direct(flux_down_direct_true, 
                                     flux_down_direct_pred, 
@@ -1971,8 +1968,8 @@ def loss_heating_rate_full(flux_absorbed_true, flux_absorbed_pred,
 
 def loss_heating_rate_full_wrapper(data, y_pred):
     _, _, toa, delta_pressure, _, flux_absorbed_true = data
-    _, _, _, flux_absorbed_direct_pred, flux_absorbed_diffuse_pred = y_pred
-    flux_absorbed_pred = flux_absorbed_direct_pred + flux_absorbed_diffuse_pred
+    _, _, _, flux_absorbed_pred = y_pred
+
     loss = loss_heating_rate_full(flux_absorbed_true, flux_absorbed_pred, 
                                   toa, delta_pressure)
     return loss
@@ -1988,7 +1985,7 @@ def loss_flux_full_wrapper(data, y_pred):
     flux_down_true, flux_up_true = y_true[:,:,1], y_true[:,:,2]
 
     (flux_down_direct_pred, flux_down_diffuse_pred, 
-     flux_up_diffuse_pred, _, _) = y_pred
+     flux_up_diffuse_pred, _) = y_pred
 
     flux_down_pred = flux_down_direct_pred + flux_down_diffuse_pred
     flux_up_pred = flux_up_diffuse_pred
@@ -2000,21 +1997,74 @@ def loss_flux_full_wrapper(data, y_pred):
 
 def loss_flux_direct_wrapper_2(data, y_pred):
     _, _, toa, _, y_true, _ = data
-    flux_down_direct_pred, _, _, _, _ = y_pred
+    flux_down_direct_pred, _, _, _ = y_pred
     flux_down_direct_true = y_true[:,:,0]
     
     loss = loss_weighted(flux_down_direct_true, flux_down_direct_pred, toa)
     return loss
 
+def loss_heating_rate_diffuse(y_true, y_pred, toa_weighting_profile, 
+               delta_pressure):
+    # Handles flux using TOA weight rather than weight profile
+    
+    (flux_down_direct_pred, flux_down_diffuse_pred, 
+     flux_up_diffuse_pred, flux_absorbed_pred) = y_pred
+    
+    (flux_down_direct_true, flux_down_true, 
+     flux_up_diffuse_true) = (y_true[:,:,0], y_true[:,:,1], y_true[:,:,2])
+    flux_down_diffuse_true = flux_down_true - flux_down_direct_true
 
+
+    flux_absorbed_diffuse_true = (flux_down_diffuse_true[:,:-1] -
+                             flux_down_diffuse_true[:,1:] + 
+                             flux_up_diffuse_true[:,1:] -
+                             flux_up_diffuse_true[:,:-1])
+
+    flux_absorbed_diffuse_pred = (flux_down_diffuse_pred[:,:-1] -
+                             flux_down_diffuse_pred[:,1:] + 
+                             flux_up_diffuse_pred[:,1:] -
+                            flux_up_diffuse_pred[:,:-1])                        
+                         
+                         
+    hr_diffuse_loss = loss_heating_rate_full(flux_absorbed_diffuse_true, 
+                                             flux_absorbed_diffuse_pred,toa_weighting_profile, delta_pressure)
+
+    return hr_diffuse_loss
+
+def loss_heating_rate_diffuse_wrapper(data, y_pred):
+    _, _, toa, delta_pressure, y_true, _ = data
+    loss = loss_heating_rate_diffuse(y_true, y_pred, toa, 
+               delta_pressure)
+    return loss
+
+def loss_flux_diffuse(y_true, y_pred, toa_weighting_profile):
+    # Handles flux using TOA weight rather than weight profile
+    
+    (_, flux_down_diffuse_pred, 
+     flux_up_diffuse_pred, _) = y_pred
+    
+    (flux_down_direct_true, flux_down_true, 
+     flux_up_diffuse_true) = (y_true[:,:,0], y_true[:,:,1], y_true[:,:,2])
+    flux_down_diffuse_true = flux_down_true - flux_down_direct_true
+    
+    flux_diffuse_pred = torch.concat((flux_down_diffuse_pred,flux_up_diffuse_pred),dim=1)
+    flux_diffuse_true = torch.concat((flux_down_diffuse_true,flux_up_diffuse_true),dim=1)
+
+    flux_diffuse_loss = loss_weighted(flux_diffuse_true, flux_diffuse_pred, toa_weighting_profile)
+
+    return flux_diffuse_loss
+
+def loss_flux_diffuse_wrapper(data, y_pred):
+    _, _, toa, _, y_true, _ = data
+    loss = loss_flux_diffuse(y_true, y_pred, toa)
+    return loss
 
 def loss_henry_2(y_true, y_pred, toa_weighting_profile, 
                delta_pressure):
     # Handles flux using TOA weight rather than weight profile
     
     (flux_down_direct_pred, flux_down_diffuse_pred, 
-     flux_up_diffuse_pred, flux_absorbed_direct_pred,
-     flux_absorbed_diffuse_pred) = y_pred
+     flux_up_diffuse_pred, flux_absorbed_pred) = y_pred
     
     (flux_down_direct_true, flux_down_true, 
      flux_up_diffuse_true) = (y_true[:,:,0], y_true[:,:,1], y_true[:,:,2])
@@ -2030,6 +2080,12 @@ def loss_henry_2(y_true, y_pred, toa_weighting_profile,
                              flux_down_diffuse_true[:,1:] + 
                              flux_up_diffuse_true[:,1:] -
                              flux_up_diffuse_true[:,:-1])
+
+
+    flux_absorbed_diffuse_pred = (flux_down_diffuse_pred[:,:-1] -
+                             flux_down_diffuse_pred[:,1:] + 
+                             flux_up_diffuse_pred[:,1:] -
+                            flux_up_diffuse_pred[:,:-1])                        
                          
     hr_diffuse_loss = loss_heating_rate_full(flux_absorbed_diffuse_true, 
                                              flux_absorbed_diffuse_pred,toa_weighting_profile, delta_pressure)
@@ -2039,9 +2095,16 @@ def loss_henry_2(y_true, y_pred, toa_weighting_profile,
         toa_weighting_profile, delta_pressure)
 
     if True:
-        # v18
-        hr_weight   = 0.3
-        direct_weight = 3.0
+        # v18 0-145
+        # v19 0-195
+        #hr_weight   = 0.3
+        #direct_weight = 3.0
+        # v19 195-
+        #hr_weight   = 0.37
+        #direct_weight = 1.5
+        # v19 400-
+        hr_weight   = 0.5
+        direct_weight = 1.0
         return (1.0 / (1.0 + direct_weight)) * (hr_weight * 
                          (hr_diffuse_loss + direct_weight * hr_direct_loss) + (1.0 - hr_weight) * (flux_diffuse_loss + direct_weight * flux_direct_loss))
 
@@ -2345,12 +2408,15 @@ def train_full_dataloader():
     # log_v17 
     # log_v17_results
 
-    filename_full_model = datadir + f"/Torch.Dataloader.v5_18." # scattering_v2_efficient
+    #filename_full_model = datadir + f"/Torch.Dataloader.v5_18." # scattering_v2_efficient
     # Similiar to v15 except separates out direct and diffuse losses
     # to direct terms in henry_loss_2
     # log_v18-i.txt - initialization
     # log_v18 
     # log_v18_results
+
+    filename_full_model = datadir + f"/Torch.Dataloader.v5_19." # scattering_v2_efficient
+    # Similiar to v18 except uses differences for computing flux_absorbed_diffuse_pred
 
     is_initial_condition = False
     if is_initial_condition:
@@ -2365,7 +2431,7 @@ def train_full_dataloader():
         number_of_tries = 1
         
 
-        if True:
+        if False:
             #initial_model_n = 0  #4
             #initial_model_n = 5   #5
             #initial_model_n = 1   #6
@@ -2377,8 +2443,9 @@ def train_full_dataloader():
             #initial_model_n = 3   #13
             #initial_model_n = 0   #14
             #initial_model_n = 2   #15
-            initial_model_n = 2   #17
-            initial_model_n = 0   #18
+            #initial_model_n = 2   #17
+            #initial_model_n = 0   #18
+            initial_model_n = 0   #19
             t_start = 1
             filename_full_model_input = f'{filename_full_model}i' + str(initial_model_n).zfill(2)
         else:
@@ -2407,10 +2474,14 @@ def train_full_dataloader():
         #dropout_epochs =   (-1, 40,   60, 70,  80, 90,  110, 130, 150, epochs + 1) #v6
 
 
-        #dropout_epochs =   (-1, 65, 85, 95,  105, 115,  135, 140, 145, epochs + 1) #v7
+        #v7-v15
+        #dropout_epochs =   (-1, 65, 85, 95,  105, 115,  135, 140, 145, epochs + 1) 
 
         # changed 65 to 40 for v17
-        dropout_epochs =   (-1, 40, 85, 95,  105, 115,  120, 125, 130, epochs + 1)
+        #dropout_epochs =   (-1, 40, 85, 95,  105, 115,  120, 125, 130, epochs + 1)
+
+        # changes for v18
+        dropout_epochs =   (-1, 40, 60, 70,  80, 90,  95, 100, 105, epochs + 1)
 
         # Used for v11
         #dropout_epochs =   (-1, 65, 85, epochs + 1)
@@ -2456,7 +2527,8 @@ def train_full_dataloader():
         # v12 @ 200 lr= 0.016
         # v13 @ 1 lr=0.002
         # v14 @ 65 lr = 0.001
-        optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+        # v19 0-250 lr=0.001, 250+ lr=0.00038
+        optimizer = torch.optim.Adam(model.parameters(), lr=0.00038)
 
         train_dataset = RT_data_hws_2.RTDataSet(train_input_files,n_channel)
 
@@ -2480,11 +2552,13 @@ def train_full_dataloader():
                     #"Direct Heating Rate Loss", "Flux Loss (TOA weighting)")
                         
 
-        loss_functions = (loss_henry_full_wrapper, loss_flux_full_wrapper, loss_flux_direct_wrapper_2, loss_heating_rate_full_wrapper,
+        loss_functions = (loss_henry_full_wrapper, loss_flux_full_wrapper, loss_flux_direct_wrapper_2, 
+                          loss_flux_diffuse_wrapper, loss_heating_rate_full_wrapper,
                         loss_heating_rate_direct_full_wrapper, 
+                        loss_heating_rate_diffuse_wrapper,
                         )
-        loss_names = ("Loss", "Flux Loss", "Flux Loss Direct", "Heating Rate Loss", 
-                    "Heating Rate Loss Direct", 
+        loss_names = ("Loss", "Flux Loss", "Flux Loss Direct", "Flux Loss Diffuse", "Heating Rate Loss", 
+                    "Heating Rate Loss Direct", "Heating Rate Loss Diffuse"
                         )
 
         if t > 0:
@@ -2621,7 +2695,7 @@ def test_full_dataloader():
     # log_v11 
     # log_v11_results
 
-    filename_full_model = datadir + f"/Torch.Dataloader.v3_15." # scattering_v2_efficient
+    #filename_full_model = datadir + f"/Torch.Dataloader.v3_15." # scattering_v2_efficient
     # Same as v3_14 except uses standard loss and lr=0.001
     # to direct terms in henry_loss_2
     # log_v15-i.txt - initialization
@@ -2636,8 +2710,13 @@ def test_full_dataloader():
     # log_v17 
     # log_v17_results
 
-    #years = ("2009", "2015", "2020")
-    years = ("2020", )
+
+    filename_full_model = datadir + f"/Torch.Dataloader.v5_19." # scattering_v2_efficient
+    # Similiar to v18 except uses differences for computing flux_absorbed_diffuse_pred
+
+
+    years = ("2009", "2015", "2020")
+    #years = ("2020", )
 
     for year in years:
         test_input_dir = f"/data-T1/hws/CAMS/processed_data/testing/{year}/"
@@ -2657,15 +2736,19 @@ def test_full_dataloader():
         #                loss_heating_rate_direct_full_wrapper, loss_flux_full_wrapper)
         #loss_names = ("Loss", "Heating Rate Loss", "Direct Heating Rate Loss", "Flux Loss")
 
-        loss_functions = (loss_henry_full_wrapper, loss_flux_full_wrapper, loss_flux_direct_wrapper_2, loss_heating_rate_full_wrapper,
+
+
+        loss_functions = (loss_henry_full_wrapper, loss_flux_full_wrapper, loss_flux_direct_wrapper_2, 
+                          loss_flux_diffuse_wrapper, loss_heating_rate_full_wrapper,
                         loss_heating_rate_direct_full_wrapper, 
+                        loss_heating_rate_diffuse_wrapper,
                         )
-        loss_names = ("Loss", "Flux Loss", "Flux Loss Direct", "Heating Rate Loss", 
-                    "Heating Rate Loss Direct", 
+        loss_names = ("Loss", "Flux Loss", "Flux Loss Direct", "Flux Loss Diffuse", "Heating Rate Loss", 
+                    "Heating Rate Loss Direct", "Heating Rate Loss Diffuse"
                         )
 
         print(f"Testing error, Year = {year}")
-        for t in range(400,480,5):
+        for t in range(300,505,5):
 
             checkpoint = torch.load(filename_full_model + str(t), map_location=torch.device(device))
             print(f"Loaded Model: epoch = {t}")
@@ -2687,5 +2770,5 @@ if __name__ == "__main__":
     #global t_direct_split = 0.0
     #t_scattering_v2_tau = 0.0
     
-    train_full_dataloader()
-    #test_full_dataloader()
+    #train_full_dataloader()
+    test_full_dataloader()
