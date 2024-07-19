@@ -13,6 +13,12 @@
 # loss separates direct and diffuse components
 # also eliminated some unused functions
 
+# Same as RT_torch_12.v5 (skips RT_torch_12.v6) except uses drop out 
+# on extinction "effective mass" weights
+
+# Same as RT_torch_12.v5 (skips RT_torch_12.v6, v7) except uses exp
+# on inputs to scattering
+
 import numpy as np
 import time
 from typing import List
@@ -90,8 +96,8 @@ class MLP(nn.Module):
 
         for hidden in self.hidden:
             x = hidden(x)
-            x = F.dropout(x,p=self.dropout_p,training=self.training)
             x = F.relu(x)
+            x = F.dropout(x,p=self.dropout_p,training=self.training)
         return self.output(x)
 
 class BD(nn.Module):
@@ -174,141 +180,23 @@ class BD(nn.Module):
 
         if self.bias:
             x = x @ self.input_weight + self.input_bias
-            x = F.dropout(x,p=self.dropout_p,training=self.training)
             x = F.relu(x)
+            x = F.dropout(x,p=self.dropout_p,training=self.training)
             for i, weight in enumerate(self.weights):
                 x = x @ (self.filter * weight) + self.biases[i]
-                x = F.dropout(x,p=self.dropout_p,training=self.training)
                 x = F.relu(x)
+                x = F.dropout(x,p=self.dropout_p,training=self.training)
             x = x @ (self.output_filter * self.output_weights) + self.output_bias
         else:
             x = x @ self.input_weight
-            x = F.dropout(x,p=self.dropout_p,training=self.training)
             x = F.relu(x)
+            x = F.dropout(x,p=self.dropout_p,training=self.training)
             for weight in self.weights:
                 x = x @ (self.filter * weight)
-                x = F.dropout(x,p=self.dropout_p,training=self.training)
                 x = F.relu(x)
+                x = F.dropout(x,p=self.dropout_p,training=self.training)
             x = x @ (self.output_filter * self.output_weights)
         return x
-
-
-class ParallelNet(nn.Module):
-    """
-
-    """
-
-    def __init__(self, n_input, n_hidden: List[int], n_channel, n_output, dropout_p, device, 
-                bias=True):
-        super(ParallelNet, self).__init__()
-        self.n_hidden = n_hidden
-        self.n_channel = n_channel
-        self.n_outputs = n_output
-
-        self.hidden = nn.ModuleList()
-
-        self.input_net = nn.Linear(n_input,n_hidden[0] * self.n_channel,
-        bias=bias, device=device)
-        n_last = n_hidden[0]
-        for n in n_hidden[1:]:
-            mod = nn.Conv1d(in_channels=n_channel,
-                            out_channels=n * n_channel, 
-                            kernel_size=n_last,
-                            groups=n_channel,
-                            bias=bias,device=device)
-            torch.nn.init.uniform_(mod.weight, a=0.0, b=1.0)
-            # Bias initialized to ~1.0
-            # Because of ReLU activation, don't want any connections to
-            # be prematurely pruned away by becoming negative.
-            # Therefore start with a significant positive bias
-            if bias:
-                torch.nn.init.uniform_(mod.bias, a=0.9, b=1.1) #a=-0.1, b=0.1)
-            self.hidden.append(mod)
-            n_last = n
-        mod = nn.Conv1d(in_channels=n_channel,
-                        out_channels=n_output * n_channel, 
-                        kernel_size=n_last,
-                        groups=n_channel,
-                        bias=bias,device=device)
-        torch.nn.init.uniform_(mod.weight, a=0.0, b=1.0)
-        # Bias initialized to ~1.0
-        # Because of ReLU activation, don't want any connections to
-        # be prematurely pruned away by becoming negative.
-        # Therefore start with a significant positive bias
-        if bias:
-            torch.nn.init.uniform_(mod.bias, a=0.9, b=1.1) #a=-0.1, b=0.1)
-        self.hidden.append(mod)
-        self.n_hidden.append(n_output)
-
-        self.dropout_p = dropout_p
-
-    def reset_dropout(self,dropout_p):
-        self.dropout_p = dropout_p
-
-    @torch.compile
-    def forward(self, x):
-        #x = x.to(memory_format=torch.channels_last)
-        x = self.input_net(x)
-        shape = x.shape
-        n=1
-        for k in shape[:-1]:
-            n = n * k
-        for i, hidden in enumerate(self.hidden):
-            x = torch.reshape(x,(n,self.n_channel,self.n_hidden[i]))
-            x = hidden(x)
-            x = F.dropout(x,p=self.dropout_p,training=self.training)
-            x = F.relu(x)
-        x = torch.reshape(x,(*shape[:-1],self.n_channel,self.n_hidden[-1]))
-        return x
-
-
-class ParallelNet2(nn.Module):
-    """
-    Uses batch matrix multipies
-
-    """
-
-    def __init__(self, n_input, n_hidden: List[int], n_channel, n_output, dropout_p, device, 
-                bias=True):
-        super(ParallelNet2, self).__init__()
-        n_hidden.append(n_output)
-        self.n_hidden = n_hidden
-        self.n_channel = n_channel
-
-        w = []
-
-        self.input_net = nn.Linear(n_input,n_hidden[0] * self.n_channel,
-        bias=bias, device=device)
-        n_last = n_hidden[0]
-        for n in n_hidden[1:]:
-
-            tmp =torch.zeros((self.n_channel, n_last, n), device=device,
-                             requires_grad =True)
-            torch.nn.init.uniform_(tmp, 0.1, 0.9)
-            w.append(tmp)
-
-            n_last = n
-        self.dropout_p = dropout_p
-        self.weight = torch.nn.ParameterList(w)
-
-    def reset_dropout(self,dropout_p):
-        self.dropout_p = dropout_p
-
-    @torch.compile
-    def forward(self, x):
-
-        x = self.input_net(x)
-        shape = x.shape
-
-        x = torch.reshape(x,(*shape[:-1],self.n_channel,1,self.n_hidden[0]))
-        for w in self.weight:
-            x = torch.matmul(x,w)
-            x = F.dropout(x,p=self.dropout_p,training=self.training)
-            x = F.relu(x)
-
-        x = torch.squeeze(x,-2)
-        return x
-
 
 class LayerDistributed(nn.Module):
     """
@@ -387,6 +275,7 @@ class Extinction(nn.Module):
         super(Extinction, self).__init__()
         self.n_channel = n_channel
         self.device = device
+        self.dropout_p = dropout_p
 
         # Computes a scalar extinction coeffient for each constituent 
         # for each channel
@@ -500,6 +389,7 @@ class Extinction(nn.Module):
         print(f"Extinction trainable weights = {n_weights}")
 
     def reset_dropout(self,dropout_p):
+        self.dropout_p = dropout_p
         self.net_ke_h2o.reset_dropout(dropout_p)
         self.net_ke_o3.reset_dropout(dropout_p)
         self.net_ke_co2.reset_dropout(dropout_p)
@@ -508,11 +398,15 @@ class Extinction(nn.Module):
         self.net_ke_ch4.reset_dropout(dropout_p)
 
     def forward(self, x):
+
         temperature_pressure_log_pressure, constituents = x
 
         c = constituents
         t_p = temperature_pressure_log_pressure[:,:2]  #Removing ln-P
 
+        #def d(value):
+        #    return F.dropout(value,p=self.dropout_p,training=self.training)
+        
         a = torch.exp
         b = torch.sigmoid
 
@@ -521,8 +415,8 @@ class Extinction(nn.Module):
         tau_iw  = a(self.net_iw (one)) * (c[:,1:2])
         tau_h2o = a(self.net_h2o(one)) * (c[:,2:3]) * (self.filter_h2o * 
                                                        b(self.net_ke_h2o(t_p)))
-        tau_o3  = a(self.net_o3 (one)) * (c[:,3:4]) * (self.filter_o3  * 
-                                                       b(self.net_ke_o3 (t_p)))
+        tau_o3  = a(self.net_o3 (one)) * (c[:,3:4] * (self.filter_o3  * 
+                                                       b(self.net_ke_o3 (t_p))))
         tau_co2 = a(self.net_co2(one)) * (c[:,4:5]) * (self.filter_co2 * 
                                                        b(self.net_ke_co2(t_p)))
         tau_u   = a(self.net_u  (one)) * (c[:,5:6]) * (self.filter_u * 
@@ -546,133 +440,6 @@ class Extinction(nn.Module):
 
         return tau
 
-class Extinction_Efficient(nn.Module):
-    """ 
-    Generates optical depth for each atmospheric 
-    constituent for each channel for the given layer.
-    
-    Learns the mass extinction coefficients and the dependence 
-    of these coefficients on temperature and pressure.
-
-    Hard-codes the multiplication of each mass
-    extinction coefficient by the consistuent's mass
-
-    Inputs:
-        Mass of each atmospheric constituent
-        Temperature, pressure, and log_pressure
-
-    Outputs
-        Optical depth of each constituent in each channel
-    """
-    def __init__(self, n_channel, dropout_p, device):
-        super(Extinction_Efficient, self).__init__()
-        self.n_channel = n_channel
-        self.device = device
-        self.n_constituent = 8
-
-        weight_values = torch.rand((self.n_channel,self.n_constituent),
-                                   requires_grad=True,device=device,
-                                   dtype=torch.float32,)
-        
-        self.weights = nn.parameter.Parameter(weight_values, requires_grad=True)
-
-        self.net_ke = MLP(n_input=2,n_hidden=(6,7,7,6),
-                          n_output=self.n_constituent,
-                          dropout_p=dropout_p,
-                          device=device)
-
-        # Filters select which channels each constituent contributes to
-        # Follows similiar assignment of bands as
-        # Table A2 in Pincus, R., Mlawer, E. J., &
-        # Delamere, J. S. (2019). Balancing accuracy, efficiency, and 
-        # flexibility in radiation calculations for dynamical models. Journal 
-        # of Advances in Modeling Earth Systems, 11,3074–3089. 
-        # https://doi.org/10.1029/2019MS001621
-
-        filter_none = torch.tensor([1,1,1,1,1, 1,1,1,1,1, 1,1,1,1,],
-                                       dtype=torch.float32,device=device)
-
-        filter_none = torch.stack([filter_none, filter_none, filter_none])
-
-        filter_h2o = torch.tensor([1,1,1,1,1, 1,1,1,1,1, 1,1,1,1,],
-                                       dtype=torch.float32,device=device)
-        
-        filter_h2o = torch.stack([filter_h2o, filter_h2o, filter_h2o])
-
-        filter_o3 = torch.tensor([1,0,0,0,0, 0,0,0,1,1, 1,0,1,1,],
-                                       dtype=torch.float32,device=device)
-
-        filter_o3 = torch.stack([filter_o3, filter_o3, filter_o3])
-
-        filter_co2 = torch.tensor([1,0,1,0,1, 0,1,0,0,0, 0,0,0,0,],
-                                       dtype=torch.float32,device=device)
-        
-        filter_co2 = torch.stack([filter_co2, filter_co2, filter_co2])
-        
-
-        filter_u  = torch.tensor([1,0,0,0,0, 0,0,1,1,1, 1,1,0,1],
-                                       dtype=torch.float32,device=device)
-        
-        filter_u = torch.stack([filter_u, filter_u, filter_u])
-
-        filter_n2o = torch.tensor([1,0,0,0,0, 0,0,0,0,0, 0,0,0,0],
-                                       dtype=torch.float32,device=device)
-
-        filter_n2o = torch.stack([filter_n2o, filter_n2o, filter_n2o])
-        
-        filter_ch4 = torch.tensor([1,1,0,1,0, 1,0,0,0,0, 0,0,0,0,],
-                                       dtype=torch.float32,device=device)
-        
-        filter_ch4 = torch.stack([filter_ch4, filter_ch4, filter_ch4])
-
-        filter_none = filter_none.transpose(1,0).flatten()
-
-        filter_h2o = filter_h2o.transpose(1,0).flatten()
-
-        filter_o3 = filter_o3.transpose(1,0).flatten()
-
-        #print(f'filter_o3 = {self.filter_o3}')
-
-        filter_co2 = filter_co2.transpose(1,0).flatten()
-        
-        filter_u  = filter_u.transpose(1,0).flatten()
-
-        filter_n2o = filter_n2o.transpose(1,0).flatten()
-        
-        filter_ch4 = filter_ch4.transpose(1,0).flatten()
-
-        filter_transpose = torch.stack([filter_none, 
-                                        filter_none,
-                                        filter_h2o,
-                                        filter_o3,
-                                        filter_co2,
-                                        filter_u,
-                                        filter_n2o,
-                                        filter_ch4,]
-                                        )
-
-        self.filter = filter_transpose.transpose(1,0)
-
-
-
-    def reset_dropout(self,dropout_p):
-        self.net_ke.reset_dropout(dropout_p)
-
-
-    def forward(self, x):
-        temperature_pressure_log_pressure, constituents = x
-
-        c = torch.unsqueeze(constituents,dim=1)
-        t_p = temperature_pressure_log_pressure[:,:2]  #Removing ln-P
-
-        a = torch.exp
-        b = torch.sigmoid
-
-        tmp = torch.unsqueeze(self.net_ke(t_p), 1)
-
-        tau = self.filter * a(self.weights) * c * b(tmp)
-
-        return tau
     
 class DirectTransmission(nn.Module):
     """ Only Computes Direct Transmission Coefficient """
@@ -787,83 +554,6 @@ class Scattering_v1(nn.Module):
         return layers
     
 
-class Scattering_v1_tau(nn.Module):
-    """ 
-    Same as V1 except instead of using the constituents uses
-    tau's of constituents
-    Inputs: tau's of lwp, iwp, o3,co2,n2o,ch4, h2o, u
-
-    """
-
-    def __init__(self, n_channel, n_constituent, dropout_p, device):
-
-        super(Scattering_v1_tau, self).__init__()
-        self.n_channel = n_channel
-
-        n_input = n_constituent #5
-
-        n_hidden = [5, 4, 4]
-        # For direct input
-        # Has additional input for zenith angle ('mu_direct')
-        self.net_direct = nn.ModuleList(
-            [MLP(n_input=n_input + 1,
-                 n_hidden=n_hidden,
-                 n_output=3,
-                 dropout_p=dropout_p,
-                 device=device,
-                 lower=-1.0,upper=1.0) 
-             for _ in range(self.n_channel)])
-        # For diffuse input
-        self.net_diffuse = nn.ModuleList(
-            [MLP(n_input=n_input, 
-                 n_hidden=n_hidden, 
-                 n_output=3,
-                dropout_p=dropout_p,
-                 device=device, 
-                 lower=-1.0,upper=1.0) 
-             for _ in range(self.n_channel)])
-
-    def reset_dropout(self,dropout_p):
-        for net in self.net_direct:
-            net.reset_dropout(dropout_p)
-        for net in self.net_diffuse:
-            net.reset_dropout(dropout_p)
-
-    def forward(self, x):
-        tau, mu_direct, mu_diffuse, _ = x
-
-        #print(f"tau.shape = {tau.shape}")
-        tau_total = torch.sum(tau, dim=2, keepdims=False)
-
-        t_direct = torch.exp(-tau_total / (mu_direct + eps_1))
-        t_diffuse = torch.exp(-tau_total / (mu_diffuse + eps_1))
-
-        mu_direct = torch.unsqueeze(mu_direct,dim=1)
-        tau_direct = tau / (mu_direct + eps_1)
-
-        mu_direct = mu_direct.repeat(1,self.n_channel,1)
-
-        #print(f"tau_direct.shape = {tau_direct.shape}")
-        direct = torch.concat((tau_direct, mu_direct),
-                                           dim=2)
-
-        
-        e_split_direct = [F.softmax(net(direct[:,i,:]),dim=-1) for i, net 
-                          in enumerate(self.net_direct)]
-
-        #print(f"len of e_split_direct = {len(e_split_direct)}")
-        #print(f"shape of e_split_direct[0] = {e_split_direct[0].shape}", flush=True)
-
-        e_split_diffuse = [F.softmax(net(tau[:,i,:]),dim=-1) for i, net 
-                           in enumerate(self.net_diffuse)]
-
-        e_split_direct = torch.stack(e_split_direct, dim=1)
-        e_split_diffuse = torch.stack(e_split_diffuse, dim=1)
-
-        layers = [t_direct, t_diffuse, 
-                  e_split_direct, e_split_diffuse]
-
-        return layers
 
 
 class Scattering_v2_tau(nn.Module):
@@ -1133,7 +823,11 @@ class Scattering_v2_tau_efficient(nn.Module):
         t_diffuse = torch.exp(-tau_total / (mu_diffuse + eps_1))
 
         mu_direct = torch.unsqueeze(mu_direct,dim=1)
-        tau_direct = tau / (mu_direct + eps_1)
+        
+        ## new exp(-tau) in v.8
+        tau_direct = torch.exp(-tau / (mu_direct + eps_1))
+        tau_diffuse = torch.exp(-tau)
+        ##
 
         mu_direct = mu_direct.repeat(1,self.n_channel,1)
 
@@ -1169,7 +863,7 @@ class Scattering_v2_tau_efficient(nn.Module):
         #print(f"len of e_split_direct = {len(e_split_direct)}")
         #print(f"shape of e_split_direct[0] = {e_split_direct[0].shape}", flush=True)
 
-        e_split_diffuse = self.diffuse_scattering(tau)
+        e_split_diffuse = self.diffuse_scattering(tau_diffuse)
         
         # [i,channels,3, m]
 
@@ -1197,142 +891,6 @@ class Scattering_v2_tau_efficient(nn.Module):
         return layers
 
 
-
-class Scattering_v2_tau_efficient_2(nn.Module):
-    """ 
-    Same as V1_tau except m scattering nets.
-    Each channel outputs its own weighted combo of the scattering nets
-    Similar to Scattering_v2_tau, except implemented for efficiency
-
-    Similiar to scattering_V2_tau_efficient except does not use fully 
-    connected net
-
-    """
-
-    def __init__(self, n_channel, n_constituent, dropout_p, device):
-
-        super(Scattering_v2_tau_efficient_2, self).__init__()
-        self.n_channel = n_channel
-        self.n_scattering_nets = 5
-
-        n_input = n_constituent #5
-
-        n_hidden = [5, 4, 4] #[5, 4 ,4]
-
-
-        # Create basis functions for scattering
-
-        # Has additional input for zenith angle ('mu_direct')
-        self.direct_scattering = ParallelNet2(n_input=n_input + 1,
-                                    n_hidden=n_hidden,
-                                    n_channel=self.n_scattering_nets,
-                                    n_output=3,
-                                    dropout_p=dropout_p,
-                                    device=device,
-                                    bias=False) 
-
-        t4 = count_parameters(self.direct_scattering)
-        print(f"Number of scattering - direct scattering = {t4}")
-
-        t4 = count_parameters(self.direct_scattering.input_net)
-        print(f"Number of scattering - direct scattering.input_net = {t4}")
-
-        t4 = count_parameters(self.direct_scattering.weight)
-        print(f"Number of scattering - direct scattering.weight = {t4}")
-
-        self.diffuse_scattering = ParallelNet2(n_input=n_input, 
-                                    n_hidden=n_hidden, 
-                                    n_channel=self.n_scattering_nets,
-                                    n_output =3,
-                                    dropout_p=dropout_p,
-                                    device=device, 
-                                    bias=False) 
-
-        # Select combo of basis to give a,r,t
-        self.direct_selection = nn.Conv2d(in_channels=self.n_channel,
-                                          out_channels=self.n_channel, 
-                                          kernel_size=(self.n_scattering_nets, 1), 
-                                          stride=(1,1), padding=0, dilation=1, 
-                                          groups=self.n_channel, bias=False, device=device)
-
-        t5 = count_parameters(self.direct_selection)
-        print(f"Number of scattering - direct selection = {t5}")
-
-        self.diffuse_selection = nn.Conv2d(in_channels=self.n_channel,
-                                          out_channels=self.n_channel, 
-                                          kernel_size=(self.n_scattering_nets,1), 
-                                          stride=(1,1), padding=0, dilation=1, 
-                                          groups=self.n_channel, bias=False, device=device)
-
-    def reset_dropout(self,dropout_p):
-        self.direct_scattering.reset_dropout(dropout_p)
-
-        self.diffuse_scattering.reset_dropout(dropout_p)
-
-
-    def forward(self, x):
-        tau, mu_direct, mu_diffuse, _ = x
-
-        #print(f"tau.shape = {tau.shape}")
-        tau_total = torch.sum(tau, dim=2, keepdims=False)
-
-        t_direct = torch.exp(-tau_total / (mu_direct + eps_1))
-        t_diffuse = torch.exp(-tau_total / (mu_diffuse + eps_1))
-
-        mu_direct = torch.unsqueeze(mu_direct,dim=1)
-        tau_direct = tau / (mu_direct + eps_1)
-
-        mu_direct = mu_direct.repeat(1,self.n_channel,1)
-
-
-        #print(f"tau_direct.shape = {tau_direct.shape}")
-        direct = torch.concat((tau_direct, mu_direct),
-                                           dim=2)
-
-        # f = number of features
-        # [i,channels,f]
-        #print(f"direct.shape = {direct.shape}")
-        e_split_direct = self.direct_scattering(direct)
-
-        # m = number of scattering nets
- 
-        # [i,channels, m, 3]
-        e_split_direct = F.softmax(e_split_direct,dim=-1)
-
-        e_split_direct = self.direct_selection(e_split_direct)
-
-        # [i, channels, 1, 3]
-
-        e_split_direct = torch.squeeze(e_split_direct, dim=-2)
-
-        # [i,channels,3]  
-
-        e_split_direct = F.softmax(e_split_direct, dim=-1)
-
-        #print(f"len of e_split_direct = {len(e_split_direct)}")
-        #print(f"shape of e_split_direct[0] = {e_split_direct[0].shape}", flush=True)
-
-        e_split_diffuse = self.diffuse_scattering(tau)
-        
-        # [i,channels, m, 3]
-
-        e_split_diffuse = F.softmax(e_split_diffuse,dim=-1)
-
-        e_split_diffuse = self.diffuse_selection(e_split_diffuse)
-
-        # [i, channels, 1, 3]
-
-        e_split_diffuse = torch.squeeze(e_split_diffuse, dim=-2)
-
-        # [i,channels,3]  
-
-        e_split_diffuse = F.softmax(e_split_diffuse, dim=-1)
-
-
-        layers = [t_direct, t_diffuse, 
-                  e_split_direct, e_split_diffuse]
-
-        return layers
 
 class Scattering_v3(nn.Module):
     """ Computes full set of layer properties for
@@ -1829,15 +1387,9 @@ class FullNet(nn.Module):
 
         # Learns decomposition of extinguished radiation (into t, r, a)
         # for each channel
-        if False:
-            # separate scattering model for each channel
-            # tau is input to scattering
-            self.scattering_net = LayerDistributed(Scattering_v1_tau(n_channel,
-                                                          n_constituent,
-                                                          dropout_p,
-                                                          device))
 
-        elif False:
+
+        if False:
             # separate scattering model for each channel
             # tau is input to scattering
             # #7
@@ -1958,15 +1510,9 @@ class FullNetInternals(nn.Module):
 
         # Learns decomposition of extinguished radiation (into t, r, a)
         # for each channel
-        if False:
-            # separate scattering model for each channel
-            # tau is input to scattering
-            self.scattering_net = LayerDistributed(Scattering_v1_tau(n_channel,
-                                                          n_constituent,
-                                                          dropout_p,
-                                                          device))
 
-        elif False:
+
+        if False:
             # separate scattering model for each channel
             # tau is input to scattering
             # #7
@@ -2270,7 +1816,7 @@ def loss_henry_2(y_true, y_pred, toa_weighting_profile,
 
     if True:
         # v18 0-145
-        # v19, v22 0-195
+        # v19, v22 0-195, v27
         hr_weight   = 0.3
         direct_weight = 3.0
         # v19 195-
@@ -2667,8 +2213,15 @@ def train_full_dataloader():
     #filename_full_model = datadir + f"/Torch.Dataloader.v5_25." # scattering_v2_efficient
     # Similiar to v19, except uses total heat rate cost function and total flux cost function
 
-    filename_full_model = datadir + f"/Torch.Dataloader.v5_26." # scattering_v2_efficient
+    #filename_full_model = datadir + f"/Torch.Dataloader.v5_26." # scattering_v2_efficient
     # Restarts v25 at iteration 105 using more aggressive dropout
+
+    #filename_full_model = datadir + f"/Torch.Dataloader.v5_27." # scattering_v2_efficient
+    # Same as v19 (including loss function), but uses revised to Extinction to impose dropout 
+    # on "effective masses"
+
+    filename_full_model = datadir + f"/Torch.Dataloader.v5_28." # scattering_v2_efficient
+    # Same as v19 (including loss function), but uses exp(-tau) as input to scattering
 
     is_initial_condition = False
     if is_initial_condition:
@@ -2700,11 +2253,12 @@ def train_full_dataloader():
             #initial_model_n = 0   #19
             #initial_model_n = 1   #22
             #initial_model_n = 3   #24
-            initial_model_n = 1   #25
+            #initial_model_n = 1   #25
+            initial_model_n = 3   #28
             t_start = 1
             filename_full_model_input = f'{filename_full_model}i' + str(initial_model_n).zfill(2)
         else:
-            t_start = 115
+            t_start = 195
             filename_full_model_input = filename_full_model + str(t_start).zfill(3)
 
 
@@ -2735,14 +2289,17 @@ def train_full_dataloader():
         # changed 65 to 40 for v17
         #dropout_epochs =   (-1, 40, 85, 95,  105, 115,  120, 125, 130, epochs + 1)
 
-        # changes for v18, v19 - v25
-        dropout_epochs =   (-1, 40, 60, 70,  80, 90,  95, 100, 105, epochs + 1)
+        # changes for v18, v19 - v25, v27
+        #dropout_epochs =   (-1, 40, 60, 70,  80, 90,  95, 100, 105, epochs + 1)
 
         #V26
-        dropout_epochs =   (-1, 40, 60, 70,  105, 140,  150, 160, 170, epochs + 1)
+        #dropout_epochs =   (-1, 40, 60, 70,  105, 140,  150, 160, 170, epochs + 1)
 
         # Used for v11
         #dropout_epochs =   (-1, 65, 85, epochs + 1)
+
+        # v28
+        dropout_epochs =   (-1, 80, 100, 130,  150, 165,  175, 185, 195, epochs + 1) 
 
         dropout_index = next(i for i, x in enumerate(dropout_epochs) if t <= x) - 1
         dropout_p = dropout_schedule[dropout_index]
@@ -2812,13 +2369,12 @@ def train_full_dataloader():
                     #"Direct Heating Rate Loss", "Flux Loss (TOA weighting)")
                         
 
-        loss_functions = (loss_heat_flux_full_wrapper,
-            loss_henry_full_wrapper, loss_flux_full_wrapper, loss_flux_direct_wrapper_2, 
+        loss_functions = (loss_henry_full_wrapper, loss_flux_full_wrapper, loss_flux_direct_wrapper_2, 
                           loss_flux_diffuse_wrapper, loss_heating_rate_full_wrapper,
                         loss_heating_rate_direct_full_wrapper, 
                         loss_heating_rate_diffuse_wrapper,
                         )
-        loss_names = ("loss_heat_flux", "Loss", "Flux Loss", "Flux Loss Direct", "Flux Loss Diffuse", "Heating Rate Loss", 
+        loss_names = ("Loss", "Flux Loss", "Flux Loss Direct", "Flux Loss Diffuse", "Heating Rate Loss", 
                     "Heating Rate Loss Direct", "Heating Rate Loss Diffuse"
                         )
 
@@ -2850,8 +2406,9 @@ def train_full_dataloader():
                 #) as prof:
                 #start.record() loss_flux_full_wrapper
                 train_loop(train_dataloader, model, optimizer, 
-                           loss_heat_flux_full_wrapper,
-                           #loss_heating_rate_full_wrapper, #loss_henry_full_wrapper, 
+                           #loss_heat_flux_full_wrapper,
+                           #loss_heating_rate_full_wrapper, #
+                           loss_henry_full_wrapper, 
                            device)
                 
                 if False:

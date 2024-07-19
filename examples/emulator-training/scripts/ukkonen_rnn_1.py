@@ -134,10 +134,13 @@ evaluate_onnx = True
 final_evaluation = False
 
 is_mass_weighted = False
-model_name = 'MODEL.RNN_1.'
-is_train = True
+#model_name = 'MODEL.RNN_1.'
+#is_train = True
 #is_mass_weighted = True
 #model_name = 'MODEL.RNN_2.'
+
+model_name = 'MODEL.RNN_4.'
+is_train = True
 
 # ----------- config ------------
 
