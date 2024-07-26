@@ -44,7 +44,7 @@ module mo_io_rfmipstyle_generic
 
   private
   public :: read_kdist_gas_names, determine_gas_names, read_size, unblock, read_and_block_pt, &
-            read_and_block_sw_bc, read_and_block_lw_bc, read_and_block_gases_ty, read_and_block_clouds_cams
+            read_and_block_sw_bc, read_and_block_lw_bc, read_and_block_gases_ty, read_and_block_clouds_cams, read_and_block_clouds_cams_2
             
   public :: unblock_and_write
 
@@ -714,6 +714,49 @@ contains
     ncid = nf90_close(ncid)
 
   end subroutine read_and_block_clouds_cams
+
+  !-- Same as above except does not read cloud fraction
+  subroutine read_and_block_clouds_cams_2(fileName, blocksize, &
+                               clwc, ciwc)
+    character(len=*),           intent(in   ) :: fileName
+    integer,                    intent(in   ) :: blocksize
+    real(wp), dimension(:,:,:), allocatable, & ! [nlay, blocksize, nblocks]
+                                intent( inout) :: clwc, ciwc
+    ! ---------------------------
+    integer :: ncid, varid, b, nblocks, ndims
+    ! ---------------------------
+    if(any([ncol_l, nlay_l, nexp_l]  == 0)) call stop_on_err("read_and_block_clouds: Haven't read problem size yet.")
+    if(mod(ncol_l*nexp_l, blocksize) /= 0 ) call stop_on_err("read_and_block_clouds: number of columns doesn't fit evenly into blocks.")
+    nblocks = (ncol_l*nexp_l)/blocksize
+
+    if(nf90_open(trim(fileName), NF90_NOWRITE, ncid) /= NF90_NOERR) &
+      call stop_on_err("read_and_block_clouds: can't find file " // trim(fileName))
+    !
+    ! Read data; reshape to suit RRTMGP dimensions
+
+    if(nf90_inq_varid(ncid, "clwc", varid) /= NF90_NOERR) &
+      call stop_on_err("get_var_size: can't find variable " // "clwc")
+
+    ! Clouds can be either 2D (site, layer) or 3D (time/expt, site, layer)
+    if(nf90_inquire_variable(ncid, varid, ndims = ndims) /= NF90_NOERR) &
+      call stop_on_err("get_var_size: can't get information for variable " // "clwc")
+
+    if (ndims ==2) then
+     ! (nlay, ncol)
+      clwc = reshape(spread(read_field(ncid, "clwc", nlay_l,   ncol_l), dim = 3, ncopies = nexp_l), &
+                    shape = [nlay_l, blocksize, nblocks])
+      ciwc = reshape(spread(read_field(ncid, "ciwc", nlay_l,   ncol_l), dim = 3, ncopies = nexp_l), &
+                    shape = [nlay_l, blocksize, nblocks])
+
+    else 
+      clwc = reshape(read_field(ncid, "clwc", nlay_l, ncol_l, nexp_l), shape = [nlay_l, blocksize, nblocks]) 
+      ciwc = reshape(read_field(ncid, "ciwc", nlay_l, ncol_l, nexp_l), shape = [nlay_l, blocksize, nblocks]) 
+
+    end if
+
+    ncid = nf90_close(ncid)
+
+  end subroutine read_and_block_clouds_cams_2
 
   !--------------------------------------------------------------------------------------------------------------------
   function read_scaling(ncid, varName)

@@ -1,3 +1,5 @@
+# Fixed problem with RT_LW_01 to use multi-reflection coeffs on sources
+
 import torch
 from torch import nn
 
@@ -67,7 +69,22 @@ class BottomUp(nn.Module):
 
         return rt, d
 
+    def _compute_sandwich_d(self,rs,rt):
+        """
 
+        """
+        # Start at top of the atmosphere 
+
+        d = []
+        d.append(torch.ones())
+
+        for l in torch.arange(start=1, end=rs.shape):
+            dd = 1.0 / (1.0 - rt[l-1] * rs[l])
+            d.append(dd)
+
+        d = torch.stack(d,dim=1)  # n + 1 values
+
+        return d
     
     def _compute_upward_flux (self, s_up, rt, dt, t, a):
         """ 
@@ -146,20 +163,27 @@ class BottomUp(nn.Module):
         # Bottom up cumulative surface reflection
         rs, ds = self._compute_surface_reflection(r,t)
 
+        # Top down cumulative top layer reflection
+        rt, dt = self._compute_top_reflection(r,t)
+
+        # compute multi-reflection sandwich terms 
+        # uses rt for top, rs for bottom
+
+        d_multi = self._compute_sandwich_d(rs, rt)
+
         ### Downward sources
-        s_multi_down = s[:,:-1,:] * ds  # n values, flow from layer
-        s_multi_up_down = s[:,1:,:] * r[:,:-1,:] * ds
+        s_multi_down = s[:,:-1,:] * d_multi  # n values, flow from layer
+        s_multi_up_down = s[:,1:,:] * rt[:,:-1,:] * d_multi
 
         s_down = s_multi_down + s_multi_up_down # index corresponds to from layer
 
         absorbed_flux_down, flux_down = self._compute_downward_flux (s_down, rs, ds, t, a)
 
-        # Top down cumulative top layer reflection
-        rt, dt = self._compute_top_reflection(r,t)
+
 
         ### Upward sources
-        s_multi_up = s * dt    # from origin surface going up
-        s_multi_down_up = s[:,:-1,:] * r[:,1:,:] * dt[:,1:,:] # from origin surface going down then up
+        s_multi_up = s * d_multi    # from origin surface going up
+        s_multi_down_up = s[:,:-1,:] * rs[:,1:,:] * d_multi[:,1:,:] # from origin surface going down then up
         s_up = s_multi_up + torch.cat([torch.zeros(), s_multi_down_up], axis=1) 
 
         absorbed_flux_up, flux_up = self._compute_upward_flux (s_up, rt, dt, t, a)

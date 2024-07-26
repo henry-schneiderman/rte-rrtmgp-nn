@@ -766,7 +766,7 @@ class Scattering_v2_tau_efficient(nn.Module):
 
             # Has additional input for zenith angle ('mu_direct')
             # Added bias=True for v14
-            self.direct_scattering = BD(n_input=n_input + 1,
+            self.direct_scattering = BD(n_input=n_input + 1 + 1,
                                         n_hidden=n_hidden,
                                         n_output=24,
                                         dropout_p=dropout_p,
@@ -817,29 +817,35 @@ class Scattering_v2_tau_efficient(nn.Module):
         tau, mu_direct, mu_diffuse, _ = x
 
         #print(f"tau.shape = {tau.shape}")
+        # sum over constituents
         tau_total = torch.sum(tau, dim=2, keepdims=False)
 
         t_direct = torch.exp(-tau_total / (mu_direct + eps_1))
         t_diffuse = torch.exp(-tau_total / (mu_diffuse + eps_1))
 
+        # new in v.29
+        # also removed division of tau by mu_direct
+        inverse_mu_direct = 1.0 / (mu_direct + eps_1)
         mu_direct = torch.unsqueeze(mu_direct,dim=1)
+        inverse_mu_direct = torch.unsqueeze(inverse_mu_direct,dim=1)
         
-        ## new exp(-tau) in v.8
-        tau_direct = torch.exp(-tau / (mu_direct + eps_1))
-        tau_diffuse = torch.exp(-tau)
+        ## new exp(-tau) in v.8, v28
+        #tau_direct = torch.exp(-tau / (mu_direct + eps_1))
+        #tau_diffuse = torch.exp(-tau)
         ##
 
         mu_direct = mu_direct.repeat(1,self.n_channel,1)
+        inverse_mu_direct = inverse_mu_direct.repeat(1,self.n_channel,1)
 
 
         #print(f"tau_direct.shape = {tau_direct.shape}")
-        direct = torch.concat((tau_direct, mu_direct),
+        tau_direct = torch.concat((tau, mu_direct, inverse_mu_direct),
                                            dim=2)
 
         # f = number of features
         # [i,channels,f]
         #print(f"direct.shape = {direct.shape}")
-        e_split_direct = self.direct_scattering(direct)
+        e_split_direct = self.direct_scattering(tau_direct)
 
         # m = number of scattering nets
         # [i,channels, 3 * m]
@@ -863,7 +869,7 @@ class Scattering_v2_tau_efficient(nn.Module):
         #print(f"len of e_split_direct = {len(e_split_direct)}")
         #print(f"shape of e_split_direct[0] = {e_split_direct[0].shape}", flush=True)
 
-        e_split_diffuse = self.diffuse_scattering(tau_diffuse)
+        e_split_diffuse = self.diffuse_scattering(tau)
         
         # [i,channels,3, m]
 
@@ -1816,13 +1822,13 @@ def loss_henry_2(y_true, y_pred, toa_weighting_profile,
 
     if True:
         # v18 0-145
-        # v19, v22 0-195, v27
-        hr_weight   = 0.3
-        direct_weight = 3.0
-        # v19 195-
-        #hr_weight   = 0.37
-        #direct_weight = 1.5
-        # v19 400-
+        # v19, v22 0-195, v27, v28 0-275, v29 0-310
+        #hr_weight   = 0.3
+        #direct_weight = 3.0
+        # v19 195-, v28 275-325, v29 310 - 
+        hr_weight   = 0.37
+        direct_weight = 1.5
+        # v19 400-, v28 325-
         #hr_weight   = 0.5
         #direct_weight = 1.0
         return (1.0 / (1.0 + direct_weight)) * (hr_weight * 
@@ -2220,8 +2226,12 @@ def train_full_dataloader():
     # Same as v19 (including loss function), but uses revised to Extinction to impose dropout 
     # on "effective masses"
 
-    filename_full_model = datadir + f"/Torch.Dataloader.v5_28." # scattering_v2_efficient
+    #filename_full_model = datadir + f"/Torch.Dataloader.v5_28." # scattering_v2_efficient
     # Same as v19 (including loss function), but uses exp(-tau) as input to scattering
+
+    filename_full_model = datadir + f"/Torch.Dataloader.v5_29." # scattering_v2_efficient
+    # Same as v19 (including loss function), but does not divide tau by mu for input to direct scattering. 
+    # Instead adds 1/mu as input to scattering
 
     is_initial_condition = False
     if is_initial_condition:
@@ -2254,11 +2264,12 @@ def train_full_dataloader():
             #initial_model_n = 1   #22
             #initial_model_n = 3   #24
             #initial_model_n = 1   #25
-            initial_model_n = 3   #28
+            #initial_model_n = 3   #28
+            initial_model_n = 4   #29
             t_start = 1
             filename_full_model_input = f'{filename_full_model}i' + str(initial_model_n).zfill(2)
         else:
-            t_start = 195
+            t_start = 320
             filename_full_model_input = filename_full_model + str(t_start).zfill(3)
 
 
@@ -2289,8 +2300,11 @@ def train_full_dataloader():
         # changed 65 to 40 for v17
         #dropout_epochs =   (-1, 40, 85, 95,  105, 115,  120, 125, 130, epochs + 1)
 
-        # changes for v18, v19 - v25, v27
+        # changes for v18, v19 - v25, v27, v29
         #dropout_epochs =   (-1, 40, 60, 70,  80, 90,  95, 100, 105, epochs + 1)
+
+        # v29
+        dropout_epochs =   (-1, 40, 60, 70,  80, 90,  105, 120, 135, epochs + 1)
 
         #V26
         #dropout_epochs =   (-1, 40, 60, 70,  105, 140,  150, 160, 170, epochs + 1)
@@ -2299,7 +2313,7 @@ def train_full_dataloader():
         #dropout_epochs =   (-1, 65, 85, epochs + 1)
 
         # v28
-        dropout_epochs =   (-1, 80, 100, 130,  150, 165,  175, 185, 195, epochs + 1) 
+        #dropout_epochs =   (-1, 80, 100, 130,  150, 165,  175, 185, 195, epochs + 1) 
 
         dropout_index = next(i for i, x in enumerate(dropout_epochs) if t <= x) - 1
         dropout_p = dropout_schedule[dropout_index]
@@ -2345,7 +2359,8 @@ def train_full_dataloader():
         # v19 0-250 lr=0.001, 250+ lr=0.00038
         # v22 -v25 lr = 0.001
         # v26 lr = 0.002 for 105 - 115, lr = 0.001 otherwise
-        optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+        # v29 lr = 0.001 for 0-320, 320+ 
+        optimizer = torch.optim.Adam(model.parameters(), lr=0.00038)
 
         train_dataset = RT_data_hws_2.RTDataSet(train_input_files,n_channel)
 
@@ -2597,9 +2612,13 @@ def test_full_dataloader():
     #filename_full_model = datadir + f"/Torch.Dataloader.v5_24." # scattering_v2_efficient
     # Similiar to v19, except uses total heat rate cost function
 
-    version_name = 'v5_25'
-    filename_full_model = datadir + f"/Torch.Dataloader.{version_name}." # scattering_v2_efficient
+    #version_name = 'v5_25'
+    #filename_full_model = datadir + f"/Torch.Dataloader.{version_name}." # scattering_v2_efficient
     # Similiar to v19, except uses total heat rate cost function and total flux cost function
+
+    version_name = 'v5_28'
+    filename_full_model = datadir + f"/Torch.Dataloader.v5_28." # scattering_v2_efficient
+    # Same as v19 (including loss function), but uses exp(-tau) as input to scattering
 
     years = ("2009", "2015", "2020")
     #years = ("2020", )
@@ -2634,7 +2653,7 @@ def test_full_dataloader():
                         )
 
         print(f"Testing error, Year = {year}")
-        for t in range(480,485,5):
+        for t in range(505,510,5):
 
             checkpoint = torch.load(filename_full_model + str(t), map_location=torch.device(device))
             print(f"Loaded Model: epoch = {t}")

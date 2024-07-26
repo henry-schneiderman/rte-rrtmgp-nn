@@ -5,14 +5,14 @@ from matplotlib import pyplot as plt
 data_dir       = "/data-T1/hws/tmp/"
 
 #file_name_2009 = data_dir + '../CAMS/processed_data/testing/2009/internal_output.sc_v1_tau_4_460.nc'
-t = "480"
+t = "505" #"480"
 year = "2009"
 #version = "v5_e19"
-version = "v5_25"
+version = "v5_28"
 file_name_2009 = data_dir + f'../CAMS/processed_data/testing/{year}/internal_output.sc_{version}_{t}.{year}.nc'
 dt_2009 = xr.open_dataset(file_name_2009)
 is_direct = False
-is_scattering = True
+is_scattering = False
 
 s_direct = dt_2009['s_direct'].data
 s_diffuse = dt_2009['s_diffuse'].data

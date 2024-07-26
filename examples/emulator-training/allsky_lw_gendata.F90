@@ -134,7 +134,7 @@ program rrtmgp_rfmip_lw
   !
   use mo_load_coefficients,  only: load_and_init
   use mo_io_rfmipstyle_generic, only: read_size, read_and_block_pt, read_and_block_gases_ty, unblock_and_write, &
-                                   read_and_block_clouds_cams, determine_gas_names                             
+                                   read_and_block_clouds_cams_2, determine_gas_names                             
   use mo_simple_netcdf,      only: read_field, write_field, get_dim_size
   use netcdf
   use easy_netcdf
@@ -389,6 +389,7 @@ program rrtmgp_rfmip_lw
     ! end if
     allocate(clwc(nlay, block_size,   nblocks), ciwc(nlay, block_size,   nblocks))
     allocate(cloud_fraction(nlay, block_size,   nblocks))
+    !cloud_fraction = 0.5_wp
     allocate(lwp(nlay,block_size,nblocks), iwp(nlay,block_size,nblocks))
     allocate(rel(nlay,block_size,nblocks), rei(nlay,block_size,nblocks))
     allocate(cloud_mask(nlay,block_size,nblocks))
@@ -397,7 +398,7 @@ program rrtmgp_rfmip_lw
     ! clouds_provided = .true.
     ! Load CAMS cloud data (cloud liquid water and ice contents, cloud fraction)
     ! if (clouds_provided) then
-      call read_and_block_clouds_cams(input_file, block_size, clwc, ciwc, cloud_fraction)
+      call read_and_block_clouds_cams_2(input_file, block_size, clwc, ciwc)
     ! end if
 
     ! Particle effective size/radius
@@ -410,9 +411,9 @@ program rrtmgp_rfmip_lw
       do icol = 1, block_size
         do ilay = 1, nlay
           ! if (clouds_provided) then
-            if (cloud_fraction(ilay,icol,b) > 0.0_wp) then
-              cloud_mask(ilay,icol,b) = .true.
-            end if
+            !if (cloud_fraction(ilay,icol,b) > 0.0_wp) then
+            !  cloud_mask(ilay,icol,b) = .true.
+            ! end if
             ! Compute in-cloud liquid and ice water path
             ! if (config%is_homogeneous) then
               ! Homogeneous solvers assume cloud fills the box
@@ -705,9 +706,9 @@ program rrtmgp_rfmip_lw
       call nndev_file_netcdf%define_variable("cloud_iwp", &
       &   dim3_name="expt", dim2_name="site", dim1_name="layer", &
       &   long_name="cloud ice water path", units_str="g/kg")
-      call nndev_file_netcdf%define_variable("cloud_fraction", &
-      &   dim3_name="expt", dim2_name="site", dim1_name="layer", &
-      &   long_name="cloud fraction")
+      !call nndev_file_netcdf%define_variable("cloud_fraction", &
+      !&   dim3_name="expt", dim2_name="site", dim1_name="layer", &
+      !&   long_name="cloud fraction")
       if (save_reftrans) then
         call nndev_file_netcdf%define_variable("tau_lw", &
         &   dim4_name="expt", dim3_name="site", dim2_name="layer", dim1_name="gpt", &
@@ -745,7 +746,7 @@ program rrtmgp_rfmip_lw
     if(include_clouds) then
       call unblock_and_write(trim(nndev_file), 'cloud_lwp', lwp)
       call unblock_and_write(trim(nndev_file), 'cloud_iwp', iwp)
-      call unblock_and_write(trim(nndev_file), 'cloud_fraction', cloud_fraction)
+      !call unblock_and_write(trim(nndev_file), 'cloud_fraction', cloud_fraction)
       print *, "Cloud variables were successfully saved"
       deallocate(lwp, iwp, cloud_fraction)
     end if
