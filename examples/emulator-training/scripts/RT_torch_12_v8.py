@@ -1825,12 +1825,12 @@ def loss_henry_2(y_true, y_pred, toa_weighting_profile,
         # v19, v22 0-195, v27, v28 0-275, v29 0-310
         #hr_weight   = 0.3
         #direct_weight = 3.0
-        # v19 195-, v28 275-325, v29 310 - 
-        hr_weight   = 0.37
-        direct_weight = 1.5
-        # v19 400-, v28 325-
-        #hr_weight   = 0.5
-        #direct_weight = 1.0
+        # v19 195-, v28 275-325, v29 310 - 395
+        #hr_weight   = 0.37
+        #direct_weight = 1.5
+        # v19 400-, v28 325-, v29 395-
+        hr_weight   = 0.5
+        direct_weight = 1.0
         return (1.0 / (1.0 + direct_weight)) * (hr_weight * 
                          (hr_diffuse_loss + direct_weight * hr_direct_loss) + (1.0 - hr_weight) * (flux_diffuse_loss + direct_weight * flux_direct_loss))
 
@@ -2269,7 +2269,7 @@ def train_full_dataloader():
             t_start = 1
             filename_full_model_input = f'{filename_full_model}i' + str(initial_model_n).zfill(2)
         else:
-            t_start = 320
+            t_start = 560 #395
             filename_full_model_input = filename_full_model + str(t_start).zfill(3)
 
 
@@ -2359,8 +2359,8 @@ def train_full_dataloader():
         # v19 0-250 lr=0.001, 250+ lr=0.00038
         # v22 -v25 lr = 0.001
         # v26 lr = 0.002 for 105 - 115, lr = 0.001 otherwise
-        # v29 lr = 0.001 for 0-320, 320+ 
-        optimizer = torch.optim.Adam(model.parameters(), lr=0.00038)
+        # v29 lr = 0.001 for 0-320, lr=0.00038 320-410, lr=0.00013 410+
+        optimizer = torch.optim.Adam(model.parameters(), lr=0.00013)
 
         train_dataset = RT_data_hws_2.RTDataSet(train_input_files,n_channel)
 
@@ -2616,9 +2616,12 @@ def test_full_dataloader():
     #filename_full_model = datadir + f"/Torch.Dataloader.{version_name}." # scattering_v2_efficient
     # Similiar to v19, except uses total heat rate cost function and total flux cost function
 
-    version_name = 'v5_28'
-    filename_full_model = datadir + f"/Torch.Dataloader.v5_28." # scattering_v2_efficient
+    #version_name = 'v5_28'
+    #filename_full_model = datadir + f"/Torch.Dataloader.v5_28." # scattering_v2_efficient
     # Same as v19 (including loss function), but uses exp(-tau) as input to scattering
+
+    version_name = 'v5_29'
+    filename_full_model = datadir + f"/Torch.Dataloader.v5_29." 
 
     years = ("2009", "2015", "2020")
     #years = ("2020", )
@@ -2653,7 +2656,7 @@ def test_full_dataloader():
                         )
 
         print(f"Testing error, Year = {year}")
-        for t in range(505,510,5):
+        for t in range(560,565,5):
 
             checkpoint = torch.load(filename_full_model + str(t), map_location=torch.device(device))
             print(f"Loaded Model: epoch = {t}")

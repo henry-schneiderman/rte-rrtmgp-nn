@@ -13,6 +13,10 @@ lw_clouds = '../../extensions/cloud_optics/rrtmgp-cloud-optics-coeffs-lw.nc'
 
 combo = [('training','2008'),('cross_validation','2008'),('testing','2009'),('testing','2015'),('testing','2020')]
 
+
+combo = [('training','2008'),('cross_validation','2008'),('testing','2009'),('testing','2015')]
+
+
 for c in combo:
     mode = c[0]
     year = c[1]

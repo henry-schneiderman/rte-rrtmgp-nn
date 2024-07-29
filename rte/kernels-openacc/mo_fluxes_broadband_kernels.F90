@@ -18,7 +18,7 @@ module mo_fluxes_broadband_kernels
   use mo_rte_kind, only: wp
   implicit none
   private
-  public :: sum_broadband, sum_broadband_nocol, net_broadband
+  public :: sum_broadband, sum_broadband_nocol, sum_broadband_nolev, net_broadband
 
   interface net_broadband
     module procedure net_broadband_full, net_broadband_precalc
@@ -51,6 +51,27 @@ contains
     !$acc exit data copyout(broadband_flux)
 
   end subroutine sum_broadband
+
+  pure subroutine sum_broadband_nolev(ngpt, ncol, spectral_flux, broadband_flux) bind(C, name="sum_broadband")
+    integer,                               intent(in ) :: ngpt, ncol
+    real(wp), dimension(ngpt, ncol), intent(in ) :: spectral_flux
+    real(wp), dimension(ncol),       intent(out) :: broadband_flux
+    integer  :: igpt, icol
+    real(wp) :: bb_flux_s
+
+    !$acc enter data create(broadband_flux)
+    !$acc parallel loop gang worker collapse(2) default(present)
+    do icol = 1, ncol
+      bb_flux_s = 0.0_wp
+      !$acc loop vector reduction(+:bb_flux_s)
+      do igpt = 1, ngpt
+        bb_flux_s = bb_flux_s + spectral_flux(igpt, icol)
+      end do
+      broadband_flux(icol) = bb_flux_s
+    end do
+    !$acc exit data copyout(broadband_flux)
+
+  end subroutine sum_broadband_nolev
 
   subroutine sum_broadband_nocol(ngpt, nlev, spectral_flux, broadband_flux)
     !$acc routine worker

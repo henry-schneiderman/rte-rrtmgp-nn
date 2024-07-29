@@ -102,6 +102,9 @@ program rrtmgp_rfmip_lw
   !
   use mo_gas_concentrations, only: ty_gas_concs
 
+  use mo_fluxes_broadband_kernels, &
+                            only: sum_broadband, sum_broadband_nocol
+
   use mo_source_functions,   only: ty_source_func_lw
   !
   ! Coefficients used to scale NN inputs
@@ -188,6 +191,9 @@ program rrtmgp_rfmip_lw
   ! RTE inputs for NN development
 
   type(ty_source_func_lw), save               :: lw_sources
+  real(wp), dimension(:,:,:),           allocatable :: lw_sources_layer_band, lw_sources_level_band ! nlay, block_size, nblocks
+
+  real(wp), dimension(:,:),           allocatable :: lw_sources_surface_band ! block_size, nblocks
 
   ! RTE outputs for NN development
   real(wp), dimension(:,:,:,:),         allocatable :: reftrans_variables
@@ -457,6 +463,10 @@ program rrtmgp_rfmip_lw
   allocate(flux_up(    	nlay+1, block_size, nblocks), &
            flux_dn(    	nlay+1, block_size, nblocks))
 
+  allocate(lw_sources_layer_band(    	nlay, block_size, nblocks), &
+          lw_sources_level_band(    	nlay+1, block_size, nblocks), &
+          lw_sources_surface_band(    	block_size, nblocks))
+
   !
   ! Allocate g-point fluxes if desired
   !
@@ -593,6 +603,11 @@ program rrtmgp_rfmip_lw
                                 lw_sources,             &
                                 emis_sfc,        &
                                 fluxes))
+      call sum_broadband(ngpt,nlay,block_size,lw_sources%lay_source,lw_sources_layer_band(:,:,b))
+
+      call sum_broadband(ngpt,nlay+1,block_size,lw_sources%lev_source,lw_sources_level_band(:,:,b))
+
+      call sum_broadband_nocol(ngpt,block_size,lw_sources%sfc_source,lw_sources_surface_band(:,b))
 
       if (save_inputs_outputs) then
 
@@ -664,6 +679,18 @@ program rrtmgp_rfmip_lw
     call nndev_file_netcdf%define_variable("rsd", &
     &   dim3_name="expt", dim2_name="site", dim1_name="level", &
     &   long_name="downwelling longwave flux")
+
+    call nndev_file_netcdf%define_variable("layer_source", &
+    &   dim3_name="expt", dim2_name="site", dim1_name="layer", &
+    &   long_name="layer source")
+
+    call nndev_file_netcdf%define_variable("level_source", &
+    &   dim3_name="expt", dim2_name="site", dim1_name="level", &
+    &   long_name="level source")
+
+    call nndev_file_netcdf%define_variable("surface_source", &
+    &   dim2_name="expt", dim1_name="site",  &
+    &   long_name="surface source")
 
     call nndev_file_netcdf%define_variable("sfc_alb", &
     &   dim3_name="expt", dim2_name="site", dim1_name="gpt", &
@@ -779,6 +806,10 @@ program rrtmgp_rfmip_lw
 
     call unblock_and_write(trim(nndev_file), 'rsu', flux_up)
     call unblock_and_write(trim(nndev_file), 'rsd', flux_dn)
+
+    call unblock_and_write(trim(nndev_file), 'layer_source', lw_sources_layer_band)
+    call unblock_and_write(trim(nndev_file), 'level_source', lw_sources_level_band)
+    call unblock_and_write(trim(nndev_file), 'surface_source', lw_sources_surface_band)
 
     if (do_gpt_flux) then
 

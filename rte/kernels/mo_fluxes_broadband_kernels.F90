@@ -18,7 +18,7 @@ module mo_fluxes_broadband_kernels
   use mo_rte_kind, only: wp
   implicit none
   private
-  public :: sum_broadband, sum_broadband_nocol, sums_broadband_fac, net_broadband
+  public :: sum_broadband, sum_broadband_nocol, sum_broadband_nolev, sums_broadband_fac, net_broadband, 
 
   interface net_broadband
     module procedure net_broadband_full, net_broadband_precalc
@@ -36,6 +36,15 @@ contains
     broadband_flux  = sum(spectral_flux, 1)
 
   end subroutine sum_broadband
+
+  pure subroutine sum_broadband_nolev(ngpt, ncol, spectral_flux, broadband_flux) bind(C, name="sum_broadband")
+    integer,                               intent(in ) :: ngpt, ncol
+    real(wp), dimension(ngpt, ncol), intent(in ) :: spectral_flux
+    real(wp), dimension(ncol),       intent(out) :: broadband_flux
+
+    broadband_flux  = sum(spectral_flux, 1)
+
+  end subroutine sum_broadband_nolev
 
   pure subroutine sum_broadband_nocol(ngpt, nlev, spectral_flux, broadband_flux) bind (C, name="sum_broadband_nocol")
     integer,                         intent(in ) :: nlev, ngpt
