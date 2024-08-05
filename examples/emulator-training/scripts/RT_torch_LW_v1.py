@@ -284,9 +284,10 @@ class Extinction(nn.Module):
         self.net_h2o = nn.Linear(1,self.n_channel,bias=False,device=device)
         self.net_o3  = nn.Linear(1,self.n_channel,bias=False,device=device)
         self.net_co2 = nn.Linear(1,self.n_channel,bias=False,device=device)
-        self.net_u   = nn.Linear(1,self.n_channel,bias=False,device=device)
+        self.net_o2   = nn.Linear(1,self.n_channel,bias=False,device=device)
         self.net_n2o = nn.Linear(1,self.n_channel,bias=False,device=device)
         self.net_ch4 = nn.Linear(1,self.n_channel,bias=False,device=device)
+        self.net_co = nn.Linear(1,self.n_channel,bias=False,device=device)
 
         n_weights = 8 * n_channel
 
@@ -297,9 +298,10 @@ class Extinction(nn.Module):
         torch.nn.init.uniform_(self.net_h2o.weight, a=lower, b=upper)
         torch.nn.init.uniform_(self.net_o3.weight, a=lower, b=upper)
         torch.nn.init.uniform_(self.net_co2.weight, a=lower, b=upper)
-        torch.nn.init.uniform_(self.net_u.weight, a=lower, b=upper)
+        torch.nn.init.uniform_(self.net_o2.weight, a=lower, b=upper)
         torch.nn.init.uniform_(self.net_n2o.weight, a=lower, b=upper)
         torch.nn.init.uniform_(self.net_ch4.weight, a=lower, b=upper)
+        torch.nn.init.uniform_(self.net_co.weight, a=lower, b=upper)
 
         # exp() activation forces extinction coefficient to always be positive
         # and never negative or zero
@@ -409,10 +411,10 @@ class Extinction(nn.Module):
 
     def forward(self, x):
 
-        temperature_pressure_log_pressure, constituents = x
+        temperature_pressure, constituents = x
 
         c = constituents
-        t_p = temperature_pressure_log_pressure[:,:2]  #Removing ln-P
+        t_p = temperature_pressure
 
         #def d(value):
         #    return F.dropout(value,p=self.dropout_p,training=self.training)
@@ -541,6 +543,7 @@ class Scattering_v2_tau_efficient(nn.Module):
 
 
         e_split_diffuse = self.diffuse_scattering(tau)
+        n = e_split_diffuse.shape[0]
         
         # [i,channels,3, m]
 
@@ -575,367 +578,269 @@ class MultiReflection(nn.Module):
     Adding-Doubling method (no learning).
     """
 
-    def __init__(self):
+    def __init__(self, n_channels, n_bands, device):
         super(MultiReflection, self).__init__()
+   
 
-    def _adding_doubling (self, t_direct, t_diffuse, 
-                        e_split_direct, e_split_diffuse, 
-                        r_surface_direct, r_surface_diffuse, 
-                        a_surface_direct, a_surface_diffuse):
-        """
-        Multireflection between a single layer and a surface using the
-        Adding-Doubling Method.
 
-        See p.418-424 of "A First Course in Atmospheric Radiation (2nd edition)"
-        by Grant W. Petty
-        Also see Shonk and Hogan, 2007
-
-        Input and Output Shape:
-            (n_samples, n_channels, . . .)
-
-        Arguments:
-
-            t_direct, t_diffuse - Direct transmission coefficients of 
-                the layer.  
-                - These are not changed by multi reflection
-                - t_diffuse is for diffuse input that is directly 
-                transmitted.
-
-            e_split_direct, e_split_diffuse - The layer's split of extinguised  
-                radiation into transmitted, reflected,
-                and absorbed components. These components 
-                sum to 1.0. The transmitted and reflected components produce
-                diffuse radiation.
-                
-            r_surface_direct, r_surface_diffuse - The original reflection 
-                coefficients of the surface.
-
-            a_surface_direct, a_surface_diffuse - The original absorption 
-                coefficients of the surface. 
-                
-        Returns:
-
-            t_multi_direct, t_multi_diffuse - The layer's transmission
-                coefficients for radiation that is multi-reflected (as 
-                opposed to directly transmitted, e.g., t_direct, t_diffuse)
-
-            r_layer_multi_direct, r_layer_multi_diffuse - The layer's 
-                reflection coefficients after accounting for multi-reflection 
-                with the surface
-
-            r_surface_multi_direct, r_surface_multi_diffuse - The surface's
-                reflection coefficients after accounting for 
-                multi-reflection with the layer
-
-            a_layer_multi_direct, a_layer_multi_diffuse - The layer's 
-                absorption coefficients layer after accounting for 
-                multi-reflection with surface
-
-            a_surface_multi_direct, a_surface_multi_diffuse - The surface's
-                absorption coefficients after accounting for multi-reflection 
-                with the layer
-
-        Notes:
+        weight_values = torch.rand((n_channels, n_bands),
+                                   requires_grad=True,device=device,
+                                   dtype=torch.float32,)
         
-            Conservation of energy:
+        self.bands_to_channels = nn.parameter.Parameter(weight_values, requires_grad=True)
 
-                1.0 = a_surface_direct + r_surface_direct
-                1.0 = a_surface_diffuse + r_surface_diffuse
+    def _compute_surface_reflection(self,r,t):
+        """
 
-                1.0 = a_surface_multi_direct + a_layer_multi_direct + 
-                        r_layer_multi_direct
-                1.0 = a_surface_multi_diffuse + a_layer_multi_diffuse + 
-                        r_layer_multi_diffuse
+        Bottom up computation of cumulative surface reflection
+        and denominator factor
 
-                The absorption at the layer (after accounting for 
-                multi-reflection) must equal the combined loss of flux for 
-                the downward and upward streams:
+        n = len(r)
+        Output has same size
+
+        rs index corresponds to newly formed virtual surface 
+        d index corresponds to virtual surface (layer that flow is entering)
+
+        """
+
+        # n = len(r)
+        # Start at bottom of the atmosphere (layer = n-1)
+        rs = []
+        last_rs = r[:,-1,:]  # reflectance of original surface is unchanged
+
+        rs.append(last_rs)
+        ds = []
+        ds.append(torch.ones())
+
+        # n-2 . . 0 (inclusive)
+        for l in reversed(torch.arange(start=0, end=r.shape[1]-1)):
+            dd = 1.0 / (1.0 - last_rs * r[:,l,:])
+            ds.append(dd)
+            last_rs = r[:,l,:] + last_rs * t[:,l,:] * t[:,l,:] * dd
+            rs.append(last_rs)
+
+        rs = torch.stack(rs,dim=1)  
+        ds = torch.stack(ds,dim=1)  
+
+        rs = torch.flip(rs, dims=(1,))  # n values: 0 .. n-1 (includes surface)
+        ds = torch.flip(ds, dims=(1,)) # n values: 0 .. n-1 (last value is one)
+
+        return rs, ds
+    
+    def _compute_top_reflection(self,r,t):
+        """
+        In top down order compute cumulative upper layer reflection
+        and denominator factor
+
+        rt index corresponds to newly formed virtual surface 
+        d is aligned with the value of rt it computed, corresponds
+        to layer it is flowing into
+        """
+
+        # Start at top of the atmosphere, first layer in isolation
+        rt = []
+        last_rt = r[:,0,:]  # reflectance of top surface is unchanged
+        rt.append(last_rt)
+        dt = []
+        dt.append(torch.ones())
+
+        for l in torch.arange(start=1, end=r.shape[1]):
+            dd = 1.0 / (1.0 - last_rt * r[:,l,:])
+            dt.append(dd)
+            last_rt = r[:,l,:] + last_rt * t[:,l,:] * t[:,l,:] * dd
+            rt.append(last_rt)
+
+        rt = torch.stack(rt,dim=1)  # n values 
+        dt = torch.stack(dt,dim=1)  
+
+        return rt, dt
+
+    def _compute_sandwich_d(self,rs,rt):
+        """
+
+        """
+        # Start at top of the atmosphere 
+
+        d = []
+        d.append(torch.ones())
+
+        # Pad at the beginning????
+
+        for l in torch.arange(start=1, end=rs.shape):
+            dd = 1.0 / (1.0 - rt[l-1] * rs[l])
+            d.append(dd)
+
+        d = torch.stack(d,dim=1)  # n values
+
+        return d
+    
+    def _compute_upward_flux (self, s_up, rt, dt, t, a):
+        """ 
+        Input:
+            s_up: n elements, index represent layer flux is exiting
             
-                a_layer_multi_direct = (1 - t_direct - t_multi_direct) + 
-                                (r_surface_multi_direct - r_layer_multi_direct)
-                a_layer_multi_diffuse = (1 - t_diffuse - t_multi_diffuse) + 
-                            (r_surface_multi_diffuse - r_layer_multi_diffuse)
-
-            When merging the multireflected layer and the surface into 
-            a new "surface", the reflection coefficient is just the reflection
-            of the layer. However, the absorption of the new surface
-            is the sum of the surface and layer absorptions:
-
-                r_layer_multi_direct => r_surface_direct
-                a_layer_multi_direct + a_surface_multi_direct => 
-                                                            a_surface_direct
-
-            See class Propagation below for how the multi-reflection
-            coefficients are used to propagate radiation 
-            downward from the top of the atmosphere
+        Output:
+            flux_up: n elements from layer
+            absorbed_flux: n elements: into surface + layers (surface is zero since going up)
         """
-        # Split out extinguished component
-        e_direct = 1.0 - t_direct
-        e_diffuse = 1.0 - t_diffuse
+        flux = torch.zeros()
+        flux_up = []
+        absorbed_flux = []
+        absorbed_flux.append(torch.zeros()) # no absorbed flux, last layer = n-1
 
-        # Split extinguished into transmitted, reflected, and absorbed
-        e_t_direct, e_r_direct, e_a_direct = (e_split_direct[:,:,0], 
-                                              e_split_direct[:,:,1],
-                                              e_split_direct[:,:,2])
-        e_t_diffuse, e_r_diffuse, e_a_diffuse = (e_split_diffuse[:,:,0], 
-                                                 e_split_diffuse[:,:,1],
-                                                 e_split_diffuse[:,:,2])
+        # from n to 1
+        for l in reversed(torch.arange(1,s_up.shape[1]-1)):
+            flux += s_up[:,l+1,:] # initial exits layer n-1
+            flux_up.append(flux) 
+            # initially absorbed at layer n-2
+            a_multi = a[:,l,:] * (1.0 + t[:,l,:] * rt[:,l-1,:] * dt[:,l,:])
+            absorbed_flux.append(flux * a_multi) # initial absorbed at l-1 or n-2
+            # propagate into next layer
+            flux = flux * t[:,l,:] * dt[:,l,:]
+        flux += s_up[:,1,:]
+        flux_up.append(flux)
+        absorbed_flux.append(flux * a[:,0,:])
+        flux = flux * t[:,0,:]
 
-        eps = 1.0e-06
-        d = 1.0/(1.0 - e_diffuse*e_r_diffuse*r_surface_diffuse + eps)
+        flux += s_up[:,0,:] # from layer zero toward upper atmosphere
+        flux_up.append(flux)
 
-        # Adding-Doubling for direct radiation
-        t_multi_direct = (t_direct* r_surface_direct * e_diffuse * e_r_diffuse*d 
-                        + e_direct * e_t_direct * d)
-        
-        a_surface_multi_direct = (t_direct * a_surface_direct 
-                                + t_multi_direct * a_surface_diffuse)
+        flux_up = torch.stack(flux_up, dim=1) # from layer up, n values
+        flux_up = torch.flip(flux_up, dims=(1,))
 
-        r_surface_multi_direct = (t_direct * r_surface_direct * d 
-                                + e_direct * e_t_direct * r_surface_diffuse * d)
+        absorbed_flux = torch.stack(absorbed_flux, dim=1) # n values
+        absorbed_flux = torch.flip(absorbed_flux, dims=(1,))
 
-        a_layer_multi_direct = (e_direct * e_a_direct 
-                            + r_surface_multi_direct * e_diffuse * e_a_diffuse)
+        return absorbed_flux, flux_up
+    
+    def _compute_downward_flux (self, s_down, rs, ds, t, a):
+        """ 
+        s_down represents layer it is exiting
+        n-1 = len(s_down)
 
-        r_layer_multi_direct = (e_direct * e_r_direct 
-                        + r_surface_multi_direct 
-                        * (t_diffuse + e_diffuse * e_t_diffuse))
+        index of flux represents radiation flowing into layer
+        n = len(output)
+        """
 
-        # Adding-Doubling for diffuse radiation
-        t_multi_diffuse = (
-            t_diffuse * r_surface_diffuse * e_diffuse * e_r_diffuse * d 
-            + e_diffuse * e_t_diffuse * d) 
-        
-        a_surface_multi_diffuse = (t_diffuse * a_surface_diffuse 
-                                + t_multi_diffuse * a_surface_diffuse)
+        # no downward flux or absorption for layer=0
+        flux = torch.zeros()
+        flux_down = []
+        flux_down.append(flux)
+        absorbed_flux = []
+        absorbed_flux.append(torch.zeros())
 
-        r_surface_multi_diffuse = (t_diffuse * r_surface_diffuse * d 
-                             + e_diffuse * e_t_diffuse * r_surface_diffuse*d)
-        
-        a_layer_multi_diffuse = (e_diffuse * e_a_diffuse 
-                        + r_surface_multi_diffuse * e_diffuse * e_a_diffuse)
+        for l in torch.arange(0, s_down.shape[1]-1):
+            flux += s_down[:,l,:]  # exiting layer l, entering l+1
+            flux_down.append(flux)
+            a_multi = a[:,l+1,:] * (1 + rs[:,l+2,:] * t[:,l+1,:] * ds[:,l+1,:]) #good
+            absorbed_flux.append(a_multi * flux)
+            flux = flux * t[:,l+1,:] * ds[:,l+1,:]
 
-        r_layer_multi_diffuse = (e_diffuse * e_r_diffuse 
-                        + r_surface_multi_diffuse 
-                        * (t_diffuse + e_diffuse * e_t_diffuse))
+        flux += s_down[:,-1,:]
+        flux_down.append(flux)
+        absorbed_flux.append(a[:,-1,:] * flux)
 
-        return (t_multi_direct, t_multi_diffuse, 
-                r_layer_multi_direct, r_layer_multi_diffuse, 
-                r_surface_multi_direct, r_surface_multi_diffuse, 
-                a_layer_multi_direct, a_layer_multi_diffuse, 
-                a_surface_multi_direct, a_surface_multi_diffuse)
+        absorbed_flux = torch.stack(absorbed_flux, dim=1)
+        flux_down = torch.stack(flux_down, dim=1)
 
+        # n output values
+        return absorbed_flux, flux_down
+
+    def _adding_doubling (self, a, r, t, s):
+        """
+        All inputs:
+            Dimensions[examples, layers, channels]
+        """
+
+        # Bottom up cumulative surface reflection
+        rs, ds = self._compute_surface_reflection(r,t)
+
+        # Top down cumulative top layer reflection
+        rt, dt = self._compute_top_reflection(r,t)
+
+        # compute multi-reflection sandwich terms 
+        # uses rt for top, rs for bottom
+
+        d_multi = self._compute_sandwich_d(rs, rt)
+
+        ### Downward sources
+        s_multi_down = s[:,:-1,:] * d_multi[:,1:,:]  # n-1 values, flow from layer
+        s_multi_up_down = s[:,1:,:] * rt[:,:-1,:] * d_multi[:,1:,:]
+
+        s_down = s_multi_down + s_multi_up_down # index corresponds to exiting layer
+
+        absorbed_flux_down, flux_down = self._compute_downward_flux (s_down, rs, ds, t, a)
+
+        ### Upward sources
+        s_multi_up = s * d_multi    # Index of exiting surface, n values
+        s_multi_down_up = s[:,:-1,:] * rs[:,1:,:] * d_multi[:,1:,:] # n-1 values, index of entering surface
+        s_multi_down_up = torch.cat([torch.zeros(), s_multi_down_up], axis=1) #n values, index of exiting surface
+ 
+        s_up = s_multi_up + s_multi_down_up
+
+        absorbed_flux_up, flux_up = self._compute_upward_flux (s_up, rt, dt, t, a)
+
+        absorbed_flux = absorbed_flux_down + absorbed_flux_up
+
+        return flux_down, flux_up, absorbed_flux
+    
     def forward(self, x):
         """
-        Multi reflects between a surface and a single 
-        overhead layer generating their revised radiative coefficients.
-        Then merges this surface and layer into a new
-        "surface" and we repeat this process with 
-        the next layer above and continues
-        to the top of the atmosphere (TOA).
-
         Computations are independent across channel.
 
         The prefixes -- t, e, r, a -- correspond respectively to
         transmission, extinction, reflection, and absorption.
         """
 
-        radiative_layers, x_surface = x
+        raw_sources, layers, x_surface = x
 
-        t_direct, t_diffuse, e_split_direct, e_split_diffuse = radiative_layers
+        t_diffuse, e_split_diffuse = layers
 
-        (r_surface_direct, r_surface_diffuse, 
-         a_surface_direct, a_surface_diffuse) = (x_surface[:,:,0], 
-                                               x_surface[:,:,1], 
-                                               x_surface[:,:,2], 
-                                               x_surface[:,:,3])
-        t_multi_direct_list = []
-        t_multi_diffuse_list = []
-        r_surface_multi_direct_list = []
-        r_surface_multi_diffuse_list = []
-        a_layer_multi_direct_list = []
-        a_layer_multi_diffuse_list = []
+        shape = t_diffuse.shape
 
-        # Start at the original surface and the first layer and move up
-        # one atmospheric layer for each iteration
-        for i in reversed(torch.arange(start=0, end=t_direct.shape[1])):
-            multireflected_info = self._adding_doubling (t_direct[:,i,:], 
-                                                   t_diffuse[:,i,:], 
-                                                   e_split_direct[:,i,:,:], 
-                                                   e_split_diffuse[:,i,:,:], 
-                                                   r_surface_direct, 
-                                                   r_surface_diffuse, 
-                                                   a_surface_direct, 
-                                                   a_surface_diffuse)
-            (t_multi_direct, t_multi_diffuse,
-            r_layer_multi_direct, r_layer_multi_diffuse,
-            r_surface_multi_direct, r_surface_multi_diffuse,
-            a_layer_multi_direct, a_layer_multi_diffuse,
-            a_surface_multi_direct, a_surface_multi_diffuse) = multireflected_info
+        (r_surface_diffuse, a_surface_diffuse) = (x_surface[:,:,0:1], 
+                                               x_surface[:,:,1:2])
 
-            # Merge the layer and surface forming a new "surface"
-            r_surface_direct = r_layer_multi_direct
-            r_surface_diffuse = r_layer_multi_diffuse
-            a_surface_direct = a_layer_multi_direct + a_surface_multi_direct
-            a_surface_diffuse = a_layer_multi_diffuse + a_surface_multi_diffuse
+        # (n_examples, n_levels, n_bands) * (n_bands, n_channels)
+        s = torch.matmul(raw_sources, F.softmax(self.bands_to_channels,axis=1)) ##???
 
-            t_multi_direct_list.append(t_multi_direct)
-            t_multi_diffuse_list.append(t_multi_diffuse)
-            r_surface_multi_direct_list.append(r_surface_multi_direct)
-            r_surface_multi_diffuse_list.append(r_surface_multi_diffuse)
-            a_layer_multi_direct_list.append(a_layer_multi_direct)
-            a_layer_multi_diffuse_list.append(a_layer_multi_diffuse)
+        e = 1.0 - t_diffuse
 
-        # Stack output in layers
-        t_multi_direct= torch.stack(t_multi_direct_list, dim=1)
-        t_multi_diffuse = torch.stack(t_multi_diffuse_list, dim=1)
-        r_surface_multi_direct = torch.stack(r_surface_multi_direct_list, dim=1)
-        r_surface_multi_diffuse = torch.stack(r_surface_multi_diffuse_list, dim=1)
-        a_layer_multi_direct = torch.stack(a_layer_multi_direct_list, dim=1)
-        a_layer_multi_diffuse = torch.stack(a_layer_multi_diffuse_list, dim=1)
+        t = t_diffuse + e * e_split_diffuse[:,:,:,0]
+        r = e * e_split_diffuse[:,:,:,1]
+        a = e * e_split_diffuse[:,:,:,2]
 
-        # Reverse ordering of layers such that top layer is first
-        t_multi_direct = torch.flip(t_multi_direct, dims=(1,))
-        t_multi_diffuse = torch.flip(t_multi_diffuse, dims=(1,))
-        r_surface_multi_direct = torch.flip(r_surface_multi_direct, dims=(1,))
-        r_surface_multi_diffuse = torch.flip(r_surface_multi_diffuse, dims=(1,))
-        a_layer_multi_direct = torch.flip(a_layer_multi_direct, dims=(1,))
-        a_layer_multi_diffuse = torch.flip(a_layer_multi_diffuse, dims=(1,))
+        r_surface_diffuse = r_surface_diffuse.expand(shape[0],1,shape[2])
+        a_surface_diffuse = a_surface_diffuse.expand(shape[0],1,shape[2])
+        t_surface_diffuse = torch.zeros((shape[0],1,shape[2]))
 
-        multireflected_layers = [t_direct, t_diffuse, 
-                                 t_multi_direct, t_multi_diffuse, 
-                                 r_surface_multi_direct,r_surface_multi_diffuse, 
-                                 a_layer_multi_direct, a_layer_multi_diffuse]
-        # The reflection coefficient at the top of the atmosphere
-        # is the reflection coefficient of top layer
-        upward_reflection_toa = r_layer_multi_direct
-        return (multireflected_layers, upward_reflection_toa)
-    
-class Propagation(nn.Module):
-    """
-    Propagate flux from the top of the atmosphere to the
-    surface.
-    We only need to propagate flux in a single pass
-    since the radiative properties account for
-    multi reflection
+        a = torch.stack((a, a_surface_diffuse), dim=1)
+        r = torch.stack((r, r_surface_diffuse), dim=1)
+        t = torch.stack((t, t_surface_diffuse), dim=1)
 
-    Consider two downward fluxes entering the layer: 
-                flux_direct, flux_diffuse
-
-    Downward Direct Flux Transmitted = flux_direct * t_direct
-    Downward Diffuse Flux Transmitted = 
-                    flux_direct * t_multi_direct + 
-                    flux_diffuse * (t_diffuse + t_multi_diffuse)
-
-    Upward Flux from Top Layer = flux_direct * r_layer_multi_direct +
-                            flux_diffuse * r_layer_multi_diffuse
-
-    Upward Flux into Top Layer = 
-                        flux_direct * r_surface_multi_direct +
-                        flux_diffuse * r_surface_multi_diffuse
-
-    Both upward fluxes are diffuse since they are from radiation
-    that is scattered upwards
-    """
-    def __init__(self,n_channel):
-        super().__init__()
-        super(Propagation, self).__init__()
-        self.n_channel = n_channel
-
-    def forward(self, x):
-
-        multireflected_layers, upward_reflection_toa, input_flux = x
-
-        (t_direct, t_diffuse,
-        t_multi_direct, t_multi_diffuse,
-        r_surface_multi_direct, r_surface_multi_diffuse,
-        a_layer_multi_direct, a_layer_multi_diffuse)  = multireflected_layers
-
-        flux_direct, flux_diffuse = input_flux
-
-        # Assign all 3 fluxes above the top layer
-        flux_down_direct = [flux_direct]
-        flux_down_diffuse = [flux_diffuse]
-        flux_up_diffuse = [flux_direct * upward_reflection_toa]
-
-        flux_absorbed = []
-
-
-        # Propagate downwards through the atmospheric layers
-        for i in range(t_direct.shape[1]):
-
-            flux_absorbed.append(flux_direct * a_layer_multi_direct[:,i] + flux_diffuse * a_layer_multi_diffuse[:,i])
-
-            # Will want this later when incorporate surface interactions
-            #flux_absorbed_surface = flux_direct * a_surface_multi_direct + \
-            #flux_diffuse * a_surface_multi_diffuse
-
-            flux_down_direct.append(flux_direct * t_direct[:,i])
-            flux_down_diffuse.append(
-                flux_direct * t_multi_direct[:,i] 
-                + flux_diffuse * (t_diffuse[:,i] + t_multi_diffuse[:,i]))
-            
-            flux_up_diffuse.append(
-                flux_direct * r_surface_multi_direct[:,i] 
-                + flux_diffuse * r_surface_multi_diffuse[:,i])
-            
-            flux_direct = flux_down_direct[-1]
-            flux_diffuse = flux_down_diffuse[-1]
-        
-        # stack atmospheric layers
-        flux_down_direct = torch.stack(flux_down_direct,dim=1)
-        flux_down_diffuse = torch.stack(flux_down_diffuse,dim=1)
-        flux_up_diffuse = torch.stack(flux_up_diffuse,dim=1)
-        flux_absorbed = torch.stack(flux_absorbed,dim=1)
-  
-        # Sum across channels
-        flux_down_direct = torch.sum(flux_down_direct,dim=2,keepdim=False)
-        flux_down_diffuse = torch.sum(flux_down_diffuse,dim=2,keepdim=False)      
-        flux_up_diffuse = torch.sum(flux_up_diffuse,dim=2,keepdim=False)  
-        flux_absorbed = torch.sum(flux_absorbed,dim=2,keepdim=False)  
-
-
-        return [flux_down_direct, flux_down_diffuse, flux_up_diffuse, 
-                flux_absorbed]
-
-
+        return _adding_doubling(a, r, t, s)
+ 
     
 class FullNet(nn.Module):
     """ Computes full radiative transfer (direct and diffuse radiation)
     for an atmospheric column """
 
-    def __init__(self, n_channel, n_constituent, dropout_p, device):
+    def __init__(self, n_channel, n_constituent, n_band, dropout_p, device):
         super(FullNet, self).__init__()
         self.device = device
         self.n_channel = n_channel
-        n_coarse_code = 3
-
-
 
         # Learns optical depth for each layer for each constituent for 
         # each channel
         self.extinction_net = LayerDistributed(Extinction(n_channel,dropout_p,
                                                           device))
-
-        # Learns decomposition of extinguished radiation (into t, r, a)
-        # for each channel
-
-
-        # separate scattering model for each channel
-        # tau is input to scattering
-        # #8, #11
+        
         self.scattering_net = LayerDistributed(Scattering_v2_tau_efficient(n_channel,
                                                     n_constituent,
                                                     dropout_p,
                                                     device))
 
-
-
-        # Computes result of interaction among all layers
-        self.multireflection_net = MultiReflection()
-
-        # Propagates radiation from top of atmosphere (TOA) to surface
-        self.propagation_net = Propagation(n_channel)
+        self.multireflection_net = MultiReflection(n_channel,n_band,device)
 
 
     def reset_dropout(self,dropout_p):
@@ -944,41 +849,20 @@ class FullNet(nn.Module):
 
     def forward(self, x):
 
-        x_layers, x_surface, _, _, _, _ = x
+        x_layers, x_surface, raw_sources, _, _, _, _ = x
 
         #print(f"x_layers.shape = {x_layers.shape}")
         #9 constituents: lwc, ciw, h2o, o3, co2,  o2, n2o, ch4, co,  -no2?, 
         (temperature_pressure, 
         constituents) = (x_layers[:,:,0:2], 
                         x_layers[:,:,2:11])
-        
-        lw_sources = compute_sources(temperature_pressure[:,:,0])
-
-
+    
         tau = self.extinction_net((temperature_pressure, 
                                 constituents))
 
-
-        #print(f"First: tau.shape = {tau.shape}")
-
         layers = self.scattering_net((tau,))
 
-        (multireflected_layers, 
-        upward_reflection_toa) = self.multireflection_net([layers,
-                                                        x_surface])
-
-        input_flux = torch.zeros((temperature_pressure.shape[0], self.n_channel),
-                                        dtype=torch.float32,
-                                        device=self.device)
-
-
-        flux = self.propagation_net((multireflected_layers, 
-                                    upward_reflection_toa,
-                                    input_flux))
-
-        #(flux_down, flux_up, flux_absorbed) = flux
-        
-
+        flux = self.multireflection_net([raw_sources, layers, x_surface])
         return flux
 
 
@@ -1941,3 +1825,66 @@ if __name__ == "__main__":
     
     #train_full_dataloader()
     test_full_dataloader()
+
+    def _adding_doubling (self, t_direct, t_diffuse, 
+                        e_split_direct, e_split_diffuse, 
+                        r_surface_direct, r_surface_diffuse, 
+                        a_surface_direct, a_surface_diffuse):
+        """
+       
+        """
+        # Split out extinguished component
+        e_direct = 1.0 - t_direct
+        e_diffuse = 1.0 - t_diffuse
+
+        # Split extinguished into transmitted, reflected, and absorbed
+        e_t_direct, e_r_direct, e_a_direct = (e_split_direct[:,:,0], 
+                                              e_split_direct[:,:,1],
+                                              e_split_direct[:,:,2])
+        e_t_diffuse, e_r_diffuse, e_a_diffuse = (e_split_diffuse[:,:,0], 
+                                                 e_split_diffuse[:,:,1],
+                                                 e_split_diffuse[:,:,2])
+
+        eps = 1.0e-06
+        d = 1.0/(1.0 - e_diffuse*e_r_diffuse*r_surface_diffuse + eps)
+
+        # Adding-Doubling for direct radiation
+        t_multi_direct = (t_direct* r_surface_direct * e_diffuse * e_r_diffuse*d 
+                        + e_direct * e_t_direct * d)
+        
+        a_surface_multi_direct = (t_direct * a_surface_direct 
+                                + t_multi_direct * a_surface_diffuse)
+
+        r_surface_multi_direct = (t_direct * r_surface_direct * d 
+                                + e_direct * e_t_direct * r_surface_diffuse * d)
+
+        a_layer_multi_direct = (e_direct * e_a_direct 
+                            + r_surface_multi_direct * e_diffuse * e_a_diffuse)
+
+        r_layer_multi_direct = (e_direct * e_r_direct 
+                        + r_surface_multi_direct 
+                        * (t_diffuse + e_diffuse * e_t_diffuse))
+
+        # Adding-Doubling for diffuse radiation
+        t_multi_diffuse = (
+            t_diffuse * r_surface_diffuse * e_diffuse * e_r_diffuse * d 
+            + e_diffuse * e_t_diffuse * d) 
+        
+        a_surface_multi_diffuse = (t_diffuse * a_surface_diffuse 
+                                + t_multi_diffuse * a_surface_diffuse)
+
+        r_surface_multi_diffuse = (t_diffuse * r_surface_diffuse * d 
+                             + e_diffuse * e_t_diffuse * r_surface_diffuse*d)
+        
+        a_layer_multi_diffuse = (e_diffuse * e_a_diffuse 
+                        + r_surface_multi_diffuse * e_diffuse * e_a_diffuse)
+
+        r_layer_multi_diffuse = (e_diffuse * e_r_diffuse 
+                        + r_surface_multi_diffuse 
+                        * (t_diffuse + e_diffuse * e_t_diffuse))
+
+        return (t_multi_direct, t_multi_diffuse, 
+                r_layer_multi_direct, r_layer_multi_diffuse, 
+                r_surface_multi_direct, r_surface_multi_diffuse, 
+                a_layer_multi_direct, a_layer_multi_diffuse, 
+                a_surface_multi_direct, a_surface_multi_diffuse)

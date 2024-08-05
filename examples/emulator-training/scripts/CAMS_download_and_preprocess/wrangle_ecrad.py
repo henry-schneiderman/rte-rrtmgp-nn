@@ -5,7 +5,64 @@ import xarray as xr
 import os
 import sys
 
+def generate_raw_sources(totplanck, min_temp, temp_layers):
+    #double totplnk(bnd, temperature_Planck)
+    # examples, layers, bands
+    raw_sources = torch.zeros(temp_layers.shape[0],temp_layers.shape[1], totplanck.shape[0])
 
+    for i in torch.arange(temp_layers.shape[0]):
+        for j in torch.arange(temp_layers.shape[1]):
+            diff = temp_layers[i,j] - min_temp
+            index = np.floor(diff)
+            fraction = diff - np.float(index)
+            raw_sources[i,j,:] = totplanck[:,index](1.0 - fraction) + totplanck[:,index + 1] * fraction
+
+    return raw_sources
+
+def wrapper_raw_sources (mode,month,year, base_directory, planck_file_name="../../../rte-rrtmgp-nn/rrtmgp/data/rrtmgp-data-lw-g256-2018-12-04.nc"):
+
+    dt = Dataset(planck_file_name,'r')
+
+    totplanck = dt.variables["totplnk"][:,:].data
+    temp_planck = dt.variables["temperature_Planck"][:].data
+    min_temp = temp_planck[0]
+    dt.close()
+
+    temp_file_name = f'{base_directory}lw_input-{mode}-{year}-{month}.nc'
+
+    ######
+
+    dt = Dataset(temp_file_name,'r')
+    temp_layer = dt.variables["temp_layer"][:,:,:].data
+    shape = temp_layer.shape
+
+    col = shape[0]*shape[1]
+
+    temp_layer = temp_layer.reshape((col, shape[2]))
+
+    temp_skin = dt.variable["skin_temperature"][:].data
+    temp_skin = temp_skin.reshape((-1,1))
+
+    temp_layer = torch.stack((temp_layer, temp_skin), axis=1)
+
+    raw_sources = generate_raw_sources(totplanck, min_temp, temp_layer)
+
+    dt.close()
+
+    ###########
+
+    source_file_name = f'{base_directory}lw_source-{mode}-{year}-{month}.nc'
+    dt.Dataset(source_file_name, "w")
+
+    dim1 = dt.createDimension("col",col)
+    dim2 = dt.createDimension("level",temp_layer.shape[1])
+    dim3 = dt.createDimension("band",totplanck.shape[0])
+
+    var = dt.createVariable("raw_sources","f4",("col","level","band"))
+    var[:]=raw_sources[:]
+    dt.close()
+
+    
 def wrangle_ecrad_data(mode,month,year, base_directory):
     d = base_directory + f'{mode}/{year}/{month}/'
 
