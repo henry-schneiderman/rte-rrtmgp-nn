@@ -5,30 +5,86 @@ import xarray as xr
 import os
 import sys
 
-def generate_raw_sources(totplanck, min_temp, temp_layers):
+def generate_raw_sources(totplanck, min_temp, max_temp, temp_layers, bandwidth):
     #double totplnk(bnd, temperature_Planck)
     # examples, layers, bands
-    raw_sources = torch.zeros(temp_layers.shape[0],temp_layers.shape[1], totplanck.shape[0])
+    raw_sources = np.zeros((temp_layers.shape[0],temp_layers.shape[1], totplanck.shape[0]), dtype=np.float32)
 
-    for i in torch.arange(temp_layers.shape[0]):
-        for j in torch.arange(temp_layers.shape[1]):
+    if False:
+        print(f"Min allowable temp = {min_temp}. Actual min temp = {np.min(temp_layers)}")
+        print(f"Max allowable temp = {max_temp}. Actual max temp = {np.max(temp_layers)}")
+
+    if np.min(temp_layers) < min_temp:
+        print(f"Out of range: Min allowable temp = {min_temp}. Actual min temp = {np.min(temp_layers)}")
+        exit()
+
+    if np.max(temp_layers) > max_temp:
+        print(f"Out of range: Max allowable temp = {max_temp}. Actual max temp = {np.max(temp_layers)}")
+        exit()
+
+    for i in np.arange(temp_layers.shape[0]):
+        for j in np.arange(temp_layers.shape[1]):
             diff = temp_layers[i,j] - min_temp
-            index = np.floor(diff)
-            fraction = diff - np.float(index)
-            raw_sources[i,j,:] = totplanck[:,index](1.0 - fraction) + totplanck[:,index + 1] * fraction
+            index = np.int32(np.floor(diff))
+            fraction = diff - np.float32(index)
+            raw_sources[i,j,:] = 1.0e04 * bandwidth[:] * np.pi * (totplanck[:,index] * (1.0 - fraction) + totplanck[:,index + 1] * fraction)
 
     return raw_sources
 
-def wrapper_raw_sources (mode,month,year, base_directory, planck_file_name="../../../rte-rrtmgp-nn/rrtmgp/data/rrtmgp-data-lw-g256-2018-12-04.nc"):
+def examine_planck (planck_file_name="../../../../rrtmgp/data/rrtmgp-data-lw-g256-2018-12-04.nc"):
 
     dt = Dataset(planck_file_name,'r')
 
     totplanck = dt.variables["totplnk"][:,:].data
-    temp_planck = dt.variables["temperature_Planck"][:].data
-    min_temp = temp_planck[0]
+    band = 16
+    temperature_max = 50
+
+    print(f"{totplanck[band-1,:temperature_max] / 340.0}")
+
     dt.close()
 
-    temp_file_name = f'{base_directory}lw_input-{mode}-{year}-{month}.nc'
+def examine_planck_2 (planck_file_name="/home/hws/rrtmg_lw.nc"):
+
+    dt = Dataset(planck_file_name,'r')
+
+    totplanck = dt.variables["IntegratedPlanckFunction"][:,:].data
+    band = 10
+    temperature_max = 50
+
+    bandlowerlimit = dt.variables["BandWavenumberLowerLimit"][:].data
+    bandupperlimit = dt.variables["BandWavenumberUpperLimit"][:].data
+
+    TemperaturePlanckValues = dt.variables["TemperaturePlanckValues"][:].data
+
+    print(f"Temp Planck = {TemperaturePlanckValues}")
+
+    bandwidth = bandupperlimit - bandlowerlimit
+    print(f"Bandwidth: {bandwidth}")
+
+    #print(f"{totplanck[band,:temperature_max] / bandwidth[band]}")
+
+    print(f"{totplanck[band,:temperature_max] }")
+
+    dt.close()
+
+def wrapper_raw_sources (mode,month,year, base_directory, planck_file_name="/home/hws/rrtmg_lw.nc"): #planck_file_name="../../../../rrtmgp/data/rrtmgp-data-lw-g256-2018-12-04.nc"):
+
+    dt = Dataset(planck_file_name,'r')
+
+    #totplanck = dt.variables["totplnk"][:,:].data
+    totplanck = dt.variables["IntegratedPlanckFunction"][:,:].data
+    #temp_planck = dt.variables["temperature_Planck"][:].data
+    temp_planck = dt.variables["TemperaturePlanckValues"][:].data
+    min_temp = temp_planck[0]
+    max_temp = temp_planck[-1]
+
+    bandlowerlimit = dt.variables["BandWavenumberLowerLimit"][:].data
+    bandupperlimit = dt.variables["BandWavenumberUpperLimit"][:].data
+    bandwidth = bandupperlimit - bandlowerlimit
+
+    dt.close()
+
+    temp_file_name = f'{base_directory}{mode}/{year}/{month}/lw_input-{mode}-{year}-{month}.nc'
 
     ######
 
@@ -40,30 +96,30 @@ def wrapper_raw_sources (mode,month,year, base_directory, planck_file_name="../.
 
     temp_layer = temp_layer.reshape((col, shape[2]))
 
-    temp_skin = dt.variable["skin_temperature"][:].data
+    temp_skin = dt.variables["skin_temperature"][:].data
     temp_skin = temp_skin.reshape((-1,1))
 
-    temp_layer = torch.stack((temp_layer, temp_skin), axis=1)
+    temp_layer = np.concatenate((temp_layer, temp_skin), axis=1)
 
-    raw_sources = generate_raw_sources(totplanck, min_temp, temp_layer)
+    raw_sources = generate_raw_sources(totplanck, min_temp, max_temp, temp_layer, bandwidth)
 
     dt.close()
 
     ###########
 
-    source_file_name = f'{base_directory}lw_source-{mode}-{year}-{month}.nc'
-    dt.Dataset(source_file_name, "w")
+    source_file_name = f'{base_directory}/{mode}/{year}/{month}/lw_source-{mode}-{year}-{month}.nc'
+    dt = Dataset(source_file_name, "w")
 
     dim1 = dt.createDimension("col",col)
-    dim2 = dt.createDimension("level",temp_layer.shape[1])
+    dim2 = dt.createDimension("layers_and_surface",temp_layer.shape[1])
     dim3 = dt.createDimension("band",totplanck.shape[0])
 
-    var = dt.createVariable("raw_sources","f4",("col","level","band"))
+    var = dt.createVariable("raw_sources","f4",("col","layers_and_surface","band"))
     var[:]=raw_sources[:]
     dt.close()
 
-    
-def wrangle_ecrad_data(mode,month,year, base_directory):
+
+def wrangle_ecrad_input_data(mode,month,year, base_directory):
     d = base_directory + f'{mode}/{year}/{month}/'
 
     f = d + f'CAMS_{year}-{month}.final.2.nc'
@@ -378,25 +434,163 @@ def wrangle_ecrad_data(mode,month,year, base_directory):
     # organize for processing
 
 
+
+def wrangle_nn_input_data(mode,month,year, base_directory):
+    d = base_directory + f'{mode}/{year}'   #'/{month}/'
+    file_name_ecrad_input = base_directory + f'/{month}/lw_input-{mode}-{year}-{month}.nc'
+    file_name_source_input = base_directory + f'/{month}/lw_source-{mode}-{year}-{month}.nc'
+    file_name_nn_input = base_directory + f'/nn_input-{mode}-{year}-{month}.nc'
+    dt_ecrad = Dataset(file_name_ecrad_input,"r")
+    dt_source = Dataset(file_name_source_input,"r")
+    dt_nn = Dataset(file_name_nn_input,"w")
+    temp_level = dt_ecrad.variables["temp_layer"][:,:,:].data
+    shape = temp_level.shape
+    col = shape[0] * shape[1]
+    temp_level = temp_level.reshape((col,-1))
+    pres_level = dt_ecrad.variables["pres_layer"][:,:,:].data
+    dim_col = dt_nn.createDimension("col",col)
+    dim_level = dt_nn.createDimension("level",pres_level.shape[1])
+    var_temp_level = dt_nn.createVariable("temp_level","f4",("col","level"))
+    var_temp_level[:] = temp_level[:]
+
+    var_pres_level = dt_nn.createVariable("pres_level","f4",("col","level"))
+    var_pres_level[:] = pres_level[:]
+
+    pres_half_level = dt_ecrad.variables["pressure_hl"][:,:].data
+
+    delta_pressure = pres_half_level[:,1:] - pres_half_level[:,:-1]
+
+    g = 9.80665
+    total_mass = (delta_pressure / g) 
+
+    cw_mr = dt_ecrad.variables["q_liquid"][:,:].data
+
+    clwc = cw_mr / (1.0 + cw_mr)
+
+    cw = clwc * total_mass
+
+    ci_mr = dt_ecrad.variables["q_ice"][:,:].data
+
+    ciwc = ci_mr / (1.0 + ci_mr)
+
+    ci = ciwc * total_mass
+
+    q = dt_ecrad.variables["q"][:,:].data
+
+    water_vapor = q * total_mass
+
+    water_vapor_mmr = q / (1.0 - q)
+
+    dry_mass = water_vapor / water_vapor_mmr
+
+    o3_mmr = dt_ecrad.variables["o3_mmr"][:,:].data
+
+    o3 = o3_mmr * dry_mass
+
+    co2_vmr = dt_ecrad.variables["co2_vmr"][:,:].data
+
+    m_co2 = 44.0095
+
+    m_dry = 28.964
+
+    co2 = dry_mass * co2_vmr * m_co2  / m_dry 
+
+    o2_vmr = dt_ecrad.variables["o2_vmr"][:,:].data
+
+    m_o2 = 31.999
+
+    m_dry = 28.964
+
+    o2 = dry_mass * o2_vmr * m_o2  / m_dry 
+
+    n2o_vmr = dt_ecrad.variables["n2o_vmr"][:,:].data
+
+    m_n2o = 44.01280
+
+    m_dry = 28.964
+
+    n2o = dry_mass * n2o_vmr * m_n2o  / m_dry 
+
+    ch4_vmr = dt_ecrad.variables["ch4_vmr"][:,:].data
+
+    m_ch4 = 16.0425
+
+    m_dry = 28.964
+
+    ch4 = dry_mass * ch4_vmr * m_ch4  / m_dry 
+
+    co_vmr = dt_ecrad.variables["co_vmr"][:,:].data
+
+    m_co = 28.010
+
+    m_dry = 28.964
+
+    co = dry_mass * co_vmr * m_co  / m_dry 
+
+    shape = water_vapor.shape
+    n_examples = shape[0]
+    n_levels = shape[1]
+
+    cw = cw.reshape((n_examples,n_levels, 1))
+    ci = ci.reshape((n_examples,n_levels, 1))
+    water_vapor = water_vapor.reshape((n_examples,n_levels, 1))
+    o3 = o3.reshape((n_examples,n_levels, 1))
+    co2 = co2.reshape((n_examples,n_levels, 1))
+
+    o2 = o2.reshape((n_examples,n_levels, 1))
+    n2o = n2o.reshape((n_examples,n_levels, 1))
+    ch4 = ch4.reshape((n_examples,n_levels, 1))
+    co = co.reshape((n_examples,n_levels, 1))
+
+    constituents = np.concatenate((cw,ci,water_vapor,o3,co2,o2,n2o,ch4,co), axis=2)
+
+    dim_feature = dt_nn.createDimension("feature",9)
+
+    var_constituents = dt_nn.createVariable("constituents","f4",("col","level","feature"))
+    var_constituents[:] = constituents[:]
+    var_constituents.setncattr("description-1","mass")
+    var_constituents.setncattr("description-2","liquid_water, ice_water, water_vapor, o3, co2, o2, n2o, ch4, co")
+
+    emissivity = dt_ecrad.variables["lw_emissivity"][:].data
+
+    lw_emissivity = dt_nn.createVariable("lw_emissivity","f4",("col",))
+    lw_emissivity[:] = emissivity[:]
+
+    var_delta = dt_nn.createVariable("delta_pressure","f4",("col","level",))
+    var_delta[:] = delta_pressure[:]
+
+    sources = dt_source.variables["raw_sources"][:,:,:].data
+
+    var_sources = dt_nn.createVariable("sources","f4",("col","level_and_surface","band"))
+    var_sources[:] = sources[:]
+
 if __name__ == "__main__":
 
-    #mode = 'testing'
-    #month = '03'
-    #year = '2009'
 
     base_directory = f'/data-T1/hws/CAMS/processed_data/'
 
-    months = [str(m).zfill(2) for m in range(1,13)]
+    if False:
+        mode = 'testing'
+        month = '03'
+        year = '2009'
 
-    combo = [('training','2008'),('cross_validation','2008'),('testing','2009'),('testing','2015'),('testing','2020')]
+        wrapper_raw_sources (mode,month,year, base_directory)
 
-    for c in combo:
-        mode = c[0]
-        year = c[1]
-        print(f'Processing {mode} {year}')
-        for month in months[:]:
-            print(f'{month}')
-            wrangle_ecrad_data(mode, month, year, base_directory)
+    if True:
+        months = [str(m).zfill(2) for m in range(1,13)]
 
+        combo = [('training','2008'),('cross_validation','2008'),('testing','2009'),('testing','2015'),('testing','2020')]
 
+        for c in combo:
+            mode = c[0]
+            year = c[1]
+            print(f'Processing {mode} {year}')
+            for month in months[:]:
+                print(f'{year} {month}')
+                #wrangle_ecrad_input_data(mode, month, year, base_directory)
+                wrapper_raw_sources (mode,month,year, base_directory)
+                #wrangle_nn_input_data(mode, month, year, base_directory)
+
+    if False:
+        examine_planck_2()
 

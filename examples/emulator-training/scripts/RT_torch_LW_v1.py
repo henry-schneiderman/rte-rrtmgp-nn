@@ -284,6 +284,7 @@ class Extinction(nn.Module):
         self.net_h2o = nn.Linear(1,self.n_channel,bias=False,device=device)
         self.net_o3  = nn.Linear(1,self.n_channel,bias=False,device=device)
         self.net_co2 = nn.Linear(1,self.n_channel,bias=False,device=device)
+        
         self.net_o2   = nn.Linear(1,self.n_channel,bias=False,device=device)
         self.net_n2o = nn.Linear(1,self.n_channel,bias=False,device=device)
         self.net_ch4 = nn.Linear(1,self.n_channel,bias=False,device=device)
