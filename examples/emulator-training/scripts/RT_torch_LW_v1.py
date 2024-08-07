@@ -581,10 +581,10 @@ class MultiReflection(nn.Module):
         rs.append(last_rs)
         ds = []
         shape = r.shape
-        ds.append(torch.ones((shape[0],shape[2]), device=self.device))
+        ds.append(torch.ones((shape[0],shape[2]), dtype=torch.float32,device=self.device))
 
         # n-2 . . 0 (inclusive)
-        for l in reversed(torch.arange(start=0, end=r.shape[1]-1)):
+        for l in reversed(torch.arange(start=0, end=r.shape[1]-1, device=self.device)):
             dd = 1.0 / (1.0 - last_rs * r[:,l,:])
             ds.append(dd)
             last_rs = r[:,l,:] + last_rs * t[:,l,:] * t[:,l,:] * dd
@@ -614,9 +614,9 @@ class MultiReflection(nn.Module):
         rt.append(last_rt)
         dt = []
         shape = r.shape
-        dt.append(torch.ones((shape[0],shape[2]),device=self.device))
+        dt.append(torch.ones((shape[0],shape[2]), dtype=torch.float32, device=self.device))
 
-        for l in torch.arange(start=1, end=shape[1]):
+        for l in torch.arange(start=1, end=shape[1], device=self.device):
             dd = 1.0 / (1.0 - last_rt * r[:,l,:])
             dt.append(dd)
             last_rt = r[:,l,:] + last_rt * t[:,l,:] * t[:,l,:] * dd
@@ -635,11 +635,11 @@ class MultiReflection(nn.Module):
 
         d = []
         shape = rs.shape
-        d.append(torch.ones((shape[0],shape[2]),device=self.device))
+        d.append(torch.ones((shape[0],shape[2]), dtype=torch.float32,device=self.device))
 
         # Pad at the beginning????
 
-        for l in torch.arange(start=1, end=shape[1]):
+        for l in torch.arange(start=1, end=shape[1], device=self.device):
             dd = 1.0 / (1.0 - rt[:,l-1,:] * rs[:,l,:])
             d.append(dd)
 
@@ -657,13 +657,13 @@ class MultiReflection(nn.Module):
             absorbed_flux: n elements: into surface + layers (surface is zero since going up)
         """
         shape = t.shape
-        flux = torch.zeros((shape[0],shape[2]), device=self.device)
+        flux = torch.zeros((shape[0],shape[2]), dtype=torch.float32, device=self.device)
         flux_up = []
         absorbed_flux = []
-        absorbed_flux.append(torch.zeros((shape[0],shape[2]), device=self.device)) # no absorbed flux, last layer = n-1
+        absorbed_flux.append(torch.zeros((shape[0],shape[2]), dtype=torch.float32, device=self.device)) # no absorbed flux, last layer = n-1
 
         # from n to 1
-        for l in reversed(torch.arange(1,s_up.shape[1]-1)):
+        for l in reversed(torch.arange(1,s_up.shape[1]-1,device=self.device)):
             flux += s_up[:,l+1,:] # initial exits layer n-1
             flux_up.append(flux) 
             # initially absorbed at layer n-2
@@ -671,10 +671,10 @@ class MultiReflection(nn.Module):
             absorbed_flux.append(flux * a_multi) # initial absorbed at l-1 or n-2
             # propagate into next layer
             flux = flux * t[:,l,:] * dt[:,l,:]
-        flux += s_up[:,1,:]
+        flux += s_up[:,1,:]   # flux exiting layer 1
         flux_up.append(flux)
-        absorbed_flux.append(flux * a[:,0,:])
-        flux = flux * t[:,0,:]
+        absorbed_flux.append(flux * a[:,0,:])  # flux absorbed at layer 0
+        flux = flux * t[:,0,:]  # flux exiting layer 0
 
         flux += s_up[:,0,:] # from layer zero toward upper atmosphere
         flux_up.append(flux)
@@ -698,13 +698,13 @@ class MultiReflection(nn.Module):
 
         # no downward flux or absorption for layer=0
         shape = t.shape
-        flux = torch.zeros((shape[0],shape[2]), device=self.device)
+        flux = torch.zeros((shape[0],shape[2]), dtype=torch.float32, device=self.device)
         flux_down = []
         flux_down.append(flux)
         absorbed_flux = []
-        absorbed_flux.append(torch.zeros((shape[0],shape[2]), device=self.device))
+        absorbed_flux.append(torch.zeros((shape[0],shape[2]), dtype=torch.float32, device=self.device))
 
-        for l in torch.arange(0, s_down.shape[1]-1):
+        for l in torch.arange(0, s_down.shape[1]-1, device=self.device):
             flux += s_down[:,l,:]  # exiting layer l, entering l+1
             flux_down.append(flux)
             a_multi = a[:,l+1,:] * (1 + rs[:,l+2,:] * t[:,l+1,:] * ds[:,l+1,:]) #good
@@ -750,7 +750,7 @@ class MultiReflection(nn.Module):
         s_multi_up = s * d_multi    # Index of exiting surface, n values
         s_multi_down_up = s[:,:-1,:] * rs[:,1:,:] * d_multi[:,1:,:] # n-1 values, index of entering surface
         shape = s_multi_down_up.shape
-        s_multi_down_up = torch.cat([torch.zeros((shape[0],1,shape[2]),device=self.device), s_multi_down_up], axis=1) #n values, index of exiting surface
+        s_multi_down_up = torch.cat([torch.zeros((shape[0],1,shape[2]), dtype=torch.float32, device=self.device), s_multi_down_up], axis=1) #n values, index of exiting surface
  
         s_up = s_multi_up + s_multi_down_up
 
@@ -787,7 +787,7 @@ class MultiReflection(nn.Module):
         a_surface_diffuse = a_surface_diffuse.reshape((-1,1,1))
         r_surface_diffuse = r_surface_diffuse.expand(shape[0],1,shape[2])
         a_surface_diffuse = a_surface_diffuse.expand(shape[0],1,shape[2])
-        t_surface_diffuse = torch.zeros((1,1,1), device=self.device)
+        t_surface_diffuse = torch.zeros((1,1,1), dtype=torch.float32, device=self.device)
         t_surface_diffuse = t_surface_diffuse.expand(shape[0],1,shape[2])
 
         a = torch.cat((a, a_surface_diffuse), dim=1)

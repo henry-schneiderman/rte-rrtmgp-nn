@@ -1,6 +1,7 @@
 import numpy as np
 import random
 import xarray as xr
+import os
 
 import torch
 #import sklearn
@@ -23,6 +24,34 @@ def load_data_full(file):
     flux_up = data.variables['flux_up_lw'][:,:].data
     flux_up_clear = data.variables['flux_up_lw_clear'][:,:].data
 
+    if np.isnan(np.sum(temperature_pressure)):
+        print(f"input temperature_pressure contains NaN")
+        os.abort()
+    if np.isnan(np.sum(composition)):
+        print(f"input composition contains NaN")
+        os.abort()
+    if np.isnan(np.sum(delta_pressure)):
+        print(f"input delta_pressure contains NaN")
+        os.abort()
+    if np.isnan(np.sum(sources)):
+        print(f"input sources contains NaN")
+        os.abort()
+    if np.isnan(np.sum(emissivity)):
+        print(f"input emissivity contains NaN")
+        os.abort()
+    if np.isnan(np.sum(flux_down)):
+        print(f"input flux_down contains NaN")
+        os.abort()
+    if np.isnan(np.sum(flux_down_clear)):
+        print(f"input flux_down_clear contains NaN")
+        os.abort()
+    if np.isnan(np.sum(flux_up)):
+        print(f"input flux_up contains NaN")
+        os.abort()
+    if np.isnan(np.sum(flux_up_clear)):
+        print(f"input flux_up_clear contains NaN")
+        os.abort()
+        
     t_p_mean = np.array([248.6, 35043.8],dtype=np.float32)
     t_p_min = np.array([176.0, 0.0],dtype=np.float32)
     t_p_max = np.array([320.10498, 105420.29],dtype=np.float32)
