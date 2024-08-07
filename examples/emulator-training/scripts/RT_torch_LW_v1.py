@@ -553,7 +553,7 @@ class MultiReflection(nn.Module):
    
         self.device = device
 
-        weight_values = torch.rand((n_channels, n_bands),
+        weight_values = torch.rand((n_bands, n_channels),
                                    requires_grad=True,device=device,
                                    dtype=torch.float32,)
         
@@ -616,7 +616,7 @@ class MultiReflection(nn.Module):
         shape = r.shape
         dt.append(torch.ones((shape[0],shape[2]),device=self.device))
 
-        for l in torch.arange(start=1, end=r.shape[1]):
+        for l in torch.arange(start=1, end=shape[1]):
             dd = 1.0 / (1.0 - last_rt * r[:,l,:])
             dt.append(dd)
             last_rt = r[:,l,:] + last_rt * t[:,l,:] * t[:,l,:] * dd
@@ -639,8 +639,8 @@ class MultiReflection(nn.Module):
 
         # Pad at the beginning????
 
-        for l in torch.arange(start=1, end=rs.shape):
-            dd = 1.0 / (1.0 - rt[l-1] * rs[l])
+        for l in torch.arange(start=1, end=shape[1]):
+            dd = 1.0 / (1.0 - rt[:,l-1,:] * rs[:,l,:])
             d.append(dd)
 
         d = torch.stack(d,dim=1)  # n values
@@ -749,7 +749,8 @@ class MultiReflection(nn.Module):
         ### Upward sources
         s_multi_up = s * d_multi    # Index of exiting surface, n values
         s_multi_down_up = s[:,:-1,:] * rs[:,1:,:] * d_multi[:,1:,:] # n-1 values, index of entering surface
-        s_multi_down_up = torch.cat([torch.zeros(), s_multi_down_up], axis=1) #n values, index of exiting surface
+        shape = s_multi_down_up.shape
+        s_multi_down_up = torch.cat([torch.zeros((shape[0],1,shape[2]),device=self.device), s_multi_down_up], axis=1) #n values, index of exiting surface
  
         s_up = s_multi_up + s_multi_down_up
 
@@ -794,12 +795,12 @@ class MultiReflection(nn.Module):
         t = torch.cat((t, t_surface_diffuse), dim=1)
 
         # (n_examples, n_levels, n_bands) * (n_bands, n_channels)
-        s = torch.matmul(x_sources, F.softmax(self.bands_to_channels,axis=1)) 
+        s = torch.matmul(x_sources, F.softmax(self.bands_to_channels,dim=1)) 
         # (n_examples, n_levels, n_channels)
         # Apply layer_emissivity = layer absorbance
         s = s * a
 
-        return _adding_doubling(a, r, t, s)
+        return self._adding_doubling(a, r, t, s)
  
     
 class FullNet(nn.Module):
@@ -844,6 +845,15 @@ class FullNet(nn.Module):
         layers = self.scattering_net((tau,))
 
         flux = self.multireflection_net([x_sources, layers, x_emissivity])
+
+        flux_down, flux_up, absorbed_flux = flux
+
+        flux_down = torch.sum(flux_down,dim=2)
+        flux_up = torch.sum(flux_up,dim=2)
+        absorbed_flux = torch.sum(absorbed_flux,dim=2)
+
+        flux = (flux_down, flux_up, absorbed_flux)
+
         return flux
 
 def loss_weighted(y_true, y_pred):
@@ -855,7 +865,7 @@ def loss_heating_rate_full(flux_absorbed_true, flux_absorbed_pred,
                            delta_pressure):
     heat_true = absorbed_flux_to_heating_rate(flux_absorbed_true, 
                                               delta_pressure)
-    heat_pred = absorbed_flux_to_heating_rate(flux_absorbed_pred, 
+    heat_pred = absorbed_flux_to_heating_rate(flux_absorbed_pred[:,:-1], 
                                               delta_pressure)
     loss = torch.sqrt(torch.mean(torch.square(heat_true - heat_pred),
                                   dim=(0,1),keepdim=False))
@@ -1390,68 +1400,6 @@ def test_full_dataloader():
 
 
     model = model.to(device=device)
-
-
-    #filename_full_model = datadir + "/Torch.Dataloader.1/Torch.Dataloader.1." # Scattering_v3
-    #filename_full_model = datadir + "/Torch.Dataloader.e8/Torch.Dataloader.e8." # Scattering_v3
-    #filename_full_model = datadir + f"/Torch.Dataloader.4/Torch.Dataloader.4." # corresponds to Scattering_v1_tau
-
-    #filename_full_model = datadir + f"/Torch.Dataloader.v2_4." # corresponds to Scattering_v3, two inputs to mass_extinction(t,p)
-
-    #filename_full_model = datadir + f"/Torch.Dataloader.v2_5." # corresponds to Scattering_v3, two inputs to mass_extinction(t,p)
-
-    #filename_full_model = datadir + f"/Torch.Dataloader.v3_6." # scattering_v3
-    # Uses loss_henry_2 with 0.3 weight on heating and 0.7 on flux
-    # 2X weight on direct
-    # total loss * 0.3333
-    # 42 channels
-    # log_v6-i.txt - initialization
-    # log_v6 
-    # log_v6_results
-
-    #filename_full_model = datadir + f"/Torch.Dataloader.v3_7." # scattering_v3
-    # Same as v3_6 except us Scattering_v2_tau
-    # log_v7-i.txt - initialization
-    # log_v7 
-    # log_v7_results
-
-    #filename_full_model = datadir + f"/Torch.Dataloader.v3_11." # scattering_v3
-    # Same as v3_7 except uses Scattering_v2_tau_efficient with more
-    # aggressive settings
-    # log_v11-i.txt - initialization
-    # log_v11 
-    # log_v11_results
-
-    #filename_full_model = datadir + f"/Torch.Dataloader.v3_15." # scattering_v2_efficient
-    # Same as v3_14 except uses standard loss and lr=0.001
-    # to direct terms in henry_loss_2
-    # log_v15-i.txt - initialization
-    # log_v15 
-    # log_v15_results
-
-
-    #filename_full_model = datadir + f"/Torch.Dataloader.v3_17." # scattering_v2_efficient
-    # Same as v3_14 except uses standard loss and lr=0.001
-    # to direct terms in henry_loss_2
-    # log_v17-i.txt - initialization
-    # log_v17 
-    # log_v17_results
-
-
-    #filename_full_model = datadir + f"/Torch.Dataloader.v5_19." # scattering_v2_efficient
-    # Similiar to v18 except uses differences for computing flux_absorbed_diffuse_pred
-
-
-    #filename_full_model = datadir + f"/Torch.Dataloader.v5_24." # scattering_v2_efficient
-    # Similiar to v19, except uses total heat rate cost function
-
-    #version_name = 'v5_25'
-    #filename_full_model = datadir + f"/Torch.Dataloader.{version_name}." # scattering_v2_efficient
-    # Similiar to v19, except uses total heat rate cost function and total flux cost function
-
-    #version_name = 'v5_28'
-    #filename_full_model = datadir + f"/Torch.Dataloader.v5_28." # scattering_v2_efficient
-    # Same as v19 (including loss function), but uses exp(-tau) as input to scattering
 
     version_name = 'v5_29'
     filename_full_model = datadir + f"/Torch.Dataloader.v5_29." 
