@@ -1067,7 +1067,7 @@ def loss_heating_rate(flux_down_true, flux_up_true, flux_down_pred, flux_up_pred
                              flux_up_pred[:,:-1])
     heat_true = absorbed_flux_to_heating_rate(flux_absorbed_true, 
                                               delta_pressure)
-    heat_pred = absorbed_flux_to_heating_rate(flux_absorbed_pred, #[:,:-1], 
+    heat_pred = absorbed_flux_to_heating_rate(flux_absorbed_pred, 
                                               delta_pressure)
     loss = torch.sqrt(torch.mean(torch.square(heat_true - heat_pred),
                                   dim=(0,1),keepdim=False))
@@ -1089,7 +1089,6 @@ def loss_full_heating_rate_wrapper(data, y_pred):
     _, _, _, delta_pressure, y_true = data
 
     (flux_down_pred, flux_up_pred, _, _) = y_pred
-    
     (flux_down_true, flux_up_true) = (y_true[:,:,0], y_true[:,:,1])
     
     hr_loss = loss_heating_rate(flux_down_true, flux_up_true, flux_down_pred, flux_up_pred, delta_pressure)
@@ -1317,7 +1316,7 @@ def train_full_dataloader():
 
     filename_full_model = datadir + f"/Torch.LW.v5." # scattering_v2_efficient
 
-    is_initial_condition = True
+    is_initial_condition = False
     if is_initial_condition:
         checkpoint_period = 1
         epochs = 1
@@ -1331,7 +1330,8 @@ def train_full_dataloader():
         
 
         if True:
-            initial_model_n = 0   #v4
+            #initial_model_n = 0   #v4
+            initial_model_n = 2   #v5
             t_start = 1
             filename_full_model_input = f'{filename_full_model}i' + str(initial_model_n).zfill(2)
         else:

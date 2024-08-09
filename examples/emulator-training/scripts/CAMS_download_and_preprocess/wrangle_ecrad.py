@@ -210,13 +210,13 @@ def wrangle_ecrad_input_data(mode,month,year, base_directory):
     #####
 
     data = dt.variables['solar_zenith_angle'][:,:].data
-    data =np.reshape(data, (n_col,))
+    data = np.reshape(data, (n_col,))
     data = np.cos(data * np.pi / 180.0)
 
     var2 = dt.createVariable("cos_solar_zenith_angle","f4",("col",))
-    var2[:]=data[:]
+    var2[:]= data[:]
     var2.setncattr("units","1")
-    var2.setncattr("long_name","Cosine of the solar zenith angle")
+    var2.setncattr("long_name", "Cosine of the solar zenith angle")
 
     ####
 
@@ -250,13 +250,24 @@ def wrangle_ecrad_input_data(mode,month,year, base_directory):
     # converting from vmr to mass ratio
     data = data * m_h2o / m_dry
 
-    # converting from mass ratio to specific humidity
-    data = data / (1.0 + data)
+
+    # ecRad uses it as a mass ratio. See rrtm_prepare_gases.F90
+    # see line 224 in particular.
+    # Note however, that on line 188 it interprets it as
+    # specific humidity to compute the molecular
+    # weight of moist (total) air, but uses it as a mass ratio
+    # in line 189 for computing the mass of dry-air
+
+    # Do *NOT* convert from mass ratio to specific humidity
+    # REMOVED: data = data / (1.0 + data)
 
     var5 = dt.createVariable("q","f4",("col","level"))
-    var5[:]=data[:]
+    var5[:] = data[:]
     var5.setncattr("units","1")
-    var5.setncattr("long_name","Specific humidity")
+    var5.setncattr("Long name","Water vapor mass ratio")
+
+    var5.setncattr("Note 1","In practice ecRad treats this as a mass ratio")
+    var5.setncattr("Note 2","even though q usually indicates specific humidity")
 
     m_o3 = 47.99820
 
@@ -267,38 +278,44 @@ def wrangle_ecrad_input_data(mode,month,year, base_directory):
     data = data * m_o3 / m_dry
 
     var6 = dt.createVariable("o3_mmr","f4",("col","level"))
-    var6[:]=data[:]
+    var6[:] = data[:]
     var6.setncattr("units","1")
-    var6.setncattr("long_name","Ozone mass mixing ratio")
+    var6.setncattr("long_name", "Ozone mass mixing ratio")
 
     #####
     new_data = np.full((n_col, n_level), 0.1, dtype=np.float32)
     var7 = dt.createVariable("cloud_fraction","f4",("col","level"))
-    var7[:]=new_data[:]
-    var7.setncattr("units","1")
-    var7.setncattr("long_name","Cloud fraction")
+    var7[:] = new_data[:]
+    var7.setncattr("units", "1")
+    var7.setncattr("long_name", "Cloud fraction")
 
     data = dt.variables['clwc'][:,:,:].data
     data = np.reshape(data, (n_col,n_level))
-    # converting from specific content to mass ratio
 
-    data = data / (1.0 - data)
+    # Do *NOT* convert from specific content to mass ratio
+    #data = data / (1.0 - data)
 
     var8 = dt.createVariable("q_liquid","f4",("col","level"))
     var8[:]=data[:]
     var8.setncattr("units","1")
-    var8.setncattr("long_name","Gridbox-mean liquid mixing ratio")
+    var8.setncattr("name","clwc")
+    var8.setncattr("long_name","Specific cloud liquid water content")
+    var8.setncattr("Note-1","ecRad calls this the gridbox-mean liquid mixing ratio")
+    var.setncattr("Note-2","but uses it as specific cloud liquid content")
 
     data = dt.variables['ciwc'][:,:,:].data
     data = np.reshape(data, (n_col,n_level))
-    # converting from specific content to mass ratio
 
-    data = data / (1.0 - data)
+    # Do *NOT* convert from specific content to mass ratio
+    #data = data / (1.0 - data)
 
     var9 = dt.createVariable("q_ice","f4",("col","level"))
     var9[:]=data[:]
     var9.setncattr("units","1")
-    var9.setncattr("long_name","Gridbox-mean ice mixing ratio")
+    var8.setncattr("name","ciwc")
+    var9.setncattr("long_name","Specific cloud ice water content")
+    var9.setncattr("Note-1","ecRad calls this the gridbox-mean ice mixing ratio")
+    var9.setncattr("Note-2","but uses it as specific cloud ice content")
 
     new_data = np.full((n_col, n_level), 25.0e-6, dtype=np.float32)
 
@@ -439,12 +456,14 @@ def wrangle_ecrad_input_data(mode,month,year, base_directory):
 
 
 def wrangle_nn_input_data(mode,month,year, base_directory):
-    g = 9.80665
-    m_co2 = 44.0095
-    m_dry = 28.964
+    # Using values from rrtm_prepare_gases.F90
+    g = 9.80665 #
+    m_co2 = 44.011 #
+    m_dry = 28.970  # ZAMD
+    m_h2o = 18.0154 # ZAMW
     m_o2 = 31.999
-    m_n2o = 44.01280
-    m_ch4 = 16.0425
+    m_n2o = 44.013 #
+    m_ch4 = 16.043 #
     m_co = 28.010
 
     d = base_directory + f'{mode}/{year}/'  
@@ -478,29 +497,20 @@ def wrangle_nn_input_data(mode,month,year, base_directory):
 
     total_mass = (delta_pressure / g) 
 
-    cw_mr = dt_ecrad.variables["q_liquid"][:,:].data # mixing ratio
-    clwc = cw_mr / (1.0 + cw_mr)   # specific cloud water
+    clwc = dt_ecrad.variables["q_liquid"][:,:].data # specific liquid cloud water
     cw = clwc * total_mass
 
-    ci_mr = dt_ecrad.variables["q_ice"][:,:].data
-    ciwc = ci_mr / (1.0 + ci_mr)
+    ciwc = dt_ecrad.variables["q_ice"][:,:].data # specific ice cloud water
     ci = ciwc * total_mass
 
-    q = dt_ecrad.variables["q"][:,:].data
-    water_vapor = q * total_mass
-    water_vapor_mmr = q / (1.0 - q)
-    if np.min(water_vapor_mmr) < 1.0e-09:
-        print(f"small q {np.min(q)}")
-        print(f"small mmr {np.min(water_vapor_mmr)}")
-        dry_mass = total_mass
-    else:
-        dry_mass = water_vapor / water_vapor_mmr
-        if np.isnan(np.sum(dry_mass)):
-            print(f"dry_mass contains Nan")
-            print(f"Indices of Nan = {np.argwhere(np.isnan(dry_mass))}")
-            print(f"small mmr {np.min(water_vapor_mmr)}")
-            os.abort()
+    # even though 'q' is variable name, this is the mass ratio
+    water_vapor_mmr = dt_ecrad.variables["q"][:,:].data
 
+    # Normally, dry mass would just be the following
+    dry_mass = total_mass / (1.0 + water_vapor_mmr)
+    # Does not for factor from line 188 in rrtmp_prepare_gases.F90
+    q = water_vapor_mmr / (1.0 + water_vapor_mmr)
+    water_vapor = q * total_mass
 
     o3_mmr = dt_ecrad.variables["o3_mmr"][:,:].data
     o3 = o3_mmr * dry_mass
@@ -661,9 +671,9 @@ if __name__ == "__main__":
             print(f'Processing {mode} {year}')
             for month in months[:]:
                 print(f'{year} {month}')
-                #wrangle_ecrad_input_data(mode, month, year, base_directory)
+                wrangle_ecrad_input_data(mode, month, year, base_directory)
                 #wrapper_raw_sources (mode,month,year, base_directory)
-                wrangle_nn_input_data(mode, month, year, base_directory)
+                #wrangle_nn_input_data(mode, month, year, base_directory)
 
 
     if False:
