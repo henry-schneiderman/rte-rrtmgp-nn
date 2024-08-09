@@ -11,7 +11,7 @@ def tensorize(np_ndarray):
     t = torch.from_numpy(np_ndarray).float()
     return t
 
-def load_data_full(file):
+def load_data_full(file, file_index):
     data = file
 
     temperature_pressure = data.variables['temp_pres_level'][:,:,:].data
@@ -25,31 +25,35 @@ def load_data_full(file):
     flux_up_clear = data.variables['flux_up_lw_clear'][:,:].data
 
     if np.isnan(np.sum(temperature_pressure)):
-        print(f"input temperature_pressure contains NaN")
+        print(f"input {file_index} temperature_pressure contains NaN")
         os.abort()
     if np.isnan(np.sum(composition)):
         print(f"input composition contains NaN")
+        for i in np.arange(composition.shape[2]):
+            if np.isnan(np.sum(composition[:,:,i])):
+                print(f"input {file_index} composition={i} contains NaN")
+                print(f"Indices of Nan = {np.argwhere(np.isnan(composition[:,:,i]))}")
         os.abort()
     if np.isnan(np.sum(delta_pressure)):
-        print(f"input delta_pressure contains NaN")
+        print(f"input {file_index} delta_pressure contains NaN")
         os.abort()
     if np.isnan(np.sum(sources)):
-        print(f"input sources contains NaN")
+        print(f"input {file_index} sources contains NaN")
         os.abort()
     if np.isnan(np.sum(emissivity)):
-        print(f"input emissivity contains NaN")
+        print(f"input {file_index} emissivity contains NaN")
         os.abort()
     if np.isnan(np.sum(flux_down)):
-        print(f"input flux_down contains NaN")
+        print(f"input {file_index} flux_down contains NaN")
         os.abort()
     if np.isnan(np.sum(flux_down_clear)):
-        print(f"input flux_down_clear contains NaN")
+        print(f"input {file_index} flux_down_clear contains NaN")
         os.abort()
     if np.isnan(np.sum(flux_up)):
-        print(f"input flux_up contains NaN")
+        print(f"input {file_index} flux_up contains NaN")
         os.abort()
     if np.isnan(np.sum(flux_up_clear)):
-        print(f"input flux_up_clear contains NaN")
+        print(f"input {file_index} flux_up_clear contains NaN")
         os.abort()
         
     t_p_mean = np.array([248.6, 35043.8],dtype=np.float32)
@@ -157,7 +161,7 @@ class RTDataSet(Dataset):
             self.epoch_count += 1
             self.i_file = 0
             self.__reshuffle()
-            data = load_data_full(self.dt[self.m_shuf[self.i_file]])
+            data = load_data_full(self.dt[self.m_shuf[self.i_file]], self.m_shuf[self.i_file])
             #print(f"Loaded data. i_file = {self.i_file}", flush=True)
             self.x_layers, self.x_sources, self.x_emissivity, self.delta_pressure, self.y = data
             
@@ -167,7 +171,7 @@ class RTDataSet(Dataset):
             self.dumb_variable += 2
             self.__free_memory()
             #print(f"Loading data. i_file = {self.i_file}", flush=True)
-            data = load_data_full(self.dt[self.m_shuf[self.i_file]])
+            data = load_data_full(self.dt[self.m_shuf[self.i_file]], self.m_shuf[self.i_file])
             #print(f"Loaded data. i_file = {self.i_file}", flush=True)
             self.x_layers, self.x_sources, self.x_emissivity, self.delta_pressure, self.y = data
 

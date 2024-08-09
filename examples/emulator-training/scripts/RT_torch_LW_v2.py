@@ -1,5 +1,7 @@
 # 
 
+# Same as RT_torch_LW.v1.py except penalizes for clear sky
+
 import numpy as np
 import time
 from typing import List
@@ -429,7 +431,9 @@ class Extinction(nn.Module):
         return tau
 
     
-
+def tensorize(np_ndarray):
+    t = torch.from_numpy(np_ndarray).float()
+    return t
 
 class Scattering_v2_tau_efficient(nn.Module):
     """ 
@@ -447,6 +451,12 @@ class Scattering_v2_tau_efficient(nn.Module):
         self.n_scattering_nets = 8 # settings for 11
 
         n_input = n_constituent #5
+
+        tmp_array = np.ones((n_constituent), dtype=np.float32)
+        tmp_array[0] = 0.0
+        tmp_array[1] = 0.0
+        tmp_array = tmp_array.reshape((1,1,-1))
+        self.clear_sky_mask = tensorize(tmp_array).to(device)
 
         #n_hidden = [7, 7, 7, 7]  # settings for 8
 
@@ -501,41 +511,68 @@ class Scattering_v2_tau_efficient(nn.Module):
 
         #print(f"tau.shape = {tau.shape}")
         # sum over constituents
-        tau_total = torch.sum(tau, dim=2, keepdims=False)
+        tau_full_total = torch.sum(tau, dim=2, keepdims=False)
+
+        tau_clear_total = torch.sum(tau[:,:,2:], dim=2, keepdims=False)
 
 
-        t_diffuse = torch.exp(-tau_total)
-
-
+        t_full = torch.exp(-tau_full_total)
+        t_clear = torch.exp(-tau_clear_total)
 
         # f = number of features
         # [i,channels,f]
 
-
-        e_split_diffuse = self.diffuse_scattering(tau)
-        n = e_split_diffuse.shape[0]
+        e_split_full = self.diffuse_scattering(tau)
+        n = e_split_full.shape[0]
         
         # [i,channels,3, m]
 
 
-        e_split_diffuse = torch.reshape(e_split_diffuse,
+        e_split_full = torch.reshape(e_split_full,
                                        (n, self.n_channel,
                                         self.n_scattering_nets, 3))
         # [i,channels, m, 3]
-        e_split_diffuse = F.softmax(e_split_diffuse,dim=-1)
+        e_split_full = F.softmax(e_split_full,dim=-1)
 
-        e_split_diffuse = self.diffuse_selection(e_split_diffuse)
+        e_split_full = self.diffuse_selection(e_split_full)
 
         # [i, channels, 1, 3]
 
-        e_split_diffuse = torch.squeeze(e_split_diffuse, dim=-2)
+        e_split_full = torch.squeeze(e_split_full, dim=-2)
 
         # [i,channels,3]  
 
-        e_split_diffuse = F.softmax(e_split_diffuse, dim=-1)
+        e_split_full = F.softmax(e_split_full, dim=-1)
+
+        # Repeat for clear case
+
+        tau_clear = self.clear_sky_mask * tau
+        # f = number of features
+        # [i,channels,f]
+
+        e_split_clear = self.diffuse_scattering(tau_clear)
+        n = e_split_clear.shape[0]
+        
+        # [i,channels,3, m]
 
 
-        layers = [t_diffuse, e_split_diffuse]
+        e_split_clear = torch.reshape(e_split_clear,
+                                       (n, self.n_channel,
+                                        self.n_scattering_nets, 3))
+        # [i,channels, m, 3]
+        e_split_clear = F.softmax(e_split_clear,dim=-1)
+
+        e_split_clear = self.diffuse_selection(e_split_clear)
+
+        # [i, channels, 1, 3]
+
+        e_split_clear = torch.squeeze(e_split_clear, dim=-2)
+
+        # [i,channels,3]  
+
+        e_split_clear = F.softmax(e_split_clear, dim=-1)
+
+        layers = [t_full, e_split_full, t_clear, e_split_clear]
 
         return layers
 
@@ -647,7 +684,7 @@ class MultiReflection(nn.Module):
 
         return d
     
-    def _compute_upward_flux (self, s_up, rt, dt, t, a):
+    def _compute_upward_flux_with_absorption (self, s_up, rt, dt, t, a):
         """ 
         Input:
             s_up: n elements, index represent layer flux is exiting
@@ -689,8 +726,39 @@ class MultiReflection(nn.Module):
         absorbed_flux = torch.flip(absorbed_flux, dims=(1,))
 
         return absorbed_flux, flux_up
+
+    def _compute_upward_flux (self, s_up, rt, dt, t):
+        """ 
+        Input:
+            s_up: n elements, index represent layer flux is exiting
+            
+        Output:
+            flux_up: n elements from layer
+            absorbed_flux: n elements: into surface + layers (surface is zero since going up)
+        """
+        shape = t.shape
+        flux = torch.zeros((shape[0],shape[2]), dtype=torch.float32, device=self.device)
+        flux_up = []
+
+        # from n to 1
+        for l in reversed(torch.arange(1,s_up.shape[1]-1,device=self.device)):
+            flux += s_up[:,l+1,:] # initial exits layer n-1
+            flux_up.append(flux) 
+
+            flux = flux * t[:,l,:] * dt[:,l,:]
+        flux += s_up[:,1,:]   # flux exiting layer 1
+        flux_up.append(flux)
+        flux = flux * t[:,0,:]  # flux exiting layer 0
+
+        flux += s_up[:,0,:] # from layer zero toward upper atmosphere
+        flux_up.append(flux)
+
+        flux_up = torch.stack(flux_up, dim=1) # from layer up, n values
+        flux_up = torch.flip(flux_up, dims=(1,))
+
+        return flux_up
     
-    def _compute_downward_flux (self, s_down, rs, ds, t, a):
+    def _compute_downward_flux_with_absorption (self, s_down, rs, ds, t, a):
         """ 
         Input
             s_down represents layer it is exiting
@@ -729,7 +797,39 @@ class MultiReflection(nn.Module):
         # n output values
         return absorbed_flux, flux_down
 
-    def _adding_doubling (self, a, r, t, s):
+            
+    def _compute_downward_flux (self, s_down, rs, ds, t):
+        """ 
+        Input
+            s_down represents layer it is exiting
+            n-1 = len(s_down)
+
+        Output
+            index of flux represents radiation flowing into layer
+            n = len(output)
+        """
+
+        # no downward flux or absorption for layer=0
+        shape = t.shape
+        flux = torch.zeros((shape[0],shape[2]), dtype=torch.float32, device=self.device)
+        flux_down = []
+        flux_down.append(flux)
+
+        for l in torch.arange(0, s_down.shape[1]-1, device=self.device):
+            flux += s_down[:,l,:]  # exiting layer l, entering l+1
+            flux_down.append(flux)
+
+            flux = flux * t[:,l+1,:] * ds[:,l+1,:]
+
+        flux += s_down[:,-1,:]
+        flux_down.append(flux)
+
+        flux_down = torch.stack(flux_down, dim=1)
+
+        # n output values
+        return flux_down
+
+    def _adding_doubling_absorption (self, a, r, t, s):
         """
         All inputs:
             Dimensions[examples, layers, channels]
@@ -778,6 +878,54 @@ class MultiReflection(nn.Module):
 
         return flux_down, flux_up, absorbed_flux
     
+
+    def _adding_doubling (self, r, t, s):
+        """
+        All inputs:
+            Dimensions[examples, layers, channels]
+            Input: n layers: 0 .. n-1
+        """
+
+        # Bottom up cumulative surface reflection
+        # output: n elements
+        rs, ds = self._compute_surface_reflection(r,t)
+
+        # Top down cumulative top layer reflection
+        # output: n elements
+        rt, dt = self._compute_top_reflection(r,t)
+
+        # compute multi-reflection sandwich terms 
+        # uses rt for top, rs for bottom
+        # output: n elements (d_multi[0] = 1.0)
+        d_multi = self._compute_sandwich_d(rs, rt)
+
+        ### Downward sources
+        # output: n-1 values; flow from layer = index corresponds to exiting layer
+        s_multi_down = s[:,:-1,:] * d_multi[:,1:,:]   
+        s_multi_up_down = s[:,1:,:] * d_multi[:,1:,:] * rt[:,:-1,:]
+        s_down = s_multi_down + s_multi_up_down  
+
+        # output: n values; flow into layer; index corresponds to entering layer
+        flux_down = self._compute_downward_flux (s_down, rs, ds, t)
+
+        ### Upward sources
+        # Index of exiting surface, n values
+        s_multi_up = s * d_multi
+
+        # Index of entering layer; n-1 values
+        s_multi_down_up = s[:,:-1,:] * d_multi[:,1:,:] * rs[:,1:,:]  # n-1 values, index of entering surface
+
+        # Conversion
+        # Index of exiting layer; n values
+        shape = s_multi_down_up.shape
+        s_multi_down_up = torch.cat([torch.zeros((shape[0],1,shape[2]), dtype=torch.float32, device=self.device), s_multi_down_up], axis=1) #n values, index of exiting surface
+ 
+        s_up = s_multi_up + s_multi_down_up
+
+        flux_up = self._compute_upward_flux (s_up, rt, dt, t)
+
+        return flux_down, flux_up
+    
     def forward(self, x):
         """
         Computations are independent across channel.
@@ -788,34 +936,33 @@ class MultiReflection(nn.Module):
 
         x_sources, layers, x_emissivity = x
 
-        t_diffuse, e_split_diffuse = layers
+        t_full, e_split_full = layers
 
-        shape = t_diffuse.shape
+        shape = t_full.shape
 
 
-        e = 1.0 - t_diffuse
+        e = 1.0 - t_full
 
-        t = t_diffuse + e * e_split_diffuse[:,:,:,0]
-        r = e * e_split_diffuse[:,:,:,1]
-        a = e * e_split_diffuse[:,:,:,2]
+        t = t_full + e * e_split_full[:,:,:,0]
+        r = e * e_split_full[:,:,:,1]
+        a = e * e_split_full[:,:,:,2]
 
         #diff = a + r + t - torch.ones((1,1,1), dtype=torch.float32, device=self.device)
 
         #if torch.max(torch.abs(diff)) > 0.01:
         #    print(f"Max deviation from 1.0 = {torch.max(torch.abs(diff))}")
 
-        (r_surface_diffuse, a_surface_diffuse) = (1.0 - x_emissivity, 
-                                                    x_emissivity)
-        r_surface_diffuse = r_surface_diffuse.reshape((-1,1,1))
-        a_surface_diffuse = a_surface_diffuse.reshape((-1,1,1))
-        t_surface_diffuse = torch.zeros((1,1,1), dtype=torch.float32, device=self.device)
-        r_surface_diffuse = r_surface_diffuse.expand(shape[0],1,shape[2])
-        a_surface_diffuse = a_surface_diffuse.expand(shape[0],1,shape[2])
-        t_surface_diffuse = t_surface_diffuse.expand(shape[0],1,shape[2])
+        (r_surface, a_surface) = (1.0 - x_emissivity, x_emissivity)
+        r_surface = r_surface.reshape((-1,1,1))
+        a_surface = a_surface.reshape((-1,1,1))
+        t_surface = torch.zeros((1,1,1), dtype=torch.float32, device=self.device)
+        r_surface = r_surface.expand(shape[0],1,shape[2])
+        a_surface = a_surface.expand(shape[0],1,shape[2])
+        t_surface = t_surface.expand(shape[0],1,shape[2])
 
-        a = torch.cat((a, a_surface_diffuse), dim=1)
-        r = torch.cat((r, r_surface_diffuse), dim=1)
-        t = torch.cat((t, t_surface_diffuse), dim=1)
+        a = torch.cat((a, a_surface), dim=1)
+        r = torch.cat((r, r_surface), dim=1)
+        t = torch.cat((t, t_surface), dim=1)
 
         #sum_x_sources = torch.sum(x_sources)
         # (n_examples, n_levels, n_bands) * (n_bands, n_channels)
@@ -832,7 +979,7 @@ class MultiReflection(nn.Module):
 
         #total_input = 2.0 * torch.sum(s[:,:-1,:]) + torch.sum(s[:,-1,:]) 
 
-        flux_down, flux_up, absorbed_flux = self._adding_doubling(a, r, t, s)
+        flux_down, flux_up = self._adding_doubling(r, t, s)
 
         #remaining_flux = torch.sum(flux_up[:,0,:])
 
@@ -844,9 +991,8 @@ class MultiReflection(nn.Module):
         #if diff > 10.0:
         #    print (f"loss of energy = {diff}")
 
-        return flux_down, flux_up, absorbed_flux
- 
-    
+        return flux_down, flux_up
+
 class FullNet(nn.Module):
     """ Computes full radiative transfer (direct and diffuse radiation)
     for an atmospheric column """
@@ -888,25 +1034,37 @@ class FullNet(nn.Module):
 
         layers = self.scattering_net((tau,))
 
-        flux = self.multireflection_net([x_sources, layers, x_emissivity])
+        t_full, e_split_full, t_clear, e_split_clear = layers
 
-        flux_down, flux_up, absorbed_flux = flux
+        flux_full = self.multireflection_net([x_sources, [t_full, e_split_full], x_emissivity])
 
-        flux_down = torch.sum(flux_down,dim=2)
-        flux_up = torch.sum(flux_up,dim=2)
-        absorbed_flux = torch.sum(absorbed_flux,dim=2)
+        flux_clear = self.multireflection_net([x_sources, [t_clear, e_split_clear], x_emissivity])
 
-        flux = (flux_down, flux_up, absorbed_flux)
+        flux_down_full, flux_up_full = flux_full
+        flux_down_clear, flux_up_clear = flux_clear
+
+        flux_down_full = torch.sum(flux_down_full,dim=2)
+        flux_up_full = torch.sum(flux_up_full,dim=2)
+
+        flux_down_clear = torch.sum(flux_down_clear,dim=2)
+        flux_up_clear = torch.sum(flux_up_clear,dim=2)
+
+        flux = (flux_down_full, flux_up_full, flux_down_clear, flux_up_clear)
 
         return flux
 
-def loss_weighted(y_true, y_pred):
-    error = torch.sqrt(torch.mean(torch.square(y_pred - y_true), 
-                       dim=(0,1), keepdim=False))
-    return error
-
-def loss_heating_rate_full(flux_absorbed_true, flux_absorbed_pred, 
+def loss_heating_rate(flux_down_true, flux_up_true, flux_down_pred, flux_up_pred,
                            delta_pressure):
+    
+    flux_absorbed_true = (flux_down_true[:,:-1] -
+                             flux_down_true[:,1:] + 
+                             flux_up_true[:,1:] -
+                             flux_up_true[:,:-1])
+
+    flux_absorbed_pred = (flux_down_pred[:,:-1] -
+                             flux_down_pred[:,1:] + 
+                             flux_up_pred[:,1:] -
+                             flux_up_pred[:,:-1])
     heat_true = absorbed_flux_to_heating_rate(flux_absorbed_true, 
                                               delta_pressure)
     heat_pred = absorbed_flux_to_heating_rate(flux_absorbed_pred, #[:,:-1], 
@@ -915,92 +1073,67 @@ def loss_heating_rate_full(flux_absorbed_true, flux_absorbed_pred,
                                   dim=(0,1),keepdim=False))
     return loss
 
-def loss_heating_rate_wrapper(data, y_pred):
+
+def loss_clear_heating_rate_wrapper(data, y_pred):
     _, _, _, delta_pressure, y_true = data
 
-    (flux_down_pred, flux_up_pred, flux_absorbed_pred) = y_pred
+    (_, _, flux_down_pred, flux_up_pred) = y_pred
+    
+    (flux_down_true, flux_up_true) = (y_true[:,:,2], y_true[:,:,3])
+                         
+    hr_loss = loss_heating_rate(flux_down_true, flux_up_true, flux_down_pred, flux_up_pred, delta_pressure)
+    
+    return hr_loss
+
+def loss_full_heating_rate_wrapper(data, y_pred):
+    _, _, _, delta_pressure, y_true = data
+
+    (flux_down_pred, flux_up_pred, _, _) = y_pred
     
     (flux_down_true, flux_up_true) = (y_true[:,:,0], y_true[:,:,1])
     
-
-    flux_absorbed_true = (flux_down_true[:,:-1] -
-                             flux_down_true[:,1:] + 
-                             flux_up_true[:,1:] -
-                             flux_up_true[:,:-1])
-
-    flux_absorbed_pred_1 = (flux_down_pred[:,:-1] -
-                             flux_down_pred[:,1:] + 
-                             flux_up_pred[:,1:] -
-                             flux_up_pred[:,:-1])
-    
-    #delta_flux = flux_absorbed_pred[:,:-1] - flux_absorbed_pred_1
-    #delta_flux_squared = delta_flux * delta_flux
-
-    #if torch.max(delta_flux_squared) > 1.0e-04:
-    #    print(f"max delta_absorbed_flux {torch.max(delta_flux_squared)}")
-                         
-    hr_loss = loss_heating_rate_full(flux_absorbed_true, 
-                                    flux_absorbed_pred_1, delta_pressure)
+    hr_loss = loss_heating_rate(flux_down_true, flux_up_true, flux_down_pred, flux_up_pred, delta_pressure)
     
     return hr_loss
 
 
-def loss_flux(y_true, y_pred):  
+def loss_flux(flux_down_true, flux_up_true, flux_down_pred, flux_up_pred):  
 
-    (flux_down_pred, flux_up_pred, _) = y_pred
-    
-    (flux_down_true, flux_up_true) = (y_true[:,:,0], y_true[:,:,1])
-    
     flux_pred = torch.concat((flux_down_pred,flux_up_pred),dim=1)
     flux_true = torch.concat((flux_down_true,flux_up_true),dim=1)
 
-    flux_loss = loss_weighted(flux_true, flux_pred)
+    flux_loss = torch.sqrt(torch.mean(torch.square(flux_pred - flux_true), 
+                       dim=(0,1), keepdim=False))
 
     return flux_loss
 
-def loss_flux_wrapper(data, y_pred):
+def loss_full_flux_wrapper(data, y_pred):
     _, _, _, _, y_true = data
-    loss = loss_flux(y_true, y_pred)
+    (flux_down_pred, flux_up_pred, _, _) = y_pred
+    (flux_down_true, flux_up_true) = (y_true[:,:,0], y_true[:,:,1])
+    loss = loss_flux(flux_down_true, flux_up_true, flux_down_pred, flux_up_pred)
     return loss
 
-def loss_henry(y_true, y_pred,  
-               delta_pressure):
-    # Handles flux using TOA weight rather than weight profile
-    
-    (flux_down_pred, flux_up_pred, 
-      flux_absorbed_pred) = y_pred
-    
-    (flux_down_true, flux_up_true) = (y_true[:,:,0], y_true[:,:,1])
-    
-    flux_pred = torch.concat((flux_down_pred,flux_up_pred),dim=1)
-    flux_true = torch.concat((flux_down_true,flux_up_true),dim=1)
-
-    flux_loss = loss_weighted(flux_true, flux_pred)
-
-
-    flux_absorbed_true = (flux_down_true[:,:-1] -
-                             flux_down_true[:,1:] + 
-                             flux_up_true[:,1:] -
-                             flux_up_true[:,:-1])
-
-    flux_absorbed_pred_1 = (flux_down_pred[:,:-1] -
-                             flux_down_pred[:,1:] + 
-                             flux_up_pred[:,1:] -
-                             flux_up_pred[:,:-1])               
-                         
-    hr_loss = loss_heating_rate_full(flux_absorbed_true, 
-                                             flux_absorbed_pred_1, delta_pressure)
-    
-
-
-    hr_weight = 0.3
-
-    return hr_weight * hr_loss + (1.0 - hr_weight) * flux_loss
-
+def loss_clear_flux_wrapper(data, y_pred):
+    _, _, _, _, y_true = data
+    (_, _, flux_down_pred, flux_up_pred) = y_pred
+    (flux_down_true, flux_up_true) = (y_true[:,:,2], y_true[:,:,3])
+    loss = loss_flux(flux_down_true, flux_up_true, flux_down_pred, flux_up_pred)
+    return loss
 
 def loss_henry_wrapper(data, y_pred):
-    _, _, _, delta_pressure, y_true = data
-    loss = loss_henry(y_true, y_pred, delta_pressure)
+    loss_full_flux = loss_full_flux_wrapper(data, y_pred)
+    loss_clear_flux = loss_clear_flux_wrapper(data, y_pred)
+    loss_full_heating_rate = loss_full_heating_rate_wrapper(data, y_pred)
+    loss_clear_heating_rate = loss_clear_heating_rate_wrapper(data, y_pred)
+
+    w1 = 2.0
+    w2 = 1.0
+    w3 = 1.0
+    w4 = 0.5
+
+    loss = (1.0 / (w1 + w2 + w3 + w4)) * (w1 * loss_full_flux + w2 * loss_clear_flux + w3 * loss_full_heating_rate + w4 * loss_clear_heating_rate)
+
     return loss
 
 
@@ -1182,9 +1315,9 @@ def train_full_dataloader():
     n_band = 16
     
 
-    filename_full_model = datadir + f"/Torch.LW.v4." # scattering_v2_efficient
+    filename_full_model = datadir + f"/Torch.LW.v5." # scattering_v2_efficient
 
-    is_initial_condition = False
+    is_initial_condition = True
     if is_initial_condition:
         checkpoint_period = 1
         epochs = 1
@@ -1292,8 +1425,8 @@ def train_full_dataloader():
         #start = torch.cuda.Event(enable_timing=True)
         #end = torch.cuda.Event(enable_timing=True)
 
-        loss_functions = (loss_henry_wrapper, loss_flux_wrapper, loss_heating_rate_wrapper)
-        loss_names = ("Loss", "Flux Loss", "Heating Rate Loss")
+        loss_functions = (loss_henry_wrapper, loss_full_flux_wrapper, loss_clear_flux_wrapper, loss_full_heating_rate_wrapper, loss_clear_heating_rate_wrapper)
+        loss_names = ("Loss", "Full Flux Loss", "Clear Flux Loss","Full Heating Rate Loss","Clear Heating Rate Loss")
         
         #loss_functions = (loss_flux_wrapper)
         #loss_names = ("Flux Loss")
