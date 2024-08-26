@@ -5,10 +5,12 @@ import xarray as xr
 import os
 import sys
 
-def generate_raw_sources(totplanck, min_temp, max_temp, temp_layers, bandwidth):
+def generate_raw_sources(totplanck, min_temp, max_temp, temp_layers, temp_skin, bandwidth):
     #double totplnk(bnd, temperature_Planck)
     # examples, layers, bands
     raw_sources = np.zeros((temp_layers.shape[0],temp_layers.shape[1], totplanck.shape[0]), dtype=np.float32)
+
+    surface_source = np.zeros((temp_skin.shape[0], totplanck.shape[0]), dtype=np.float32)
 
     if True:
         print(f"Min allowable temp = {min_temp}. Actual min temp = {np.min(temp_layers)}")
@@ -29,7 +31,25 @@ def generate_raw_sources(totplanck, min_temp, max_temp, temp_layers, bandwidth):
             fraction = diff - np.float32(index)
             raw_sources[i,j,:] = 1.0e04 * bandwidth[:] * np.pi * (totplanck[:,index] * (1.0 - fraction) + totplanck[:,index + 1] * fraction)
 
-    return raw_sources
+    if True:
+        print(f"Min allowable temp = {min_temp}. Actual min temp = {np.min(temp_skin)}")
+        print(f"Max allowable temp = {max_temp}. Actual max temp = {np.max(temp_skin)}")
+
+    if np.min(temp_skin) < min_temp:
+        print(f"Out of range: Min allowable temp = {min_temp}. Actual min temp = {np.min(temp_skin)}")
+        exit()
+
+    if np.max(temp_skin) > max_temp:
+        print(f"Out of range: Max allowable temp = {max_temp}. Actual max temp = {np.max(temp_skin)}")
+        exit()
+
+    for i in np.arange(temp_skin.shape[0]):
+            diff = temp_skin[i] - min_temp
+            index = np.int32(np.floor(diff))
+            fraction = diff - np.float32(index)
+            surface_source[i,:] = 1.0e04 * bandwidth[:] * np.pi * (totplanck[:,index] * (1.0 - fraction) + totplanck[:,index + 1] * fraction)
+
+    return raw_sources, surface_source
 
 
 
@@ -57,33 +77,34 @@ def wrapper_raw_sources (mode,month,year, base_directory, planck_file_name="/hom
     ######
 
     dt = Dataset(temp_file_name,'r')
-    temp_layer = dt.variables["temp_layer"][:,:,:].data
-    shape = temp_layer.shape
+    #temp_layer = dt.variables["temp_layer"][:,:,:].data
+    temp_level = dt.variables["temperature_hl"][:,:].data
+    shape = temp_level.shape
 
-    col = shape[0]*shape[1]
-
-    temp_layer = temp_layer.reshape((col, shape[2]))
+    col = shape[0]
 
     temp_skin = dt.variables["skin_temperature"][:].data
-    temp_skin = temp_skin.reshape((-1,1))
+    temp_skin = temp_skin.reshape((-1,))
 
-    temp_layer = np.concatenate((temp_layer, temp_skin), axis=1)
-
-    raw_sources = generate_raw_sources(totplanck, min_temp, max_temp, temp_layer, bandwidth)
+    level_sources, surface_source = generate_raw_sources(totplanck, min_temp, max_temp, temp_level, temp_skin, bandwidth)
 
     dt.close()
 
     ###########
 
-    source_file_name = f'{base_directory}/{mode}/{year}/{month}/lw_source-{mode}-{year}-{month}.2.nc'
+    source_file_name = f'{base_directory}/{mode}/{year}/{month}/lw_source-{mode}-{year}-{month}.nc'
     dt = Dataset(source_file_name, "w")
 
     dim1 = dt.createDimension("col",col)
-    dim2 = dt.createDimension("layers_and_surface",temp_layer.shape[1])
+    dim2 = dt.createDimension("half_level",temp_level.shape[1])
     dim3 = dt.createDimension("band",totplanck.shape[0])
 
-    var = dt.createVariable("raw_sources","f4",("col","layers_and_surface","band"))
-    var[:]=raw_sources[:]
+    var = dt.createVariable("half_level_sources","f4",("col","half_level","band"))
+    var[:]=level_sources[:]
+
+    var2 =  dt.createVariable("surface_source","f4",("col","band"))
+    var2[:]=surface_source[:]
+
     dt.close()
 
 def examine_planck (planck_file_name="../../../../rrtmgp/data/rrtmgp-data-lw-g256-2018-12-04.nc"):
@@ -264,10 +285,10 @@ def wrangle_ecrad_input_data(mode,month,year, base_directory):
     var5 = dt.createVariable("q","f4",("col","level"))
     var5[:] = data[:]
     var5.setncattr("units","1")
-    var5.setncattr("Long name","Water vapor mass ratio")
+    var5.setncattr("long_name","Water vapor mass ratio")
 
-    var5.setncattr("Note 1","In practice ecRad treats this as a mass ratio")
-    var5.setncattr("Note 2","even though q usually indicates specific humidity")
+    var5.setncattr("note_1","In practice ecRad treats this as a mass ratio")
+    var5.setncattr("note_2","even though q usually indicates specific humidity")
 
     m_o3 = 47.99820
 
@@ -453,8 +474,67 @@ def wrangle_ecrad_input_data(mode,month,year, base_directory):
     os.system(cmd)
     # organize for processing
 
+# changing rel and rei to match RTE-RRTMGP
+def transform_ecrad_input_data(mode,month,year, base_directory, is_just_o2=True):
+
+    d = base_directory + f'{mode}/{year}/'  
+    file_name_ecrad = d + f'{month}/lw_input-{mode}-{year}-{month}'
+
+    cmd = f'cp {file_name_ecrad}.nc {file_name_ecrad}.tmp.nc'
+    os.system(cmd)
+
+    dt_ecrad = Dataset(file_name_ecrad + '.tmp.nc',"a")
+
+    if is_just_o2:
+        var_o2 = dt_ecrad.variables["oxygen_GM"]
+        var_n2 = dt_ecrad.variables["nitrogen_GM"]
+
+        o2 = np.full((var_o2.shape[0]),0.209)
+        n2 = np.full((var_o2.shape[0]),0.7808)
+
+        var_o2[:]= o2[:]
+        var_n2[:]= n2[:]
+    else:
+        var_re_ice = dt_ecrad.variables["re_ice"]
+        var_re_liquid = dt_ecrad.variables["re_liquid"]
+        var_cloud_fraction = dt_ecrad.variables["cloud_fraction"]
+        var_o2 = dt_ecrad.variables["oxygen_GM"]
 
 
+        re_ice = np.full((var_re_ice.shape[0],var_re_ice.shape[1]),95.0e-06)
+        re_liquid = np.full((var_re_ice.shape[0],var_re_ice.shape[1]),12.0e-06)
+        cloud_fraction = np.full((var_cloud_fraction.shape[0],var_cloud_fraction.shape[1]),0.9999)
+        o2 = np.full((var_o2.shape[0]),0.209)
+
+        var_re_ice[:] = re_ice[:]
+        var_re_liquid[:] = re_liquid[:]
+        var_cloud_fraction[:] = cloud_fraction[:]
+        var_o2[:]= o2[:]
+
+    dt_ecrad.close()
+
+
+def transform_rte_rrtmgp_input_data(mode,month,year, base_directory):
+
+    d = base_directory + f'{mode}/{year}/'  
+    file_name_rte_rrtmgp = d + f'{month}/CAMS_{year}-{month}.final.2'
+
+    cmd = f'cp {file_name_rte_rrtmgp}.nc {file_name_rte_rrtmgp}.tmp.nc'
+    os.system(cmd)
+
+    dt = Dataset(file_name_rte_rrtmgp + '.tmp.nc',"a")
+
+    var_o2 = dt.variables["oxygen_GM"]
+    var_n2 = dt.variables["nitrogen_GM"]
+
+    o2 = np.full((var_o2.shape[0]),0.209)
+    n2 = np.full((var_o2.shape[0]),0.7808)
+
+    var_o2[:]= o2[:]
+    var_n2[:]= n2[:]
+
+    dt.close()
+    
 def wrangle_nn_input_data(mode,month,year, base_directory):
     # Using values from rrtm_prepare_gases.F90
     g = 9.80665 #
@@ -468,7 +548,7 @@ def wrangle_nn_input_data(mode,month,year, base_directory):
 
     d = base_directory + f'{mode}/{year}/'  
     file_name_ecrad_input = d + f'{month}/lw_input-{mode}-{year}-{month}.nc'
-    file_name_source_input = d + f'{month}/lw_source-{mode}-{year}-{month}.2.nc'
+    file_name_source_input = d + f'{month}/lw_source-{mode}-{year}-{month}.nc'
     file_name_flux_input = d + f'Flux_lw-{mode}-{year}-{month}.nc'
     file_name_nn_input = d + f'nn_input-{mode}-{year}-{month}.nc'
     dt_ecrad = Dataset(file_name_ecrad_input,"r")
@@ -603,11 +683,15 @@ def wrangle_nn_input_data(mode,month,year, base_directory):
     var_delta = dt_nn.createVariable("delta_pressure","f4",("col","level",))
     var_delta[:] = delta_pressure[:]
 
-    sources = dt_source.variables["raw_sources"][:,:,:].data
-    dim_level_surface = dt_nn.createDimension("level_and_surface", sources.shape[1])
-    dim_band = dt_nn.createDimension("band", sources.shape[2])
-    var_sources = dt_nn.createVariable("sources","f4",("col","level_and_surface","band"))
-    var_sources[:] = sources[:]
+    half_level_sources = dt_source.variables["half_level_sources"][:,:,:].data
+    #dim_level_surface = dt_nn.createDimension("level_and_surface", sources.shape[1])
+    dim_band = dt_nn.createDimension("band", half_level_sources.shape[2])
+    var_sources = dt_nn.createVariable("half_level_sources","f4",("col","half_level","band"))
+    var_sources[:] = half_level_sources[:]
+
+    surface_sources = dt_source.variables["surface_source"][:,:].data
+    var_surface_sources = dt_nn.createVariable("surface_source","f4",("col","band"))
+    var_surface_sources[:] = surface_sources[:]
 
     flux_dn_lw = dt_flux.variables["flux_dn_lw"][:,:].data
     var_flux_dn_lw = dt_nn.createVariable("flux_dn_lw","f4",("col","half_level"))
@@ -645,6 +729,187 @@ def examine_nn_input_data(mode,month,year, base_directory):
     print(f"mean = {mean}")
     print(f"max = {max}")
 
+def compute_ecrad_output_data(mode,month,year, base_directory, is_hws_version, is_just_o2=False):
+    d = base_directory + f'{mode}/{year}/'  
+    # .tmp.nc contains the updated liquid and ice radii
+    file_name_input = d + f'{month}/lw_input-{mode}-{year}-{month}.tmp.nc'
+    if is_hws_version:
+        file_name_output = d + f'Flux_lw-{mode}-{year}-{month}.hws.nc'
+        ex = '/home/hws/ecrad/bin/ecrad_hws /home/hws/ecrad/practical/config.2.nam'
+    elif is_just_o2:
+        file_name_output = d + f'Flux_lw-{mode}-{year}-{month}.is_just_o2.nc'
+        ex = '/home/hws/ecrad/bin/ecrad_working /home/hws/ecrad/practical/config.2.nam'
+    else:
+        # .3 is with CO
+        # .4 is without CO
+        file_name_output = d + f'Flux_lw-{mode}-{year}-{month}.working.4.nc'
+        ex = '/home/hws/ecrad/bin/ecrad_working /home/hws/ecrad/practical/config.3.nam'
+    cmd = f'{ex} {file_name_input} {file_name_output}'
+    print (cmd)
+    os.system(cmd)
+
+# just computes normal output data
+def compute_ecrad_output_data_2(mode,month,year, base_directory):
+    d = base_directory + f'{mode}/{year}/'  
+    # .tmp.nc contains the updated o2 and n2
+    file_name_input = d + f'{month}/lw_input-{mode}-{year}-{month}.tmp.nc'
+    if True:
+        file_name_output = d + f'Flux_lw-{mode}-{year}-{month}.original.nc'
+        ex = '/home/hws/ecrad/bin/ecrad_working /home/hws/ecrad/practical/config.2.nam'
+
+    cmd = f'{ex} {file_name_input} {file_name_output}'
+    print (cmd)
+    os.system(cmd)
+
+def compare_ecrad_with_rte_rrtmgp(mode,month,year, base_directory):
+    d = base_directory + f'{mode}/{year}/'  
+    file_name_rr = d + f'Flux_sw-{year}-{month}.3.tmp.nc'
+    file_name_ecrad = d + f'Flux_lw-{mode}-{year}-{month}.working.3.nc'
+
+    file_name_ecrad_input = d + f'{month}/lw_input-{mode}-{year}-{month}.tmp.nc'
+
+    dt_ecrad = Dataset(file_name_ecrad, "r")
+    dt_rr = Dataset(file_name_rr, "r")
+    dt_input = Dataset(file_name_ecrad_input, "r")
+
+    flux_down_ecrad = dt_ecrad.variables['flux_dn_sw'][:,:].data
+
+    flux_up_ecrad = dt_ecrad.variables['flux_up_sw'][:,:].data
+
+    pressure_ecrad = dt_ecrad.variables["pressure_hl"][:,:].data
+
+    flux_down_rr = dt_rr.variables['rsd'][:,:,:].data
+    flux_up_rr = dt_rr.variables['rsu'][:,:,:].data
+    shape = flux_down_rr.shape
+
+    pressure_rr = dt_rr.variables["pres_level"][:,:,:].data
+
+    mu_rr = dt_rr.variables["mu0"][:,:].data
+
+    selection = dt_rr.variables['is_valid_zenith_angle'][:,:].data.astype(int)
+    selection = np.reshape(selection, (shape[0]*shape[1]))
+    selection = selection.astype(bool)
+
+    flux_down_rr = flux_down_rr.reshape((shape[0]*shape[1], shape[2]))
+    flux_up_rr = flux_up_rr.reshape((shape[0]*shape[1], shape[2]))
+
+    pressure_rr = pressure_rr.reshape((shape[0]*shape[1], shape[2]))
+
+    mu_ecrad = dt_input.variables['cos_solar_zenith_angle'][:].data
+
+    mu_ecrad = mu_ecrad[selection]
+
+    mu_rr = mu_rr.reshape((shape[0]*shape[1]))
+    mu_rr = mu_rr[selection]
+
+    flux_ecrad = np.concatenate((flux_down_ecrad[selection,:], flux_up_ecrad[selection,:]),axis=1)
+
+    #flux_ecrad = flux_ecrad * 1412.0 / 1361.0 
+
+    flux_rr = np.concatenate((flux_down_rr[selection,:], flux_up_rr[selection,:]),axis=1)
+
+    flux_loss = np.sqrt(np.mean(np.square(flux_ecrad - flux_rr), axis=(0,1)))
+
+    flux_bias = np.mean(flux_ecrad - flux_rr, axis=(0,1))
+
+    pressure_loss = np.sqrt(np.mean(np.square(pressure_ecrad - pressure_rr), axis=(0,1)))
+
+    mu_loss = np.sqrt(np.mean(np.square(mu_ecrad - mu_rr), axis=(0,)))
+
+    print(f'Year = {year}, month={month} rmse flux = {flux_loss} flux bias = {flux_bias} pressure_loss = {pressure_loss} mu_loss = {mu_loss}')
+
+    dt_rr.close()
+    dt_ecrad.close()
+    dt_input.close()
+def compare_rte_rrtmgp_with_new_radiation(mode,month,year, base_directory):
+    d = base_directory + f'{mode}/{year}/'  
+    file_name_rr = d + f'Flux_sw-{year}-{month}.nc'
+    file_name_new = d + f'Flux_sw-{year}-{month}.3.tmp.nc'
+
+    dt_new = Dataset(file_name_new, "r")
+    dt_rr = Dataset(file_name_rr, "r")
+
+    flux_down_new = dt_new.variables['rsd'][:,:,:].data
+
+    flux_up_new = dt_new.variables['rsu'][:,:,:].data
+
+    flux_down_rr = dt_rr.variables['rsd'][:,:,:].data
+    flux_up_rr = dt_rr.variables['rsu'][:,:,:].data
+    shape = flux_down_rr.shape
+
+    selection = dt_rr.variables['is_valid_zenith_angle'][:,:].data.astype(int)
+    selection = np.reshape(selection, (shape[0]*shape[1]))
+    selection = selection.astype(bool)
+
+    flux_down_rr = flux_down_rr.reshape((shape[0]*shape[1], shape[2]))
+    flux_up_rr = flux_up_rr.reshape((shape[0]*shape[1], shape[2]))
+
+    flux_down_new = flux_down_new.reshape((shape[0]*shape[1], shape[2]))
+    flux_up_new = flux_up_new.reshape((shape[0]*shape[1], shape[2]))
+
+    flux_new = np.concatenate((flux_down_new[selection,:], flux_up_new[selection,:]),axis=1)
+
+    #flux_new = flux_new * 1412.0 / 1361.0 
+
+    flux_rr = np.concatenate((flux_down_rr[selection,:], flux_up_rr[selection,:]),axis=1)
+
+    flux_loss = np.sqrt(np.mean(np.square(flux_new - flux_rr), axis=(0,1)))
+
+    flux_bias = np.mean(flux_new - flux_rr, axis=(0,1))
+
+    print(f'Year = {year}, month={month} rmse flux = {flux_loss} flux bias = {flux_bias}')
+
+    dt_rr.close()
+    dt_new.close()
+
+def compare_ecrad_with_new_radiation(mode,month,year, base_directory, is_just_o2=False):
+    d = base_directory + f'{mode}/{year}/'  
+    if is_just_o2:
+        file_name_new = d + f'Flux_lw-{mode}-{year}-{month}.is_just_o2.nc'
+        file_name_ecrad = d + f'Flux_lw-{mode}-{year}-{month}.nc'
+    else:
+        file_name_new = d + f'Flux_lw-{mode}-{year}-{month}.nc'
+        file_name_ecrad = d + f'Flux_lw-{mode}-{year}-{month}.original.nc'
+
+    dt_ecrad = Dataset(file_name_ecrad, "r")
+    dt_new = Dataset(file_name_new, "r")
+
+    # longwave
+    flux_down_ecrad = dt_ecrad.variables['flux_dn_lw'][:,:].data
+    flux_up_ecrad = dt_ecrad.variables['flux_up_lw'][:,:].data
+
+    flux_down_new = dt_new.variables['flux_dn_lw'][:,:].data
+    flux_up_new = dt_new.variables['flux_up_lw'][:,:].data
+
+    flux_ecrad = np.concatenate((flux_down_ecrad, flux_up_ecrad),axis=1)
+    flux_new = np.concatenate((flux_down_new, flux_up_new),axis=1)
+
+    flux_loss = np.sqrt(np.mean(np.square(flux_ecrad - flux_new), axis=(0,1)))
+
+    flux_bias = np.mean(flux_ecrad - flux_new, axis=(0,1))
+
+    print(f'Longwave: Year = {year}, month={month} rmse flux = {flux_loss} flux bias = {flux_bias}')
+
+    # shortwave
+    flux_down_ecrad = dt_ecrad.variables['flux_dn_sw'][:,:].data
+    flux_up_ecrad = dt_ecrad.variables['flux_up_sw'][:,:].data
+
+    flux_down_new = dt_new.variables['flux_dn_sw'][:,:].data
+    flux_up_new = dt_new.variables['flux_up_sw'][:,:].data
+
+    flux_ecrad = np.concatenate((flux_down_ecrad, flux_up_ecrad),axis=1)
+    flux_new = np.concatenate((flux_down_new, flux_up_new),axis=1)
+
+    flux_loss = np.sqrt(np.mean(np.square(flux_ecrad - flux_new), axis=(0,1)))
+
+    flux_bias = np.mean(flux_ecrad - flux_new, axis=(0,1))
+
+    print(f'Shortwave Year = {year}, month={month} rmse flux = {flux_loss} flux bias = {flux_bias}')
+
+    dt_new.close()
+    dt_ecrad.close()
+
+
 if __name__ == "__main__":
 
 
@@ -663,7 +928,13 @@ if __name__ == "__main__":
     if True:
         months = [str(m).zfill(2) for m in range(1,13)]
 
-        combo = [('training','2008'),('cross_validation','2008'),('testing','2009'),('testing','2015'),('testing','2020')]
+
+
+        combo = [('training','2008'),('cross_validation','2008'),('testing','2009'),('testing','2015'),('testing','2020'),]
+
+        combo = [('testing','2009'),]
+
+        months = [str(m).zfill(2) for m in range(4,5)]
 
         for c in combo:
             mode = c[0]
@@ -671,9 +942,18 @@ if __name__ == "__main__":
             print(f'Processing {mode} {year}')
             for month in months[:]:
                 print(f'{year} {month}')
-                wrangle_ecrad_input_data(mode, month, year, base_directory)
+                #wrangle_ecrad_input_data(mode, month, year, base_directory)
+                #transform_rte_rrtmgp_input_data(mode, month, year, base_directory)
+                transform_ecrad_input_data(mode, month, year, base_directory,is_just_o2=True)
+                #compute_ecrad_output_data(mode, month, year, base_directory, is_hws_version=False, is_just_o2=False)
+                compute_ecrad_output_data_2(mode, month, year, base_directory)
                 #wrapper_raw_sources (mode,month,year, base_directory)
                 #wrangle_nn_input_data(mode, month, year, base_directory)
+                #compare_ecrad_with_rte_rrtmgp(mode,month,year, base_directory)
+                compare_ecrad_with_new_radiation(mode,month,year, base_directory, is_just_o2=False)
+
+                #compare_rte_rrtmgp_with_new_radiation(mode,month,year, base_directory)
+                     
 
 
     if False:
