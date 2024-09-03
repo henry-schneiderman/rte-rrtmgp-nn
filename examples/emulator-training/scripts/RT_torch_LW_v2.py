@@ -594,7 +594,13 @@ class MultiReflection(nn.Module):
                                    requires_grad=True,device=device,
                                    dtype=torch.float32,)
         
-        self.bands_to_channels = nn.parameter.Parameter(weight_values, requires_grad=True)
+        diagonal = torch.full((n_bands,), 1.2, dtype=torch.float32,device=device)
+        
+        template = torch.diag(diagonal)
+
+        offset = torch.cat((template, template, template),dim=1)
+        
+        self.bands_to_channels = nn.parameter.Parameter(weight_values * 0.5 + offset, requires_grad=True)
 
     def _compute_surface_reflection(self,r,t):
         """
@@ -1134,7 +1140,19 @@ def loss_henry_wrapper(data, y_pred):
     loss = (1.0 / (w1 + w2 + w3 + w4)) * (w1 * loss_full_flux + w2 * loss_clear_flux + w3 * loss_full_heating_rate + w4 * loss_clear_heating_rate)
 
     return loss
+def loss_henry_wrapper_2(data, y_pred):
+    loss_full_flux = loss_full_flux_wrapper(data, y_pred)
+    loss_clear_flux = loss_clear_flux_wrapper(data, y_pred)
 
+
+    w1 = 2.0
+    w2 = 1.0
+    w3 = 1.0
+    w4 = 0.5
+
+    loss = (1.0 / (w1 + w2)) * (w1 * loss_full_flux + w2 * loss_clear_flux)
+
+    return loss
 
 def train_loop(dataloader, model, optimizer, loss_function, device):
     """ Generic training loop """
@@ -1314,7 +1332,7 @@ def train_full_dataloader():
     n_band = 16
     
 
-    filename_full_model = datadir + f"/Torch.LW.v5." # scattering_v2_efficient
+    filename_full_model = datadir + f"/Torch.LW.v9." # scattering_v2_efficient
 
     is_initial_condition = False
     if is_initial_condition:
@@ -1329,13 +1347,13 @@ def train_full_dataloader():
         number_of_tries = 1
         
 
-        if True:
+        if False:
             #initial_model_n = 0   #v4
-            initial_model_n = 2   #v5
+            initial_model_n = 0   #v6, v7
             t_start = 1
             filename_full_model_input = f'{filename_full_model}i' + str(initial_model_n).zfill(2)
         else:
-            t_start = 5 #395
+            t_start = 0 #395
             filename_full_model_input = filename_full_model + str(t_start).zfill(3)
 
 
@@ -1407,8 +1425,9 @@ def train_full_dataloader():
                     t5 = count_parameters(model.scattering_net.direct_selection)
                     print(f"Number of scattering - direct selection = {t5}")
 
+        # v7 lr increased from 0.001 to 0.0025
 
-        optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+        optimizer = torch.optim.Adam(model.parameters(), lr=0.0025)
 
         train_dataset = RT_lw_data.RTDataSet(train_input_files)
 

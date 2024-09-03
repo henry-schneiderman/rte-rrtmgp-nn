@@ -17,7 +17,8 @@ def load_data_full(file, file_index):
     temperature_pressure = data.variables['temp_pres_level'][:,:,:].data
     composition = data.variables['constituents'][:,:,:].data
     delta_pressure = data.variables['delta_pressure'][:,:].data
-    sources = data.variables['sources'][:,:,:].data
+    level_sources = data.variables['half_level_sources'][:,:,:].data
+    surface_source = data.variables['surface_source'][:,:].data
     emissivity = data.variables['lw_emissivity'][:].data
     flux_down = data.variables['flux_dn_lw'][:,:].data
     flux_down_clear = data.variables['flux_dn_lw_clear'][:,:].data
@@ -37,8 +38,11 @@ def load_data_full(file, file_index):
     if np.isnan(np.sum(delta_pressure)):
         print(f"input {file_index} delta_pressure contains NaN")
         os.abort()
-    if np.isnan(np.sum(sources)):
-        print(f"input {file_index} sources contains NaN")
+    if np.isnan(np.sum(level_sources)):
+        print(f"input {file_index} level sources contains NaN")
+        os.abort()
+    if np.isnan(np.sum(surface_source)):
+        print(f"input {file_index} surface source contains NaN")
         os.abort()
     if np.isnan(np.sum(emissivity)):
         print(f"input {file_index} emissivity contains NaN")
@@ -86,7 +90,9 @@ def load_data_full(file, file_index):
     flux_up = flux_up.reshape((shape[0], shape[1], 1))
     flux_down_clear = flux_down_clear.reshape((shape[0], shape[1], 1))
     flux_up_clear = flux_up_clear.reshape((shape[0], shape[1], 1))
+    surface_source = surface_source.reshape((surface_source.shape[0],1,surface_source.shape[1]))
     y = np.concatenate((flux_down, flux_up, flux_down_clear, flux_up_clear), axis=2)
+    sources = np.concatenate((level_sources,surface_source),axis=1)
 
     return tensorize(x_layers), tensorize(sources), tensorize(emissivity), tensorize(delta_pressure), tensorize(y)
 

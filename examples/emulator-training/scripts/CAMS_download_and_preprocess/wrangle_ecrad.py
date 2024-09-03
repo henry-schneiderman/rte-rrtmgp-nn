@@ -535,7 +535,7 @@ def transform_rte_rrtmgp_input_data(mode,month,year, base_directory):
 
     dt.close()
     
-def wrangle_nn_input_data(mode,month,year, base_directory):
+def wrangle_lw_nn_input_data(mode,month,year, base_directory):
     # Using values from rrtm_prepare_gases.F90
     g = 9.80665 #
     m_co2 = 44.011 #
@@ -713,6 +713,209 @@ def wrangle_nn_input_data(mode,month,year, base_directory):
     dt_ecrad.close()
     dt_source.close()
     dt_flux.close()
+
+
+   
+def wrangle_sw_nn_input_data(mode,month,year, base_directory):
+    # Using values from rrtm_prepare_gases.F90
+    g = 9.80665 #
+    m_co2 = 44.011 #
+    m_dry = 28.970  # ZAMD
+    m_h2o = 18.0154 # ZAMW
+    m_o2 = 31.999
+    m_n2o = 44.013 #
+    m_ch4 = 16.043 #
+    m_co = 28.010
+
+    d = base_directory + f'{mode}/{year}/'  
+    file_name_ecrad_input = d + f'{month}/lw_input-{mode}-{year}-{month}.nc'
+    file_name_flux_input = d + f'Flux_lw-{mode}-{year}-{month}.nc'
+    file_name_old_input = d + f'Flux_sw-{year}-{month}.2.nc'
+    file_name_nn_input = d + f'nn_input_sw-{mode}-{year}-{month}.nc'
+
+    dt_ecrad = Dataset(file_name_ecrad_input,"r")
+    dt_flux = Dataset(file_name_flux_input,"r")
+    dt_old = Dataset(file_name_old_input,"r")
+    dt_nn = Dataset(file_name_nn_input,"w")
+
+    temp_level = dt_ecrad.variables["temp_layer"][:,:,:].data
+    pres_level = dt_ecrad.variables["pres_layer"][:,:,:].data
+
+    shape = temp_level.shape
+    col = shape[0] * shape[1]
+    level = shape[2]
+    dim_col = dt_nn.createDimension("col",col)
+    dim_level = dt_nn.createDimension("level",level)
+    dim_half_level = dt_nn.createDimension("half_level",level + 1)
+    dim_two = dt_nn.createDimension("two",2)
+
+    mu = dt_old.variables["mu0"][:,:].data
+    var_mu = dt_nn.createVariable("mu0","f4",("col",))
+    var_mu.setncattr("long_name","Cosine of solar zenith angle")
+    mu = mu.reshape((col,))
+    var_mu[:]= mu[:]
+
+    surface_albedo = dt_old.variables["sfc_alb"][:,:,:].data
+    surface_albedo = surface_albedo[:,:,0]
+    var_surface_albedo = dt_nn.createVariable("surface_albedo","f4",("col",))
+    var_surface_albedo.setncattr("long_name","surface albedo")
+    surface_albedo = surface_albedo.reshape((col,))
+    var_surface_albedo[:]= surface_albedo[:]
+
+    is_valid = dt_old.variables["is_valid_zenith_angle"][:,:].data
+    var_is_valid = dt_nn.createVariable("is_valid_zenith_angle","f4",("col",))
+    var_is_valid.setncattr("long_name","True if zenith angle is less than 90 degrees")
+    is_valid = is_valid.reshape((col,))
+    var_is_valid[:]= is_valid[:]
+
+    temp_level = temp_level.reshape((col,-1))
+
+    var_temp_pres_level = dt_nn.createVariable("temp_pres_level","f4",("col","level","two"))
+    pres_level = pres_level.reshape((col,-1))
+    var_temp_pres_level[:,:,0] = temp_level[:,:]
+    var_temp_pres_level[:,:,1] = pres_level[:,:]
+
+    pres_half_level = dt_ecrad.variables["pressure_hl"][:,:].data
+    delta_pressure = pres_half_level[:,1:] - pres_half_level[:,:-1]
+
+    #var_pres_half_level = dt_nn.createVariable("pressure_half_level","f4",("col","half_level",))
+    #var_pres_half_level[:] = pres_half_level
+
+    total_mass = (delta_pressure / g) 
+
+    clwc = dt_ecrad.variables["q_liquid"][:,:].data # specific liquid cloud water
+    cw = clwc * total_mass * 1000.0 # converting to g / kg; consistent with original version
+
+    ciwc = dt_ecrad.variables["q_ice"][:,:].data # specific ice cloud water
+    ci = ciwc * total_mass  * 1000.0 # converting to g / kg; consistent with original version
+
+    # even though 'q' is variable name, this is the mass ratio
+    water_vapor_mmr = dt_ecrad.variables["q"][:,:].data
+
+    # Normally, dry mass would just be the following
+    dry_mass = total_mass / (1.0 + water_vapor_mmr)
+    # Does not for factor from line 188 in rrtmp_prepare_gases.F90
+    q = water_vapor_mmr / (1.0 + water_vapor_mmr)
+    water_vapor = q * total_mass
+
+    o3_mmr = dt_ecrad.variables["o3_mmr"][:,:].data
+    o3 = o3_mmr * dry_mass
+    if np.isnan(np.sum(o3_mmr)):
+        print(f"o3_mmr contains Nan")
+        print(f"Indices of Nan = {np.argwhere(np.isnan(o3_mmr))}")
+        os.abort()
+    if np.isnan(np.sum(o3)):
+        print(f"o3 contains Nan")
+        print(f"Indices of Nan = {np.argwhere(np.isnan(o3))}")
+        os.abort()
+
+    co2_vmr = dt_ecrad.variables["co2_vmr"][:,:].data
+    co2 = dry_mass * co2_vmr * m_co2  / m_dry 
+    if np.isnan(np.sum(co2_vmr)):
+        print(f"co2_vmr contains Nan")
+        print(f"Indices of Nan = {np.argwhere(np.isnan(co2_vmr))}")
+        os.abort()
+    if np.isnan(np.sum(co2)):
+        print(f"co2 contains Nan")
+        print(f"Indices of Nan = {np.argwhere(np.isnan(co2))}")
+        os.abort()
+
+
+    #o2_vmr = dt_ecrad.variables["o2_vmr"][:].data
+    o2_vmr = np.array([0.2095])
+    o2 = dry_mass * o2_vmr * m_o2  / m_dry 
+    if np.isnan(np.sum(o2_vmr)):
+        print(f"o2_vmr contains Nan")
+        print(f"Indices of Nan = {np.argwhere(np.isnan(o2_vmr))}")
+        os.abort()
+    if np.isnan(np.sum(o2)):
+        print(f"o2 contains Nan")
+        print(f"Indices of Nan = {np.argwhere(np.isnan(o2))}")
+        os.abort()
+
+    n2o_vmr = dt_ecrad.variables["n2o_vmr"][:,:].data
+    n2o = dry_mass * n2o_vmr * m_n2o  / m_dry 
+    if np.isnan(np.sum(n2o_vmr)):
+        print(f"n2o_vmr contains Nan")
+        print(f"Indices of Nan = {np.argwhere(np.isnan(n2o_vmr))}")
+        os.abort()
+    if np.isnan(np.sum(n2o)):
+        print(f"n2o contains Nan")
+        print(f"Indices of Nan = {np.argwhere(np.isnan(n2o))}")
+        os.abort()
+
+    ch4_vmr = dt_ecrad.variables["ch4_vmr"][:,:].data
+    ch4 = dry_mass * ch4_vmr * m_ch4  / m_dry 
+    if np.isnan(np.sum(ch4_vmr)):
+        print(f"ch4_vmr contains Nan")
+        print(f"Indices of Nan = {np.argwhere(np.isnan(ch4_vmr))}")
+        os.abort()
+    if np.isnan(np.sum(ch4)):
+        print(f"ch4 contains Nan")
+        print(f"Indices of Nan = {np.argwhere(np.isnan(ch4))}")
+        os.abort()
+
+    co_vmr = dt_ecrad.variables["co_vmr"][:,:].data
+    co = dry_mass * co_vmr * m_co  / m_dry 
+    if np.isnan(np.sum(co_vmr)):
+        print(f"co_vmr contains Nan")
+        print(f"Indices of Nan = {np.argwhere(np.isnan(co_vmr))}")
+        os.abort()
+    if np.isnan(np.sum(co)):
+        print(f"co contains Nan")
+        print(f"Indices of Nan = {np.argwhere(np.isnan(co))}")
+        os.abort()
+
+    cw = cw.reshape((col,level, 1))
+    ci = ci.reshape((col,level, 1))
+    water_vapor = water_vapor.reshape((col,level, 1))
+    o3 = o3.reshape((col,level, 1))
+    co2 = co2.reshape((col,level, 1))
+  
+    o2 = o2.reshape((col,level, 1))
+    n2o = n2o.reshape((col,level, 1))
+    ch4 = ch4.reshape((col,level, 1))
+    #co = co.reshape((col,level, 1))
+
+    constituents = np.concatenate((cw,ci,water_vapor,o3,co2,o2,n2o,ch4), axis=2)
+    dim_feature = dt_nn.createDimension("feature",8)
+    var_constituents = dt_nn.createVariable("constituents","f4",("col","level","feature"))
+    var_constituents[:] = constituents[:]
+    var_constituents.setncattr("description-1","mass")
+    var_constituents.setncattr("description-2","liquid_water, ice_water, water_vapor, o3, co2, o2, n2o, ch4")
+
+    var_delta = dt_nn.createVariable("delta_pressure","f4",("col","level",))
+    var_delta[:] = delta_pressure[:]
+
+    flux_down = dt_flux.variables['flux_dn_sw'][:,:].data
+    flux_up = dt_flux.variables['flux_up_sw'][:,:].data
+    flux_down_direct = dt_flux.variables['flux_dn_direct_sw'][:,:].data
+    flux_down_clear = dt_flux.variables['flux_dn_sw_clear'][:,:].data
+    flux_down_direct_clear = dt_flux.variables['flux_dn_direct_sw_clear'][:,:].data
+    flux_up_clear = dt_flux.variables['flux_up_sw_clear'][:,:].data
+
+    var_flux_down_direct = dt_nn.createVariable("flux_down_direct","f4",("col","half_level"))
+    var_flux_down_direct[:] = flux_down_direct[:]
+
+    var_flux_down_diffuse = dt_nn.createVariable("flux_down_diffuse","f4",("col","half_level"))
+    var_flux_down_diffuse[:] = flux_down[:] - flux_down_direct[:] 
+
+    var_flux_up_diffuse = dt_nn.createVariable("flux_up_diffuse","f4",("col","half_level"))
+    var_flux_up_diffuse[:] = flux_up[:]
+
+    var_flux_down_direct_clear = dt_nn.createVariable("flux_down_direct_clear","f4",("col","half_level"))
+    var_flux_down_direct_clear[:] = flux_down_direct_clear[:]
+
+    var_flux_down_diffuse_clear = dt_nn.createVariable("flux_down_diffuse_clear","f4",("col","half_level"))
+    var_flux_down_diffuse_clear[:] = flux_down_clear[:] - flux_down_direct_clear[:]
+
+    var_flux_up_diffuse_clear = dt_nn.createVariable("flux_up_diffuse_clear","f4",("col","half_level"))
+    var_flux_up_diffuse_clear[:] = flux_up_clear[:]
+
+    dt_nn.close()
+    dt_ecrad.close()
+    dt_flux.close()
+    dt_old.close()
 
 def examine_nn_input_data(mode,month,year, base_directory):
     d = base_directory + f'{mode}/{year}/'  
@@ -921,7 +1124,7 @@ if __name__ == "__main__":
         year = '2008'
 
         #wrapper_raw_sources (mode,month,year, base_directory)
-        #wrangle_nn_input_data(mode,month,year, base_directory)
+        #wrangle_lw_nn_input_data(mode,month,year, base_directory)
 
         examine_nn_input_data(mode,month,year, base_directory)
 
@@ -932,9 +1135,9 @@ if __name__ == "__main__":
 
         combo = [('training','2008'),('cross_validation','2008'),('testing','2009'),('testing','2015'),('testing','2020'),]
 
-        combo = [('testing','2009'),]
+        #combo = [('testing','2009'),]
 
-        months = [str(m).zfill(2) for m in range(4,5)]
+        #months = [str(m).zfill(2) for m in range(4,5)]
 
         for c in combo:
             mode = c[0]
@@ -944,16 +1147,17 @@ if __name__ == "__main__":
                 print(f'{year} {month}')
                 #wrangle_ecrad_input_data(mode, month, year, base_directory)
                 #transform_rte_rrtmgp_input_data(mode, month, year, base_directory)
-                transform_ecrad_input_data(mode, month, year, base_directory,is_just_o2=True)
+                #transform_ecrad_input_data(mode, month, year, base_directory,is_just_o2=True)
                 #compute_ecrad_output_data(mode, month, year, base_directory, is_hws_version=False, is_just_o2=False)
-                compute_ecrad_output_data_2(mode, month, year, base_directory)
+                #compute_ecrad_output_data_2(mode, month, year, base_directory)
                 #wrapper_raw_sources (mode,month,year, base_directory)
-                #wrangle_nn_input_data(mode, month, year, base_directory)
+                #wrangle_lw_nn_input_data(mode, month, year, base_directory)
                 #compare_ecrad_with_rte_rrtmgp(mode,month,year, base_directory)
-                compare_ecrad_with_new_radiation(mode,month,year, base_directory, is_just_o2=False)
+                #compare_ecrad_with_new_radiation(mode,month,year, base_directory, is_just_o2=False)
 
                 #compare_rte_rrtmgp_with_new_radiation(mode,month,year, base_directory)
                      
+                wrangle_sw_nn_input_data(mode, month, year, base_directory)
 
 
     if False:

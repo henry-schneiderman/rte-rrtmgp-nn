@@ -18,12 +18,17 @@ def load_data_full(file, file_index):
     composition = data.variables['constituents'][:,:,:].data
     delta_pressure = data.variables['delta_pressure'][:,:].data
     mu = data.variables['mu0'][:].data
-    flux_down = data.variables['flux_dn_sw'][:,:].data
-    flux_up = data.variables['flux_up_sw'][:,:].data
-    flux_down_direct = data.variables['flux_dn_direct_sw'][:,:].data
-    flux_up_direct = data.variables['flux_up_direct_sw'][:,:].data
-    #flux_down_clear = data.variables['flux_dn_sw_clear'][:,:].data
-    #flux_up_clear = data.variables['flux_up_sw_clear'][:,:].data
+    surface_albedo = data.variables['surface_albedo'][:].data
+
+    flux_down_direct = data.variables['flux_down_direct'][:,:].data
+    flux_down_diffuse = data.variables['flux_down_diffuse'][:,:].data
+    flux_up_diffuse = data.variables['flux_up_diffuse'][:,:].data
+    flux_down_direct_clear = data.variables['flux_down_direct_clear'][:,:].data
+    flux_down_diffuse_clear = data.variables['flux_down_diffuse_clear'][:,:].data
+    flux_up_diffuse_clear = data.variables['flux_up_diffuse_clear'][:,:].data
+
+    tmp_selection = data.variables['is_valid_zenith_angle'].data.astype(int)
+
 
     if np.isnan(np.sum(temperature_pressure)):
         print(f"input {file_index} temperature_pressure contains NaN")
@@ -41,19 +46,39 @@ def load_data_full(file, file_index):
     if np.isnan(np.sum(mu)):
         print(f"input {file_index} mu contains NaN")
         os.abort()
-    if np.isnan(np.sum(flux_down)):
-        print(f"input {file_index} flux_down contains NaN")
-        os.abort()
     if np.isnan(np.sum(flux_down_direct)):
         print(f"input {file_index} flux_down_direct contains NaN")
         os.abort()
-    if np.isnan(np.sum(flux_up)):
-        print(f"input {file_index} flux_up contains NaN")
+    if np.isnan(np.sum(flux_down_diffuse)):
+        print(f"input {file_index} flux_down_diffuse contains NaN")
         os.abort()
-    if np.isnan(np.sum(flux_up_direct)):
-        print(f"input {file_index} flux_up_direct contains NaN")
+    if np.isnan(np.sum(flux_up_diffuse)):
+        print(f"input {file_index} flux_up_diffuse contains NaN")
         os.abort()
-        
+    if np.isnan(np.sum(flux_down_direct_clear)):
+        print(f"input {file_index} flux_down_direct_clear contains NaN")
+        os.abort()
+    if np.isnan(np.sum(flux_down_diffuse_clear)):
+        print(f"input {file_index} flux_down_diffuse_clear contains NaN")
+        os.abort()
+    if np.isnan(np.sum(flux_up_diffuse_clear)):
+        print(f"input {file_index} flux_up_diffuse_clear contains NaN")
+        os.abort()
+    
+    if np.isnan(np.sum(tmp_selection)):
+        print(f"input {file_index} is_valid_zenith_angle contains NaN")
+        os.abort()
+
+    n_selection = np.sum(tmp_selection)
+    selection = tmp_selection.astype(bool)
+
+    temperature_pressure = temperature_pressure[selection,:,:]
+    composition = composition[selection,:,:]
+    delta_pressure = delta_pressure[selection,:]
+    mu = mu[selection]
+    surface_albedo = surface_albedo[selection]
+    # fluxes are "selected" after they are concatenated in a single tensor
+
     t_p_mean = np.array([248.6, 35043.8],dtype=np.float32)
     t_p_min = np.array([176.0, 0.0],dtype=np.float32)
     t_p_max = np.array([320.10498, 105420.29],dtype=np.float32)
@@ -64,8 +89,8 @@ def load_data_full(file, file_index):
 
     temperature_pressure = (temperature_pressure - t_p_mean)/ (t_p_max - t_p_min)
 
-    lw_max = 2.1337292e-00  #10X max
-    iw_max = 1.9692309e-00  #10X max
+    lw_max = 2.1337292e+02  #10X max
+    iw_max = 1.9692309e+02  #10X max
     h2o_max = 4.84642649
     o3_max = 8.97450472e-04
     co2_max = 2.55393449e-01
@@ -78,26 +103,39 @@ def load_data_full(file, file_index):
 
     composition = composition / composition_norm
 
+    if False:
+        print(f"temp = {np.min(temperature_pressure[:,:,0])}, {np.max(temperature_pressure[:,:,0])}")
+        print(f"pressure = {np.min(temperature_pressure[:,:,1])}, {np.max(temperature_pressure[:,:,1])}")
+
+        for i in np.arange(8):
+            print(f"min, max {i} = {np.min(composition[:,:,i])}, {np.max(composition[:,:,i])}")
+
+
     x_layers = np.concatenate((temperature_pressure, composition), axis=2)
-    shape = flux_down.shape
-    flux_down = flux_down.reshape((shape[0], shape[1], 1))
-    flux_up = flux_up.reshape((shape[0], shape[1], 1))
-    flux_down_clear = flux_down_clear.reshape((shape[0], shape[1], 1))
-    flux_up_clear = flux_up_clear.reshape((shape[0], shape[1], 1))
-    surface_source = surface_source.reshape((surface_source.shape[0],1,surface_source.shape[1]))
-    y = np.concatenate((flux_down_direct, flux_down - flux_up_direct,flux_up_direct,  flux_up - flux_up_direct, ), axis=2)
+    shape = flux_down_direct.shape
 
+    flux_down_direct = flux_down_direct.reshape((shape[0], shape[1], 1))
+    flux_down_diffuse = flux_down_diffuse.reshape((shape[0], shape[1], 1))
+    flux_up_diffuse = flux_up_diffuse.reshape((shape[0], shape[1], 1))
+    flux_down_direct_clear = flux_down_direct_clear.reshape((shape[0], shape[1], 1))
+    flux_down_diffuse_clear = flux_down_diffuse_clear.reshape((shape[0], shape[1], 1))
+    flux_up_diffuse_clear = flux_up_diffuse_clear.reshape((shape[0], shape[1], 1))
 
-    return tensorize(x_layers), tensorize(sources), tensorize(emissivity), tensorize(delta_pressure), tensorize(y)
+    y = np.concatenate((flux_down_direct, flux_down_diffuse, flux_up_diffuse, flux_down_direct_clear, flux_down_diffuse_clear, flux_up_diffuse_clear), axis=2)
+    y = y[selection,:,:]
 
+    mu = mu.reshape((-1,1))
+    surface_albedo = surface_albedo.reshape((-1,1))
+    x_surface = np.concatenate((mu, surface_albedo), axis=1)
+
+    return tensorize(x_layers), tensorize(x_surface), tensorize(delta_pressure), tensorize(y)
 
 
 class RTDataSet(Dataset):
     # With shuffle of data files, too
     def __free_memory(self):
         del self.x_layers
-        del self.x_sources
-        del self.x_emissivity
+        del self.x_surface
         del self.delta_pressure
         del self.y
 
@@ -126,7 +164,7 @@ class RTDataSet(Dataset):
         self.dumb_variable = 14
         acc = 0
         for d in self.dt:
-            c = len(d['lw_emissivity'].data)
+            c = int(np.sum(d['is_valid_zenith_angle'].data))
             acc += c
             self.n_data_accumulated.append(acc)
             self.n_data.append(c)
@@ -163,7 +201,7 @@ class RTDataSet(Dataset):
             self.__reshuffle()
             data = load_data_full(self.dt[self.m_shuf[self.i_file]], self.m_shuf[self.i_file])
             #print(f"Loaded data. i_file = {self.i_file}", flush=True)
-            self.x_layers, self.x_sources, self.x_emissivity, self.delta_pressure, self.y = data
+            self.x_layers, self.x_surface, self.delta_pressure, self.y = data
             
 
         elif idx == self.n_data_accumulated[self.i_file]:
@@ -173,7 +211,7 @@ class RTDataSet(Dataset):
             #print(f"Loading data. i_file = {self.i_file}", flush=True)
             data = load_data_full(self.dt[self.m_shuf[self.i_file]], self.m_shuf[self.i_file])
             #print(f"Loaded data. i_file = {self.i_file}", flush=True)
-            self.x_layers, self.x_sources, self.x_emissivity, self.delta_pressure, self.y = data
+            self.x_layers, self.x_surface, self.delta_pressure, self.y = data
 
         assert self.x_layers.shape[0] == self.e_shuf[self.i_file].shape[0], f"len of x_layers = {self.x_layers.shape[0]}, len of shuff = {self.e_shuf[self.i_file].shape[0]}"
 
@@ -190,13 +228,14 @@ class RTDataSet(Dataset):
                 # Note: self.i_file seems to be automatically reset to zero
                 # at the end of an epoch. Can't figure out why.
                 # Do it explicitly here, anyway
+
                 self.i_file = 0
                 
-        return self.x_layers[ii], self.x_sources[ii], self.x_emissivity[ii], self.delta_pressure[ii], self.y[ii]
+        return self.x_layers[ii], self.x_surface[ii], self.delta_pressure[ii], self.y[ii]
 
     
 if __name__ == "__main__":
-    if True:
+    if False:
         batch_size = 2048
 
         year = '2008'
@@ -219,7 +258,7 @@ if __name__ == "__main__":
         print(f"a = {a}")
         random.shuffle(a)
         print(f'shuffled a = {a}')
-    else:
+    elif False:
         if False:
             train_input_dir = "/data-T1/hws/CAMS/processed_data/training/2008/"
             file = xr.open_dataset(f'{train_input_dir}Flux_sw-2008-01.nc')
@@ -228,5 +267,14 @@ if __name__ == "__main__":
             file = xr.open_dataset(file_name)
 
         tmp = load_data_full_pytorch_2(file, n_channels=30)
+    else:
+
+        year = '2008'
+        train_input_dir = f"/data-T1/hws/CAMS/processed_data/training/{year}/"
+        cross_input_dir = f"/data-T1/hws/CAMS/processed_data/cross_validation/{year}/"
+        months = [str(m).zfill(2) for m in range(1,13)]
+        train_input_files = [f'{train_input_dir}nn_input_sw-training-{year}-{month}.nc' for month in months]
+        dt = xr.open_dataset(train_input_files[0])
+        x = load_data_full(dt, 1)
 
 
