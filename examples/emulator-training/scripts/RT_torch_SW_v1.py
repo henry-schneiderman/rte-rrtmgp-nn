@@ -1184,7 +1184,7 @@ class FullNetInternals(nn.Module):
         predicted_data = [flux_down_direct, flux_down_diffuse, flux_up_diffuse, flux_absorbed]
 
         return predicted_data, internal_data
-        return [flux_down_direct, flux_down_diffuse, flux_up_diffuse, flux_absorbed]
+        #return [flux_down_direct, flux_down_diffuse, flux_up_diffuse, flux_absorbed]
 
 def loss_heating_rate_2(flux_down_true, flux_down_pred,
                            delta_pressure):
@@ -1225,7 +1225,7 @@ def loss_heating_rate(flux_down_true, flux_up_true, flux_down_pred, flux_up_pred
     return loss
 
 
-def loss_direct_heating_rate_wrapper(data, y_pred):
+def loss_direct_heating_rate_wrapper(data, y_pred, loss_weights):
     _, _, delta_pressure, y_true = data
     (flux_down_direct_pred, flux_down_diffuse_pred, flux_up_diffuse_pred, _) = y_pred
     #(flux_down_direct_true, flux_down_diffuse_true, flux_up_diffuse_true, _, _, _) = y_true
@@ -1235,7 +1235,7 @@ def loss_direct_heating_rate_wrapper(data, y_pred):
     
     return hr_loss
 
-def loss_diffuse_heating_rate_wrapper(data, y_pred):
+def loss_diffuse_heating_rate_wrapper(data, y_pred, loss_weights):
     _, _, delta_pressure, y_true = data
     (flux_down_direct_pred, flux_down_diffuse_pred, flux_up_diffuse_pred, _) = y_pred
     #(_, flux_down_diffuse_true, flux_up_diffuse_true, _, _, _) = y_true
@@ -1253,7 +1253,7 @@ def loss_diffuse_heating_rate_wrapper(data, y_pred):
     
     return hr_loss
 
-def loss_full_heating_rate_wrapper(data, y_pred):
+def loss_full_heating_rate_wrapper(data, y_pred, loss_weights):
     _, _, delta_pressure, y_true = data
     (flux_down_direct_pred, flux_down_diffuse_pred, flux_up_diffuse_pred, _) = y_pred
     #(flux_down_direct_true, flux_down_diffuse_true, flux_up_diffuse_true, _, _, _) = y_true
@@ -1289,7 +1289,7 @@ def loss_flux(flux_down_true, flux_up_true, flux_down_pred, flux_up_pred):
     return flux_loss
 
 
-def loss_direct_flux_wrapper(data, y_pred):
+def loss_direct_flux_wrapper(data, y_pred, loss_weights):
     _, _, _, y_true = data
     (flux_down_direct_pred, _, _, _) = y_pred
     flux_down_direct_true = y_true[:,:,0]
@@ -1298,7 +1298,7 @@ def loss_direct_flux_wrapper(data, y_pred):
     loss = loss_flux_2(flux_down_direct_true, flux_down_direct_pred)
     return loss
 
-def loss_diffuse_flux_wrapper(data, y_pred):
+def loss_diffuse_flux_wrapper(data, y_pred, loss_weights):
     _, _, _, y_true = data
     (_, flux_down_diffuse_pred, flux_up_diffuse_pred, _) = y_pred
     #(_, flux_down_diffuse_true, flux_up_diffuse_true, _, _, _) = y_true
@@ -1308,7 +1308,7 @@ def loss_diffuse_flux_wrapper(data, y_pred):
     loss = loss_flux(flux_down_diffuse_true, flux_up_diffuse_true,flux_down_diffuse_pred, flux_up_diffuse_pred)
     return loss
 
-def loss_full_flux_wrapper(data, y_pred):
+def loss_full_flux_wrapper(data, y_pred, loss_weights):
     _, _, _, y_true = data
     (flux_down_direct_pred, flux_down_diffuse_pred, flux_up_diffuse_pred, _) = y_pred
     #(flux_down_direct_true, flux_down_diffuse_true, flux_up_diffuse_true, _, _, _) = y_true
@@ -1325,13 +1325,13 @@ def loss_full_flux_wrapper(data, y_pred):
     loss = loss_flux(flux_down_true, flux_up_true, flux_down_pred, flux_up_pred)
     return loss
 
-def loss_henry_wrapper(data, y_pred):
+def loss_henry_wrapper(data, y_pred, loss_weights):
 
-    loss_direct_flux = loss_direct_flux_wrapper(data, y_pred)    
-    loss_diffuse_flux = loss_diffuse_flux_wrapper(data, y_pred)
+    loss_direct_flux = loss_direct_flux_wrapper(data, y_pred, loss_weights)    
+    loss_diffuse_flux = loss_diffuse_flux_wrapper(data, y_pred, loss_weights)
 
-    loss_direct_heating_rate = loss_direct_heating_rate_wrapper(data, y_pred)
-    loss_diffuse_heating_rate = loss_diffuse_heating_rate_wrapper(data, y_pred)
+    loss_direct_heating_rate = loss_direct_heating_rate_wrapper(data, y_pred, loss_weights)
+    loss_diffuse_heating_rate = loss_diffuse_heating_rate_wrapper(data, y_pred, loss_weights)
 
     # 0-200
     #w1 = 2.0
@@ -1340,29 +1340,56 @@ def loss_henry_wrapper(data, y_pred):
     #w4 = 0.25
 
     # 200 +
-    w1 = 1.0
-    w2 = 1.0
-    w3 = 0.5
-    w4 = 0.5
+    #w1 = 1.0
+    #w2 = 1.0
+    #w3 = 0.5
+    #w4 = 0.5
 
     # 285 +
-    w1 = 1.0
-    w2 = 1.0
-    w3 = 1.0
-    w4 = 1.0
+    #w1 = 1.0
+    #w2 = 1.0
+    #w3 = 1.0
+    #w4 = 1.0
 
     # 360 +
-    w1 = 1.0
-    w2 = 1.0
-    w3 = 2.0
-    w4 = 2.0
+    #w1 = 1.0
+    #w2 = 1.0
+    #w3 = 2.0
+    #w4 = 2.0
+
+    # 515 +
+    #w1 = 1.0
+    #w2 = 1.0
+    #w3 = 0.5
+    #w4 = 0.5
+
+    w1 = loss_weights[0]
+    w2 = loss_weights[1]
+    w3 = loss_weights[2]
+    w4 = loss_weights[3]
 
     loss = (1.0 / (w1 + w2 + w3 + w4)) * (w1 * loss_direct_flux + w2 * loss_diffuse_flux + w3 * loss_direct_heating_rate + w4 * loss_diffuse_heating_rate)
 
     return loss
 
 
-def train_loop(dataloader, model, optimizer, loss_function, device):
+def loss_henry_wrapper_2(data, y_pred, loss_weights):
+    # Just flux and heating rate
+    loss_flux = loss_full_flux_wrapper(data, y_pred, loss_weights)    
+
+    loss_heating_rate = loss_full_heating_rate_wrapper(data, y_pred, loss_weights)
+
+    w1 = loss_weights[0]
+    w2 = loss_weights[1]
+
+
+    loss = (1.0 / (w1 + w2)) * (w1 * loss_flux + w2 * loss_heating_rate)
+
+    return loss
+
+
+
+def train_loop(dataloader, model, optimizer, loss_function, loss_weights, device):
     """ Generic training loop """
 
     torch.cuda.synchronize()
@@ -1375,7 +1402,7 @@ def train_loop(dataloader, model, optimizer, loss_function, device):
         y_pred = model(data)
         torch.cuda.synchronize()
         t_0 = time.time()
-        loss = loss_function(data, y_pred)
+        loss = loss_function(data, y_pred, loss_weights)
         torch.cuda.synchronize()
         t_01 = time.time()
         global t_loss
@@ -1410,7 +1437,7 @@ def train_loop(dataloader, model, optimizer, loss_function, device):
     global t_train
     t_train += t_2 - t_1
 
-def test_loop(dataloader, model, loss_functions, loss_names, device):
+def test_loop(dataloader, model, loss_functions, loss_names, loss_weights, device):
     """ Generic testing / evaluation loop """
     model.eval()
     num_batches = len(dataloader)
@@ -1422,7 +1449,7 @@ def test_loop(dataloader, model, loss_functions, loss_names, device):
             data = [x.to(device) for x in data]
             y_pred = model(data)
             for i, loss_fn in enumerate(loss_functions):
-                loss[i] += loss_fn(data, y_pred).item()
+                loss[i] += loss_fn(data, y_pred, loss_weights).item()
 
     loss /= num_batches
 
@@ -1433,7 +1460,7 @@ def test_loop(dataloader, model, loss_functions, loss_names, device):
 
     return loss
 
-def test_loop_internals (dataloader, model, loss_functions, loss_names, device):
+def test_loop_internals (dataloader, model, loss_functions, loss_names, loss_weights,device):
     """ Generic testing / evaluation loop """
     model.eval()
     num_batches = len(dataloader)
@@ -1470,7 +1497,7 @@ def test_loop_internals (dataloader, model, loss_functions, loss_names, device):
             t_diffuse.append(internal_data[10])
             h2o.append(internal_data[11])
             for i, loss_fn in enumerate(loss_functions):
-                loss[i] += loss_fn(data, y_pred).item()
+                loss[i] += loss_fn(data, y_pred, loss_weights).item()
 
     loss /= num_batches
 
@@ -1523,14 +1550,13 @@ def train_full_dataloader():
 
     datadir     = "/data-T1/hws/tmp/"
     mode = "training"
-    #mode = "testing"
     year = "2008"
-    #year = "2015"
+
     train_input_dir = f"/data-T1/hws/CAMS/processed_data/{mode}/{year}/"
     cross_input_dir = "/data-T1/hws/CAMS/processed_data/cross_validation/2008/"
     months = [str(m).zfill(2) for m in range(1,13)]
-    train_input_files = [f'{train_input_dir}nn_input_sw-{mode}-{year}-{month}.nc' for month in months]
-    cross_input_files = [f'{cross_input_dir}nn_input_sw-cross_validation-2008-{month}.nc' for month in months]
+
+    is_mcica = False
 
     #batch_size = 2048
     #batch_size = 1536 
@@ -1538,92 +1564,112 @@ def train_full_dataloader():
     n_channel = 42
     n_constituent = 8
 
-    version_name = "v1.v1."
-    best_loss = 0.036
+    best_loss_index = -1
+    best_loss = 1.0e+08
+    windup_best_loss = 200
+    best_initial_index = -1
+    best_initial_loss = 1.0e+08
 
+    is_initial_condition = False
+    is_initial_run = False
+    max_epochs_threshold = 50
+    current_max_epochs = 0
+
+    if is_mcica:
+        version_name = "v1.v2."  # mcica version
+    else:
+        #version_name = "v1.v3."  # Homogeneous version
+        version_name = "v1.v4."  # Homogeneous version
+
+    if is_mcica:
+        train_input_files = [f'{train_input_dir}nn_input_sw_mcica-{mode}-{year}-{month}.nc' for month in months]
+        cross_input_files = [f'{cross_input_dir}nn_input_sw_mcica-cross_validation-2008-{month}.nc' for month in months]
+    else:
+        train_input_files = [f'{train_input_dir}nn_input_sw-{mode}-{year}-{month}.nc' for month in months]
+        cross_input_files = [f'{cross_input_dir}nn_input_sw-cross_validation-2008-{month}.nc' for month in months]
 
     filename_full_model = datadir + f"/Torch.SW.{version_name}" # scattering_v2_efficient
 
-    is_initial_condition = False
-    if is_initial_condition:
-        checkpoint_period = 1
-        epochs = 1
-        t_start = 0
-        number_of_tries = 20
-    else:
-        checkpoint_period = 5 
-        epochs = 2000 
-
-        number_of_tries = 1
-        
-
-        if False:
-            #initial_model_n = 0   
-            initial_model_n = 3   
-            t_start = 1
-            filename_full_model_input = f'{filename_full_model}i' + str(initial_model_n).zfill(2)
-        else:
-            t_start = 450 #0
-            filename_full_model_input = filename_full_model + str(t_start).zfill(3)
-
-
-    for ee in range(number_of_tries):
-
-        #print(f"Model = {str(ee).zfill(3)}")
-
-
-        #filename_full_model = filename_full_model_input  #
-
-        t_warmup = 1  # for profiling
-        t = t_start
-        best_loss_index = t_start
-        dropout_p = 0.00
-
-        dropout_schedule = (0.0, 0.07, 0.1, 0.15, 0.2, 0.15, 0.1, 0.07, 0.0, 0.0) 
-
-        dropout_epochs =   (-1, 40, 60, 70,  80, 90,  105, 120, 135, epochs + 1)
-
-
-        # Used for v11
-        #dropout_schedule = (0.0, 0.07, 0.15, 0.07, 0.0, 0.0) 
-        # Used for v11
-        #dropout_epochs =   (-1, 20, 23, 27, 35, epochs + 1)
-
-        # 400
-        #dropout_epochs =   (-1, 200,   300, 350,  400, 450,  550, 650, 750, epochs + 1)
-        #dropout_epochs =   (-1, 40,   60, 70,  80, 90,  110, 130, 150, epochs + 1) #v6
-
-
-        #v7-v15
-        #dropout_epochs =   (-1, 65, 85, 95,  105, 115,  135, 140, 145, epochs + 1) 
-
-        # changed 65 to 40 for v17
-        #dropout_epochs =   (-1, 40, 85, 95,  105, 115,  120, 125, 130, epochs + 1)
-
-        # changes for v18, v19 - v25, v27, v29
-        #dropout_epochs =   (-1, 40, 60, 70,  80, 90,  95, 100, 105, epochs + 1)
-
-        # v29
-
-        #V26
-        #dropout_epochs =   (-1, 40, 60, 70,  105, 140,  150, 160, 170, epochs + 1)
-
-
-
-        # v28
-        #dropout_epochs =   (-1, 80, 100, 130,  150, 165,  175, 185, 195, epochs + 1) 
-
-        dropout_index = next(i for i, x in enumerate(dropout_epochs) if t <= x) - 1
-        dropout_p = dropout_schedule[dropout_index]
-        last_dropout_index = dropout_index
-
-        model = FullNet(n_channel,n_constituent,dropout_p,device).to(device=device)
-
-        n_parameters = count_parameters(model)
-
-        print(f"Number of parameters = {n_parameters}")
+    for state in ['initial', 'running']:
 
         if is_initial_condition:
+            checkpoint_period = 1
+            epochs = 1
+            t_start = 0
+            number_of_tries = 4
+        else:
+            checkpoint_period = 5 
+            epochs = 2000 
+            number_of_tries = 1
+            
+
+            if is_initial_run:
+                initial_model_n = best_initial_index  #3   
+                t_start = 1
+                filename_full_model_input = f'{filename_full_model}i' + str(initial_model_n).zfill(2)
+            else:
+                t_start = 560 #250 #190 #515 #0
+                filename_full_model_input = filename_full_model + str(t_start).zfill(3)
+
+
+        for ee in range(number_of_tries):
+
+            #print(f"Model = {str(ee).zfill(3)}")
+
+
+            #filename_full_model = filename_full_model_input  #
+
+            t_warmup = 1  # for profiling
+            t = t_start
+            best_loss_index = t_start
+            dropout_p = 0.00
+
+            dropout_schedule = (0.0, 0.07, 0.1, 0.15, 0.2, 0.15, 0.1, 0.07, 0.0, 0.0) 
+
+            dropout_epochs =   (-1, 40, 60, 70,  80, 90,  105, 120, 135, epochs + 1)
+
+
+            # Used for v11
+            #dropout_schedule = (0.0, 0.07, 0.15, 0.07, 0.0, 0.0) 
+            # Used for v11
+            #dropout_epochs =   (-1, 20, 23, 27, 35, epochs + 1)
+
+            # 400
+            #dropout_epochs =   (-1, 200,   300, 350,  400, 450,  550, 650, 750, epochs + 1)
+            #dropout_epochs =   (-1, 40,   60, 70,  80, 90,  110, 130, 150, epochs + 1) #v6
+
+
+            #v7-v15
+            #dropout_epochs =   (-1, 65, 85, 95,  105, 115,  135, 140, 145, epochs + 1) 
+
+            # changed 65 to 40 for v17
+            #dropout_epochs =   (-1, 40, 85, 95,  105, 115,  120, 125, 130, epochs + 1)
+
+            # changes for v18, v19 - v25, v27, v29
+            #dropout_epochs =   (-1, 40, 60, 70,  80, 90,  95, 100, 105, epochs + 1)
+
+            # v29
+
+            #V26
+            #dropout_epochs =   (-1, 40, 60, 70,  105, 140,  150, 160, 170, epochs + 1)
+
+
+
+            # v28
+            #dropout_epochs =   (-1, 80, 100, 130,  150, 165,  175, 185, 195, epochs + 1) 
+
+            dropout_index = next(i for i, x in enumerate(dropout_epochs) if t <= x) - 1
+            dropout_p = dropout_schedule[dropout_index]
+            last_dropout_index = dropout_index
+
+            model = FullNet(n_channel,n_constituent,dropout_p,device).to(device=device)
+
+            n_parameters = count_parameters(model)
+
+            print(f"Number of parameters = {n_parameters}")
+
+            if is_initial_condition:
+
                 n_parameters = count_parameters(model)
 
                 t2 = count_parameters(model.extinction_net)
@@ -1639,105 +1685,179 @@ def train_full_dataloader():
                     t5 = count_parameters(model.scattering_net.direct_selection)
                     print(f"Number of scattering - direct selection = {t5}")
 
-        # 
+            # 
 
-        optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+            optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
-        train_dataset = RT_sw_data.RTDataSet(train_input_files)
+            train_dataset = RT_sw_data.RTDataSet(train_input_files)
 
-        train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size, 
-                                                    shuffle=False,
-                                                            num_workers=1)
-        
-        validation_dataset = RT_sw_data.RTDataSet(cross_input_files)
+            train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size, 
+                                                        shuffle=False,
+                                                                num_workers=1)
+            
+            validation_dataset = RT_sw_data.RTDataSet(cross_input_files)
 
-        validation_dataloader = torch.utils.data.DataLoader(validation_dataset, batch_size, 
-                                                    shuffle=False,
-                                                            num_workers=1)
-        
-        #start = torch.cuda.Event(enable_timing=True)
-        #end = torch.cuda.Event(enable_timing=True)
+            validation_dataloader = torch.utils.data.DataLoader(validation_dataset, batch_size, 
+                                                        shuffle=False,
+                                                                num_workers=1)
+            
+            #start = torch.cuda.Event(enable_timing=True)
+            #end = torch.cuda.Event(enable_timing=True)
 
-        loss_functions = (loss_henry_wrapper, loss_full_flux_wrapper, loss_direct_flux_wrapper, loss_diffuse_flux_wrapper, loss_full_heating_rate_wrapper, loss_direct_heating_rate_wrapper, loss_diffuse_heating_rate_wrapper)
-        loss_names = ("Loss", "Full Flux Loss", "Direct Flux Loss","Diffuse Flux Loss","Full Heating Rate Loss","Direct Heating Rate Loss", "Diffuse Heating Rate Loss")
-        
-        #loss_functions = (loss_flux_wrapper)
-        #loss_names = ("Flux Loss")
+            loss_functions = (loss_henry_wrapper_2, loss_full_flux_wrapper, loss_direct_flux_wrapper, loss_diffuse_flux_wrapper, loss_full_heating_rate_wrapper, loss_direct_heating_rate_wrapper, loss_diffuse_heating_rate_wrapper)
+            loss_names = ("Loss", "Full Flux Loss", "Direct Flux Loss","Diffuse Flux Loss","Full Heating Rate Loss","Direct Heating Rate Loss", "Diffuse Heating Rate Loss")
+            
+            #loss_functions = (loss_flux_wrapper)
+            #loss_names = ("Flux Loss")
 
-        if t > 0:
-            checkpoint = torch.load(filename_full_model_input)
-            print(f"Loaded Model: epoch = {filename_full_model_input}")
-            model.load_state_dict(checkpoint['model_state_dict'])
-            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-            #epoch = checkpoint['epoch']
+            if t > 0:
+                checkpoint = torch.load(filename_full_model_input)
+                print(f"Loaded Model: epoch = {filename_full_model_input}")
+                model.load_state_dict(checkpoint['model_state_dict'])
+                optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+                #epoch = checkpoint['epoch']
 
-        print(f"       dropout = {dropout_p}")
-        while t < epochs:
-            t += 1
+            print(f"       dropout = {dropout_p}")
+            while t < epochs:
+                t += 1
 
-            dropout_index = next(i for i, x in enumerate(dropout_epochs) if t <= x) - 1
-            if dropout_index != last_dropout_index:
-                last_dropout_index = dropout_index
-                dropout_p = dropout_schedule[dropout_index]
-                model.reset_dropout(dropout_p)
-            print(f"Epoch {t}\n-------------------------------")
-            print(f"Dropout: {dropout_p}")
-
-            if True:
-
-
-                #with profile(
-                #    activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-                #    with_stack=True, with_modules=True,
-                #) as prof:
-                #start.record() loss_flux_full_wrapper
-                train_loop(train_dataloader, model, optimizer, 
-                           loss_henry_wrapper, 
-                           device)
-                
                 if False:
-                    print(f"Total Train time= {t_train}")
-                    print(f"Full time forward total = {t_total}")
-                    print(f"Full time loss = {t_loss}")    
-                    print(f"Full time grad = {t_grad}")  
-                    print(f"Full time backward = {t_backward}")  
-                    print(f"Full time extinction = {t_extinction}")
-                    print(f"Full time scattering = {t_scattering_v2_tau}")
-                    print(f"Time for scattering = {t_direct_scattering}")
-                    print(f"Time for split = {t_direct_split}")
-
-                loss = test_loop(validation_dataloader, model, loss_functions, loss_names, device)
-
-                #if use_cuda: 
-                    #torch.cuda.synchronize()
-                #end.record()
-
-                #print(f"\n Elapsed time in seconds: {start.elapsed_time(end) / 1000.0}\n")
-
-                #print(prof.key_averages(group_by_stack_n=6).table(sort_by='self_cpu_time_total', row_limit=15))
-            if t % checkpoint_period == 0 or loss[0] < best_loss:
-                if is_initial_condition:
-                    torch.save({
-                    'epoch': t,
-                    'model_state_dict': model.state_dict(),
-                    'optimizer_state_dict': optimizer.state_dict(),
-                    'loss': loss,
-                    }, filename_full_model + 'i' + str(ee).zfill(2))
-                    print(f' Wrote Initial Model: {ee}')
+                    if t < 200:
+                        loss_weights = [2.0, 1.0, 0.5, 0.25]
+                    elif t < 255:
+                        loss_weights = [1.0, 1.0, 0.5, 0.5]
+                        if t == 200:
+                            print(f'New loss weights: {loss_weights}')
+                            best_loss = 1.0e08
+                            best_loss_index = 199
+                    elif t < 330:
+                        loss_weights = [1.0, 1.0, 1.0, 1.0]
+                        if t == 255:
+                            print(f'New loss weights: {loss_weights}')
+                            best_loss = 1.0e08
+                            best_loss_index = 254
+                    elif t < 470:
+                        loss_weights = [1.0, 1.0, 2.0, 2.0]
+                        if t == 330:
+                            print(f'New loss weights: {loss_weights}')
+                            best_loss = 1.0e08
+                            best_loss_index = 329
+                    else:
+                        loss_weights = [1.0, 1.0, 0.5, 0.5]
+                        if t == 470:
+                            print(f'New loss weights: {loss_weights}')
+                            best_loss = 1.0e08
+                            best_loss_index = 469
                 else:
-                    torch.save({
-                    'epoch': t,
-                    'model_state_dict': model.state_dict(),
-                    'optimizer_state_dict': optimizer.state_dict(),
-                    'loss': loss,
-                    }, filename_full_model + str(t).zfill(3))
-                    print(f' Wrote Model: epoch = {t}')
-                    if loss[0] < best_loss:
-                        print(f"New best loss. Number of elapsed epochs = {t - best_loss_index}")
-                        best_loss = loss[0]
-                        best_loss_index = t
+                    if t < 200:
+                        loss_weights = [2.0, 1.0]
+                    elif t < 255:
+                        loss_weights = [1.0, 1.0]
+                        if t == 200:
+                            print(f'New loss weights: {loss_weights}')
+                            best_loss = 1.0e08
+                            best_loss_index = 199
+                    elif t < 330:
+                        loss_weights = [1.0, 2.0]
+                        if t == 255:
+                            print(f'New loss weights: {loss_weights}')
+                            best_loss = 1.0e08
+                            best_loss_index = 254
+                    elif t < 470:
+                        loss_weights = [2.0, 1.0]
+                        if t == 330:
+                            print(f'New loss weights: {loss_weights}')
+                            best_loss = 1.0e08
+                            best_loss_index = 329
+                    else:
+                        loss_weights = [1.0, 1.0]
+                        if t == 470:
+                            print(f'New loss weights: {loss_weights}')
+                            best_loss = 1.0e08
+                            best_loss_index = 469
+                dropout_index = next(i for i, x in enumerate(dropout_epochs) if t <= x) - 1
+                if dropout_index != last_dropout_index:
+                    last_dropout_index = dropout_index
+                    dropout_p = dropout_schedule[dropout_index]
+                    model.reset_dropout(dropout_p)
+                print(f"Epoch {t}\n-------------------------------")
+                print(f"Dropout: {dropout_p}")
 
-        print("Done!")
+                if True:
+
+
+                    #with profile(
+                    #    activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+                    #    with_stack=True, with_modules=True,
+                    #) as prof:
+                    #start.record() loss_flux_full_wrapper
+                    train_loop(train_dataloader, model, optimizer, 
+                            loss_henry_wrapper_2, loss_weights,
+                            device)
+                    
+                    if False:
+                        print(f"Total Train time= {t_train}")
+                        print(f"Full time forward total = {t_total}")
+                        print(f"Full time loss = {t_loss}")    
+                        print(f"Full time grad = {t_grad}")  
+                        print(f"Full time backward = {t_backward}")  
+                        print(f"Full time extinction = {t_extinction}")
+                        print(f"Full time scattering = {t_scattering_v2_tau}")
+                        print(f"Time for scattering = {t_direct_scattering}")
+                        print(f"Time for split = {t_direct_split}")
+
+                    loss = test_loop(validation_dataloader, model, loss_functions, loss_names, loss_weights, device)
+
+                    if is_initial_condition:
+                        if loss[0] < best_initial_loss:
+                            best_initial_loss = loss[0]
+                            best_initial_index = ee
+                            print(f"Improved initial model = {ee}")
+
+                    #if use_cuda: 
+                        #torch.cuda.synchronize()
+                    #end.record()
+
+                    #print(f"\n Elapsed time in seconds: {start.elapsed_time(end) / 1000.0}\n")
+
+                    #print(prof.key_averages(group_by_stack_n=6).table(sort_by='self_cpu_time_total', row_limit=15))
+                if t % checkpoint_period == 0 or (loss[0] < best_loss and t > windup_best_loss) or (t - best_loss_index > max_epochs_threshold):
+                    if is_initial_condition:
+                        if ee == number_of_tries - 1:
+                            is_initial_condition = False
+                            is_initial_run = True
+                        torch.save({
+                        'epoch': t,
+                        'model_state_dict': model.state_dict(),
+                        'optimizer_state_dict': optimizer.state_dict(),
+                        'loss': loss,
+                        }, filename_full_model + 'i' + str(ee).zfill(2))
+                        print(f' Wrote Initial Model: {ee}')
+                    else:
+                        torch.save({
+                        'epoch': t,
+                        'model_state_dict': model.state_dict(),
+                        'optimizer_state_dict': optimizer.state_dict(),
+                        'loss': loss,
+                        }, filename_full_model + str(t).zfill(3))
+                        print(f' Wrote Model: epoch = {t}')
+
+                if loss[0] < best_loss and not is_initial_condition:
+                    print(f"New best loss. Number of elapsed epochs = {t - best_loss_index}")
+                    if t - best_loss_index > current_max_epochs:
+                        current_max_epochs = t - best_loss_index
+                    print(f"Max elapsed = {current_max_epochs}")
+
+                    best_loss = loss[0]
+                    best_loss_index = t
+
+                if t - best_loss_index > max_epochs_threshold and t > windup_best_loss:
+                    current_max_epochs = t - best_loss_index
+                    print(f"Max elapsed = {current_max_epochs}")
+                    print(f"Reached max_epochs_threshold = {max_epochs_threshold}")
+                    break
+
+            print("Done!")
 
 
 
@@ -1815,6 +1935,15 @@ def test_full_dataloader():
 
     is_use_internals = True
 
+    is_mcica = False #True
+
+    if is_mcica:
+        version_name = "v1.v2."
+    else:
+        #version_name = "v1.v1."
+        version_name = "v1.v4."
+
+    loss_weights = [1.0, 1.0]
     if is_use_internals:
         model = FullNetInternals(n_channel,n_constituent,dropout_p=0,device=device)
     else:
@@ -1837,8 +1966,6 @@ def test_full_dataloader():
 
     model = model.to(device=device)
 
-    version_name = "v1.v1."
-
     filename_full_model = datadir + f"/Torch.SW.{version_name}" # 
 
     years = ("2009", "2015", "2020")
@@ -1848,7 +1975,10 @@ def test_full_dataloader():
     for year in years:
         test_input_dir = f"/data-T1/hws/CAMS/processed_data/testing/{year}/"
         months = [str(m).zfill(2) for m in range(1,13)]
-        test_input_files = [f'{test_input_dir}nn_input_sw-{mode}-{year}-{month}.nc' for month in months]
+        if is_mcica:
+            test_input_files = [f'{test_input_dir}nn_input_sw_mcica-{mode}-{year}-{month}.nc' for month in months]
+        else:
+            test_input_files = [f'{test_input_dir}nn_input_sw-{mode}-{year}-{month}.nc' for month in months]
         #test_input_files = ["/data-T1/hws/tmp/RADSCHEME_data_g224_CAMS_2015_true_solar_angles.2.nc"]
 
 
@@ -1859,11 +1989,11 @@ def test_full_dataloader():
                                                             num_workers=1)
 
 
-        loss_functions = (loss_henry_wrapper, loss_full_flux_wrapper, loss_direct_flux_wrapper, loss_diffuse_flux_wrapper, loss_full_heating_rate_wrapper, loss_direct_heating_rate_wrapper, loss_diffuse_heating_rate_wrapper)
+        loss_functions = (loss_henry_wrapper_2, loss_full_flux_wrapper, loss_direct_flux_wrapper, loss_diffuse_flux_wrapper, loss_full_heating_rate_wrapper, loss_direct_heating_rate_wrapper, loss_diffuse_heating_rate_wrapper)
         loss_names = ("Loss", "Full Flux Loss", "Direct Flux Loss","Diffuse Flux Loss","Full Heating Rate Loss","Direct Heating Rate Loss", "Diffuse Heating Rate Loss")
 
         print(f"Testing error, Year = {year}")
-        for t in range(504, 509,5):
+        for t in range(618, 623, 5):
 
             checkpoint = torch.load(filename_full_model + str(t).zfill(3), map_location=torch.device(device))
             print(f"Loaded Model: epoch = {t}")
@@ -1873,10 +2003,10 @@ def test_full_dataloader():
             #print(f"Spectral decomposition weights = {model.spectral_net.weight}", flush=True)
 
             if is_use_internals:
-                loss, internal_data = test_loop_internals (test_dataloader, model, loss_functions, loss_names, device)
+                loss, internal_data = test_loop_internals (test_dataloader, model, loss_functions, loss_names, loss_weights, device)
                 write_internal_data(internal_data, output_file_name=test_input_dir + f"internal_output.sc_{version_name}_{t}.{year}.nc")
             else:
-                loss = test_loop (test_dataloader, model, loss_functions, loss_names, device)
+                loss = test_loop (test_dataloader, model, loss_functions, loss_names, loss_weights, device)
     
 
 if __name__ == "__main__":

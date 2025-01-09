@@ -475,10 +475,14 @@ def wrangle_ecrad_input_data(mode,month,year, base_directory):
     # organize for processing
 
 # changing rel and rei to match RTE-RRTMGP
-def transform_ecrad_input_data(mode,month,year, base_directory, is_just_o2=True):
+def transform_ecrad_input_data(mode,month,year, base_directory, is_just_o2=True, is_mcica=True):
 
     d = base_directory + f'{mode}/{year}/'  
-    file_name_ecrad = d + f'{month}/lw_input-{mode}-{year}-{month}'
+
+    if is_mcica:
+        file_name_ecrad = d + f'{month}/lw_input_mcica-{mode}-{year}-{month}'
+    else:
+        file_name_ecrad = d + f'{month}/lw_input-{mode}-{year}-{month}'
 
     cmd = f'cp {file_name_ecrad}.nc {file_name_ecrad}.tmp.nc'
     os.system(cmd)
@@ -716,7 +720,7 @@ def wrangle_lw_nn_input_data(mode,month,year, base_directory):
 
 
    
-def wrangle_sw_nn_input_data(mode,month,year, base_directory):
+def wrangle_sw_nn_input_data(mode,month,year, base_directory, is_mcica=False):
     # Using values from rrtm_prepare_gases.F90
     g = 9.80665 #
     m_co2 = 44.011 #
@@ -729,9 +733,14 @@ def wrangle_sw_nn_input_data(mode,month,year, base_directory):
 
     d = base_directory + f'{mode}/{year}/'  
     file_name_ecrad_input = d + f'{month}/lw_input-{mode}-{year}-{month}.nc'
-    file_name_flux_input = d + f'Flux_lw-{mode}-{year}-{month}.nc'
     file_name_old_input = d + f'Flux_sw-{year}-{month}.2.nc'
-    file_name_nn_input = d + f'nn_input_sw-{mode}-{year}-{month}.nc'
+
+    if is_mcica:
+        file_name_flux_input = d + f'Flux_lw_mcica-{mode}-{year}-{month}.nc'
+        file_name_nn_input = d + f'nn_input_sw_mcica-{mode}-{year}-{month}.nc'
+    else:
+        file_name_flux_input = d + f'Flux_lw-{mode}-{year}-{month}.nc'
+        file_name_nn_input = d + f'nn_input_sw-{mode}-{year}-{month}.nc'
 
     dt_ecrad = Dataset(file_name_ecrad_input,"r")
     dt_flux = Dataset(file_name_flux_input,"r")
@@ -917,6 +926,60 @@ def wrangle_sw_nn_input_data(mode,month,year, base_directory):
     dt_flux.close()
     dt_old.close()
 
+
+def wrangle_sw_ukkonen_input_data(mode,month,year, base_directory):
+    # Use values for gas, pressure, temp inputs from original file
+
+    d = base_directory + f'{mode}/{year}/'  
+
+    file_name_flux_input = d + f'Flux_lw-{mode}-{year}-{month}.nc'
+
+    file_name_old_input = d + f'Flux_sw-{year}-{month}.2.nc'
+    file_name_ukkonen_input = d + f'Flux_Ukkonen-{year}-{month}.nc'
+
+    cmd = f'cp {file_name_old_input} {file_name_ukkonen_input}'
+    os.system(cmd)
+
+    o1 = d + "tmp1.nc"
+
+    cmd = f'ncks -x -v rsu,rsd,rsd_dir {file_name_ukkonen_input} {o1}'
+    os.system(cmd)
+
+    cmd = f'mv -f {o1} {file_name_ukkonen_input}'
+    os.system(cmd)
+
+    if True:
+        dt_flux = Dataset(file_name_flux_input,"r")
+        dt_nn = Dataset(file_name_ukkonen_input,"a")
+
+        pres_level = dt_nn.variables["pres_level"][:,:,:].data
+        shape = pres_level.shape
+
+        rsu = dt_flux.variables['flux_up_sw'][:,:].data
+        rsu = rsu.reshape((shape[0],shape[1],shape[2]))
+
+        var_rsu = dt_nn.createVariable("rsu","f4",("expt","site","level"))
+        var_rsu.setncattr("long_name","upwelling shortwave flux")
+        var_rsu[:]= rsu[:]
+
+        rsd = dt_flux.variables['flux_dn_sw'][:,:].data
+        rsd = rsd.reshape((shape[0],shape[1],shape[2]))
+
+        var_rsd = dt_nn.createVariable("rsd","f4",("expt","site","level"))
+        var_rsd.setncattr("long_name","downwelling shortwave flux")
+        var_rsd[:]= rsd[:]
+
+        rsd_dir = dt_flux.variables['flux_dn_direct_sw'][:,:].data
+        rsd_dir = rsd_dir.reshape((shape[0],shape[1],shape[2]))
+
+        var_rsd_dir = dt_nn.createVariable("rsd_dir","f4",("expt","site","level"))
+        var_rsd_dir.setncattr("long_name","downwelling direct shortwave flux")
+        var_rsd_dir[:]= rsd_dir[:]
+
+        dt_nn.close()
+        dt_flux.close()
+
+
 def examine_nn_input_data(mode,month,year, base_directory):
     d = base_directory + f'{mode}/{year}/'  
     file_name_nn_input = d + f'nn_input-{mode}-{year}-{month}.nc'
@@ -932,33 +995,30 @@ def examine_nn_input_data(mode,month,year, base_directory):
     print(f"mean = {mean}")
     print(f"max = {max}")
 
-def compute_ecrad_output_data(mode,month,year, base_directory, is_hws_version, is_just_o2=False):
+def compute_ecrad_output_data(mode,month,year, base_directory, is_mcica=False, is_tmp=False, is_tripleclouds=False):
     d = base_directory + f'{mode}/{year}/'  
     # .tmp.nc contains the updated liquid and ice radii
-    file_name_input = d + f'{month}/lw_input-{mode}-{year}-{month}.tmp.nc'
-    if is_hws_version:
-        file_name_output = d + f'Flux_lw-{mode}-{year}-{month}.hws.nc'
-        ex = '/home/hws/ecrad/bin/ecrad_hws /home/hws/ecrad/practical/config.2.nam'
-    elif is_just_o2:
-        file_name_output = d + f'Flux_lw-{mode}-{year}-{month}.is_just_o2.nc'
-        ex = '/home/hws/ecrad/bin/ecrad_working /home/hws/ecrad/practical/config.2.nam'
-    else:
-        # .3 is with CO
-        # .4 is without CO
-        file_name_output = d + f'Flux_lw-{mode}-{year}-{month}.working.4.nc'
-        ex = '/home/hws/ecrad/bin/ecrad_working /home/hws/ecrad/practical/config.3.nam'
-    cmd = f'{ex} {file_name_input} {file_name_output}'
-    print (cmd)
-    os.system(cmd)
+    if is_mcica:
+        if is_tmp:
+            file_name_input = d + f'{month}/lw_input_mcica-{mode}-{year}-{month}.tmp.nc'
+            file_name_output = d + f'Flux_lw_mcica-{mode}-{year}-{month}.tmp.nc'
+        else:
+            file_name_input = d + f'{month}/lw_input_mcica-{mode}-{year}-{month}.nc'
+            if is_tripleclouds:
+                file_name_output = d + f'Flux_lw_tripleclouds-{mode}-{year}-{month}.nc'
+                ex = '/home/hws/ecrad/bin/ecrad_working /home/hws/ecrad/practical/config.4.nam'
+            else:
+                file_name_output = d + f'Flux_lw_mcica-{mode}-{year}-{month}.nc'
+                ex = '/home/hws/ecrad/bin/ecrad_working /home/hws/ecrad/practical/config.3.nam'
 
-# just computes normal output data
-def compute_ecrad_output_data_2(mode,month,year, base_directory):
-    d = base_directory + f'{mode}/{year}/'  
-    # .tmp.nc contains the updated o2 and n2
-    file_name_input = d + f'{month}/lw_input-{mode}-{year}-{month}.tmp.nc'
-    if True:
-        file_name_output = d + f'Flux_lw-{mode}-{year}-{month}.original.nc'
-        ex = '/home/hws/ecrad/bin/ecrad_working /home/hws/ecrad/practical/config.2.nam'
+    else:
+        if is_tmp:
+            file_name_input = d + f'{month}/lw_input-{mode}-{year}-{month}.tmp.nc'
+            file_name_output = d + f'Flux_lw-{mode}-{year}-{month}.tmp.nc'
+        else:
+            file_name_input = d + f'{month}/lw_input-{mode}-{year}-{month}.nc'
+            file_name_output = d + f'Flux_lw-{mode}-{year}-{month}.nc'
+        ex = '/home/hws/ecrad/bin/ecrad_hws /home/hws/ecrad/practical/config.2.nam'
 
     cmd = f'{ex} {file_name_input} {file_name_output}'
     print (cmd)
@@ -1065,14 +1125,14 @@ def compare_rte_rrtmgp_with_new_radiation(mode,month,year, base_directory):
     dt_rr.close()
     dt_new.close()
 
-def compare_ecrad_with_new_radiation(mode,month,year, base_directory, is_just_o2=False):
+def compare_ecrad_with_new_radiation(mode,month,year, base_directory, is_tmp=False):
     d = base_directory + f'{mode}/{year}/'  
-    if is_just_o2:
-        file_name_new = d + f'Flux_lw-{mode}-{year}-{month}.is_just_o2.nc'
-        file_name_ecrad = d + f'Flux_lw-{mode}-{year}-{month}.nc'
+    if is_tmp:
+        file_name_new = d + f'Flux_lw_tripleclouds-{mode}-{year}-{month}.nc'
+        file_name_ecrad = d + f'Flux_lw_mcica-{mode}-{year}-{month}.nc'
     else:
-        file_name_new = d + f'Flux_lw-{mode}-{year}-{month}.nc'
-        file_name_ecrad = d + f'Flux_lw-{mode}-{year}-{month}.original.nc'
+        file_name_new = d + f'Flux_lw_mcica-{mode}-{year}-{month}.nc'
+        file_name_ecrad = d + f'Flux_lw-{mode}-{year}-{month}.nc'
 
     dt_ecrad = Dataset(file_name_ecrad, "r")
     dt_new = Dataset(file_name_new, "r")
@@ -1112,11 +1172,145 @@ def compare_ecrad_with_new_radiation(mode,month,year, base_directory, is_just_o2
     dt_new.close()
     dt_ecrad.close()
 
+def saturation_vapor_pressure(t):
+    # Clausius-Clapeyron equation for water only
+    # https://geo.libretexts.org/Bookshelves/Meteorology_and_Climate_Science/Practical_Meteorology_(Stull)/04%3A_Water_Vapor/4.00%3A_Vapor_Pressure_at_Saturation
+    rd = 2.8705e2 # gas constant of dry air [J/kg/K]
+    rv = 4.6150e2 # gas constant water [J/kg/K]
+    lv = 2.5e6 # Latent haet of vaporization [J / Kg]
+    ld = 2.83e6 # Latent heat of deposition [J / Kg]
+    e0 = 611.3 #[Pa]
+    t0 = 273.15 # [K]
+    return e0 * np.exp((lv / rv) * ((1.0/t0) - (1.0/t)))
+    #return e0 * np.exp((ld / rv) * ((1.0/t0) - (1.0/t)))    
+
+def saturation_vapor_pressure_2(T):
+    """
+    Created on Mon Sep 13 15:01:22 2021
+
+    @author: peter
+    """
+    ''' get sateration pressure (units [Pa]) for a given air temperature (units [K])'''
+    TK = 273.15
+    e1 = 101325.0
+    logTTK = np.log10(T/TK)
+    esat =  e1*10**(10.79586*(1-TK/T)-5.02808*logTTK+ 1.50474*1e-4*(1.-10**(-8.29692*(T/TK-1)))+ 0.42873*1e-3*(10**(4.76955*(1-TK/T))-1)-2.2195983) 
+    return esat
+
+
+def relative_humidity(w, es, p):
+
+    # https://vortex.plymouth.edu/~stmiller/stmiller_content/Publications/AtmosRH_Equations_Rev.pdf eq 3
+    m_dry = 28.9644 # more signficant digits
+    m_h2o =  18.01528
+    e = w * p / ((m_h2o / m_dry) + w) #correct
+    #e = w * rv * p / (rd + w * rv)
+    rh = e / es
+    return rh
+
+def saturation_specific_humidity(saturation_vapor_pressure,p):
+    # Returns in kg / kg
+
+    # specific humidity: q = mv / (mv + md) 
+    # mass mixing ratio: w = mv / md
+    # https://vortex.plymouth.edu/~stmiller/stmiller_content/Publications/AtmosRH_Equations_Rev.pdf eq 4
+    # qs = es * ratio_of_molar_masses / (P - (1 - ratio_of_molar_mass)* es)
+    m_dry = 28.9644 # more signficant digits
+    m_h2o =  18.01528
+    ratio_of_molar_masses = m_h2o / m_dry  # Approx 0.622
+    denom = p - (1.0 - ratio_of_molar_masses) * saturation_vapor_pressure
+    denom[denom < 0.01] = 0.01  # Avoiding negative numbers. 
+                                # For the purpose of cloud_fraction
+                                # this should be OK
+    qs = ratio_of_molar_masses * saturation_vapor_pressure / denom
+    return qs
+
+def gfs_cloud_fraction(RH, saturation_specific_humidity,cloud_condensate):
+    # https://dtcenter.ucar.edu/gmtb/users/ccpp/docs/sci_doc/group__module__radiation__clouds.html
+    if False:
+        print(f"min qs = {np.min(saturation_specific_humidity)}")
+        print(f"min rh = {np.min(RH)}")
+        print(f"max rh = {np.max(RH)}")
+    ql = cloud_condensate * 100.0
+    arg = (1.0 - RH) * saturation_specific_humidity
+    # In case relative humidity is greater than 1.0
+    arg[arg < 1.0e-06] = 1.0e-06
+
+    denom = arg ** 0.49
+    C = RH ** 0.25 * (1.0 - np.exp(-ql / denom))
+    C[C>1.0] = 1.0
+    return C
+
+def replace_cloud_fraction(mode,month,year, base_directory):
+    if False:
+        # Comparing two methods of computing saturation vapor pressure
+        freezing_kelvin = 273.1
+        t = np.arange(-40, 60, 10)
+        es1 = saturation_vapor_pressure(t + freezing_kelvin)
+        es2 = saturation_vapor_pressure_2(t + freezing_kelvin) # more accurate
+        for i,T in enumerate(t):
+            print(f'temp = {T}, es1 = {es1[i]}, es2 = {es2[i]}, diff = {es1[i] - es2[i]} diff fraction = {(es1[i] - es2[i]) / es2[i]}')
+    if True:
+        file_name_input = f'{base_directory}{mode}/{year}/{month}/lw_input-{mode}-{year}-{month}.nc'
+        file_name_new = f'{base_directory}{mode}/{year}/{month}/lw_input_mcica-{mode}-{year}-{month}.nc'
+
+        cmd = f"cp -f {file_name_input} {file_name_new}"
+        os.system(cmd)
+
+        dt_input = Dataset(file_name_new, "a")
+        temp_layer = dt_input["temp_layer"][:,:,:].data
+        shape = temp_layer.shape
+        temp_layer = temp_layer.reshape((shape[0]*shape[1],shape[2]))
+
+        pres_layer = dt_input["pres_layer"][:,:,:].data
+        shape = pres_layer.shape
+        pres_layer = pres_layer.reshape((shape[0]*shape[1],shape[2])) 
+
+        clwc = dt_input['q_liquid'][:,:].data
+        ciwc = dt_input['q_ice'][:,:].data
+
+        es = saturation_vapor_pressure_2(temp_layer)
+
+        # mass mixing ratio
+        w = dt_input['q'][:,:].data
+
+        #print(f"min mixing ratio = {np.min(w)}")
+        w[w<0] = 0.0
+
+        rh = relative_humidity(w, es, pres_layer)
+        qs = saturation_specific_humidity(es,pres_layer)
+        C = gfs_cloud_fraction(rh, qs, clwc + ciwc)
+        dt_input['cloud_fraction'][:] = C[:]
+
+        dt_input.close()
+        if False:
+            shape = C.shape
+            C = C.reshape((shape[0]*shape[1],))
+            n = shape[0]*shape[1]
+            rank = np.argsort(C)
+            sorted_C = C[rank]
+
+            print(f'min C = {np.min(C)}')
+            print(f'mean C = {np.mean(C)}')
+            print(f'max C = {np.max(C)}')
+
+            print(f"C[0] = {sorted_C[0]}")
+            print(f'C[10%] = {sorted_C[n // 10]}')
+            print(f'C[20%] = {sorted_C[n * 2 // 10]}')
+            print(f'C[40%] = {sorted_C[n * 4 // 10]}')
+            print(f'C[60%] = {sorted_C[n * 6 // 10]}')
+            print(f'C[90%] = {sorted_C[n * 9 // 10]}')
+            print(f'C[95%] = {sorted_C[n * 95 // 100]}')
+            print(f'C[98%] = {sorted_C[n * 98 // 100]}')
+            print(f'C[99%] = {sorted_C[n * 99 // 100]}')
+            print(f'C[99.9%] = {sorted_C[n * 999 // 1000]}')
+            print(f'C[100%] = {sorted_C[-1]}')
 
 if __name__ == "__main__":
 
 
     base_directory = f'/data-T1/hws/CAMS/processed_data/'
+
 
     if False:
         mode = 'training'
@@ -1130,14 +1324,10 @@ if __name__ == "__main__":
 
     if True:
         months = [str(m).zfill(2) for m in range(1,13)]
-
-
-
         combo = [('training','2008'),('cross_validation','2008'),('testing','2009'),('testing','2015'),('testing','2020'),]
 
-        #combo = [('testing','2009'),]
-
-        #months = [str(m).zfill(2) for m in range(4,5)]
+        combo = [('testing','2009'),]
+        months = [str(m).zfill(2) for m in range(6,7)]
 
         for c in combo:
             mode = c[0]
@@ -1146,20 +1336,26 @@ if __name__ == "__main__":
             for month in months[:]:
                 print(f'{year} {month}')
                 #wrangle_ecrad_input_data(mode, month, year, base_directory)
-                #transform_rte_rrtmgp_input_data(mode, month, year, base_directory)
-                #transform_ecrad_input_data(mode, month, year, base_directory,is_just_o2=True)
-                #compute_ecrad_output_data(mode, month, year, base_directory, is_hws_version=False, is_just_o2=False)
-                #compute_ecrad_output_data_2(mode, month, year, base_directory)
-                #wrapper_raw_sources (mode,month,year, base_directory)
+                #transform_ecrad_input_data(mode, month, year, base_directory,is_just_o2=True, is_mcica=True)
+                #compute_ecrad_output_data(mode, month, year, base_directory, is_mcica=True, is_tmp=False, is_tripleclouds=True)
                 #wrangle_lw_nn_input_data(mode, month, year, base_directory)
+                #wrangle_sw_nn_input_data(mode, month, year, base_directory, is_mcica=True)
+
+                #transform_rte_rrtmgp_input_data(mode, month, year, base_directory)
+
+
+
+                #wrapper_raw_sources (mode,month,year, base_directory)
+
                 #compare_ecrad_with_rte_rrtmgp(mode,month,year, base_directory)
-                #compare_ecrad_with_new_radiation(mode,month,year, base_directory, is_just_o2=False)
+                compare_ecrad_with_new_radiation(mode,month,year, base_directory, is_tmp=True)
 
                 #compare_rte_rrtmgp_with_new_radiation(mode,month,year, base_directory)
                      
-                wrangle_sw_nn_input_data(mode, month, year, base_directory)
 
 
+                #wrangle_sw_ukkonen_input_data(mode, month, year, base_directory)
+                #replace_cloud_fraction(mode, month, year, base_directory)
     if False:
         examine_planck_2()
 

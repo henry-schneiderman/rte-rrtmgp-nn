@@ -116,8 +116,8 @@ scale_inputs    = True
 use_gpu = True
 
 
-model_name = 'MODEL.RNN_3_Dataset.'
-is_train = False
+model_name = 'MODEL.RNN_1_ecRad_Dataset.'
+is_train = False #True
 
 weight_prof = ml_loaddata_rnn.get_weight_profile (fpath)
 
@@ -204,7 +204,7 @@ if True:
     patience    = 400 #25
     lossfunc    = losses.mean_squared_error
     batch_size  = 1024
-    batch_size  = 2048
+    #batch_size  = 2048
 
     nneur = 16  
     nlay = 60
@@ -279,14 +279,14 @@ if True:
                                  mode='min',restore_best_weights=True)]
     
     epoch_period = 25
-    n_epochs = 0  
+    n_epochs = 925 #0  
     #steps_per_epoch = 924
 
     train_input_dir = "/data-T1/hws/CAMS/processed_data/training/2008/"
     cross_input_dir = "/data-T1/hws/CAMS/processed_data/cross_validation/2008/"
     months = [str(m).zfill(2) for m in range(1,13)]
-    train_input_files = [f'{train_input_dir}Flux_sw-2008-{month}.nc' for month in months]
-    cross_input_files = [f'{cross_input_dir}Flux_sw-2008-{month}.nc' for month in months]
+    train_input_files = [f'{train_input_dir}Flux_Ukkonen-2008-{month}.nc' for month in months]
+    cross_input_files = [f'{cross_input_dir}Flux_Ukkonen-2008-{month}.nc' for month in months]
 
     generator_training = ml_data_generator.InputSequence(train_input_files, batch_size)
     #generator_training = generator_training.batch(batch_size)
@@ -328,15 +328,16 @@ if True:
         model = tf.keras.models.load_model(datadir + model_name + str(n_epochs))
 
     else:
-        year = '2009'
-        testing_input_dir = f"/data-T1/hws/CAMS/processed_data/testing/{year}/"
-        testing_input_files = [f'{testing_input_dir}Flux_sw-{year}-{month}.2.nc' for month in months]
-        n_epochs = 800
-        generator_testing = ml_data_generator.InputSequence(testing_input_files, batch_size)
-        while n_epochs < epochs:
-            n_epochs = n_epochs + epoch_period
-            print(f"n_epochs = {n_epochs}")
-            model = tf.keras.models.load_model(datadir + model_name + str(n_epochs))
-            model.evaluate(x=generator_testing)
+        for year in ['2015',]:
+            print(f'Year = {year}')
+            testing_input_dir = f"/data-T1/hws/CAMS/processed_data/testing/{year}/"
+            testing_input_files = [f'{testing_input_dir}Flux_Ukkonen-{year}-{month}.nc' for month in months]
+            n_epochs = 925 #800
+            generator_testing = ml_data_generator.InputSequence(testing_input_files, batch_size)
+            while n_epochs < 2025: #epochs:
+                n_epochs = n_epochs + epoch_period
+                print(f"n_epochs = {n_epochs}")
+                model = tf.keras.models.load_model(datadir + model_name + str(n_epochs))
+                model.evaluate(x=generator_testing)
             
     

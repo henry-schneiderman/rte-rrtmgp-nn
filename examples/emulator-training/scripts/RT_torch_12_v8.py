@@ -2656,7 +2656,7 @@ def test_full_dataloader():
                         )
 
         print(f"Testing error, Year = {year}")
-        for t in range(560,565,5):
+        for t in range(650,655,5):
 
             checkpoint = torch.load(filename_full_model + str(t), map_location=torch.device(device))
             print(f"Loaded Model: epoch = {t}")
@@ -2682,5 +2682,5 @@ if __name__ == "__main__":
     #global t_direct_split = 0.0
     #t_scattering_v2_tau = 0.0
     
-    train_full_dataloader()
-    #test_full_dataloader()
+    #train_full_dataloader()
+    test_full_dataloader()

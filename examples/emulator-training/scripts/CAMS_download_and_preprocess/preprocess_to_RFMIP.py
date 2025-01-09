@@ -286,6 +286,8 @@ def add_is_valid_zenith_angle(input_file_name, output_file_name):
     dt = xr.open_dataset(input_file_name)
     mu0 = dt["mu0"].data
     shape = mu0.shape
+    # Initially set to true. 
+    # Changed to correct value during fortran processing
     is_valid_zenith_angle = xr.DataArray(np.ones((shape)), dims=("expt","time"), name="is_valid_zenith_angle")
     is_valid_zenith_angle.attrs["long_name"] = "True if zenith angle is less than 90 degrees"
     dt["is_valid_zenith_angle"] = is_valid_zenith_angle

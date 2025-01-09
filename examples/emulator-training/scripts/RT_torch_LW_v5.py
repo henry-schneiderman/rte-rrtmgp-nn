@@ -4,6 +4,7 @@
 # Same as RT_torch_LW.v2.py except computes sources differently
 # using radiation_two_streams.F90 lines 310+
 # Same as RT_torch_LW.v3.py except using adding-doubling algorithm
+# Same as RT_torch_LW.v4.py except using weighting schedule
 # from radiation_adding_ica_lw.F90!
 
 import numpy as np
@@ -834,6 +835,76 @@ class FullNet(nn.Module):
 
         return flux
 
+
+class FullNetInternals(nn.Module):
+    """ Computes full radiative transfer (direct and diffuse radiation)
+    for an atmospheric column """
+
+    def __init__(self, n_channel, n_constituent, n_band, dropout_p, device):
+        super(FullNetInternals, self).__init__()
+        self.device = device
+        self.n_channel = n_channel
+
+        # Learns optical depth for each layer for each constituent for 
+        # each channel
+        self.extinction_net = LayerDistributed(Extinction(n_channel,dropout_p,
+                                                          device))
+        
+        self.scattering_net = LayerDistributed(Scattering_v2_tau_efficient(n_channel,
+                                                    n_constituent,
+                                                    dropout_p,
+                                                    device))
+
+        self.multireflection_net = MultiReflection(n_channel,n_band,device)
+
+
+    def reset_dropout(self,dropout_p):
+        self.extinction_net.reset_dropout(dropout_p)
+        self.scattering_net.reset_dropout(dropout_p)
+
+    def forward(self, x):
+
+        x_layers, x_sources, x_emissivity,  _, _ = x
+
+        #print(f"x_layers.shape = {x_layers.shape}")
+        #9 constituents: lwc, ciw, h2o, o3, co2,  o2, n2o, ch4, co,  -no2?, 
+        (temperature_pressure, 
+        constituents) = (x_layers[:,:,0:2], 
+                        x_layers[:,:,2:11])
+    
+        tau = self.extinction_net((temperature_pressure, 
+                                constituents))
+
+        layers = self.scattering_net((tau,))
+
+        t_full, e_split_full, tau_full, t_clear, e_split_clear, tau_clear = layers
+
+        s_full_channels = (1.0 - t_full) * (e_split_full[:,:,:,0] + e_split_full[:,:,:,1])
+
+        s_clear_channels = (1.0 - t_clear) * (e_split_clear[:,:,:,0] + e_split_clear[:,:,:,1])
+
+        flux_full = self.multireflection_net([x_sources, [t_full, e_split_full, tau_full], x_emissivity])
+
+        flux_clear = self.multireflection_net([x_sources, [t_clear, e_split_clear, tau_clear], x_emissivity])
+
+        flux_down_full, flux_up_full = flux_full
+        flux_down_clear, flux_up_clear = flux_clear
+
+        flux_down_full = torch.sum(flux_down_full,dim=2)
+        flux_up_full = torch.sum(flux_up_full,dim=2)
+
+        flux_down_clear = torch.sum(flux_down_clear,dim=2)
+        flux_up_clear = torch.sum(flux_up_clear,dim=2)
+
+        flux = (flux_down_full, flux_up_full, flux_down_clear, flux_up_clear)
+
+        internal_data = [x_layers[:,:,2], x_layers[:,:,3], x_layers[:,:,5], #mu_diffuse_original,
+         s_direct, s_diffuse, r_toa, x_surface[:,1],
+                         mu_direct, t_direct_total, t_diffuse_total, x_layers[:,:,4]]
+
+
+        return flux, internal_data
+
 def loss_energy(flux_down_true, flux_up_true, flux_down_pred, flux_up_pred):
     
     flux_absorbed_true = (flux_down_true[:,:-1] -
@@ -879,7 +950,7 @@ def loss_heating_rate(flux_down_true, flux_up_true, flux_down_pred, flux_up_pred
     return loss
 
 
-def loss_clear_heating_rate_wrapper(data, y_pred):
+def loss_clear_heating_rate_wrapper(data, y_pred, loss_weights):
     _, _, _, delta_pressure, y_true = data
 
     (_, _, flux_down_pred, flux_up_pred) = y_pred
@@ -890,7 +961,7 @@ def loss_clear_heating_rate_wrapper(data, y_pred):
     
     return hr_loss
 
-def loss_full_heating_rate_wrapper(data, y_pred):
+def loss_full_heating_rate_wrapper(data, y_pred, loss_weights):
     _, _, _, delta_pressure, y_true = data
 
     (flux_down_pred, flux_up_pred, _, _) = y_pred
@@ -900,7 +971,7 @@ def loss_full_heating_rate_wrapper(data, y_pred):
     
     return hr_loss
 
-def loss_energy_wrapper(data, y_pred):
+def loss_energy_wrapper(data, y_pred, loss_weights):
     _, _, _, delta_pressure, y_true = data
 
     (flux_down_pred, flux_up_pred, _, _) = y_pred
@@ -931,56 +1002,66 @@ def loss_avg_flux(flux_down_true, flux_up_true, flux_down_pred, flux_up_pred):
 
     return flux_loss
 
-def loss_full_flux_wrapper(data, y_pred):
+def loss_full_flux_wrapper(data, y_pred, loss_weights):
     _, _, _, _, y_true = data
     (flux_down_pred, flux_up_pred, _, _) = y_pred
     (flux_down_true, flux_up_true) = (y_true[:,:,0], y_true[:,:,1])
     loss = loss_flux(flux_down_true, flux_up_true, flux_down_pred, flux_up_pred)
     return loss
 
-def loss_avg_flux_wrapper(data, y_pred):
+def loss_avg_flux_wrapper(data, y_pred, loss_weights):
     _, _, _, _, y_true = data
     (flux_down_pred, flux_up_pred, _, _) = y_pred
     (flux_down_true, flux_up_true) = (y_true[:,:,0], y_true[:,:,1])
     loss = loss_avg_flux(flux_down_true, flux_up_true, flux_down_pred, flux_up_pred)
     return loss
 
-def loss_clear_flux_wrapper(data, y_pred):
+def loss_clear_flux_wrapper(data, y_pred, loss_weights):
     _, _, _, _, y_true = data
     (_, _, flux_down_pred, flux_up_pred) = y_pred
     (flux_down_true, flux_up_true) = (y_true[:,:,2], y_true[:,:,3])
     loss = loss_flux(flux_down_true, flux_up_true, flux_down_pred, flux_up_pred)
     return loss
 
-def loss_henry_wrapper(data, y_pred):
-    loss_full_flux = loss_full_flux_wrapper(data, y_pred)
-    loss_clear_flux = loss_clear_flux_wrapper(data, y_pred)
-    loss_full_heating_rate = loss_full_heating_rate_wrapper(data, y_pred)
-    loss_clear_heating_rate = loss_clear_heating_rate_wrapper(data, y_pred)
+def loss_henry_wrapper(data, y_pred, loss_weights):
+    loss_full_flux = loss_full_flux_wrapper(data, y_pred, loss_weights)
+    loss_clear_flux = loss_clear_flux_wrapper(data, y_pred, loss_weights)
+    loss_full_heating_rate = loss_full_heating_rate_wrapper(data, y_pred, loss_weights)
+    loss_clear_heating_rate = loss_clear_heating_rate_wrapper(data, y_pred, loss_weights)
 
-    w1 = 2.0
-    w2 = 1.0
-    w3 = 1.0
-    w4 = 0.5
+    #w1 = 2.0
+    #w2 = 1.0
+    #w3 = 1.0
+    #w4 = 0.5
 
-    loss = (1.0 / (w1 + w2 + w3 + w4)) * (w1 * loss_full_flux + w2 * loss_clear_flux + w3 * loss_full_heating_rate + w4 * loss_clear_heating_rate)
+    w1 = loss_weights[0]
+    w2 = loss_weights[1]
+    w3 = loss_weights[2]
+    w4 = loss_weights[3]
+
+    # Changed the order from V4
+    loss = (1.0 / (w1 + w2 + w3 + w4)) * (w1 * loss_clear_flux + w2 * loss_full_flux + w3 * loss_clear_heating_rate + w4 * loss_full_heating_rate)
 
     return loss
 def loss_henry_wrapper_2(data, y_pred):
-    loss_full_flux = loss_full_flux_wrapper(data, y_pred)
-    loss_clear_flux = loss_clear_flux_wrapper(data, y_pred)
+    loss_full_flux = loss_full_flux_wrapper(data, y_pred, loss_weights)
+    loss_clear_flux = loss_clear_flux_wrapper(data, y_pred, loss_weights)
 
+    #w1 = 2.0
+    #w2 = 1.0
+    #w3 = 1.0
+    #w4 = 0.5
 
-    w1 = 2.0
-    w2 = 1.0
-    w3 = 1.0
-    w4 = 0.5
+    w1 = loss_weights[0]
+    w2 = loss_weights[1]
+    w3 = loss_weights[2]
+    w4 = loss_weights[3]
 
     loss = (1.0 / (w1 + w2)) * (w1 * loss_full_flux + w2 * loss_clear_flux)
 
     return loss
 
-def train_loop(dataloader, model, optimizer, loss_function, device):
+def train_loop(dataloader, model, optimizer, loss_function, loss_weights, device):
     """ Generic training loop """
 
     torch.cuda.synchronize()
@@ -993,7 +1074,7 @@ def train_loop(dataloader, model, optimizer, loss_function, device):
         y_pred = model(data)
         torch.cuda.synchronize()
         t_0 = time.time()
-        loss = loss_function(data, y_pred)
+        loss = loss_function(data, y_pred, loss_weights)
         torch.cuda.synchronize()
         t_01 = time.time()
         global t_loss
@@ -1028,7 +1109,7 @@ def train_loop(dataloader, model, optimizer, loss_function, device):
     global t_train
     t_train += t_2 - t_1
 
-def test_loop(dataloader, model, loss_functions, loss_names, device):
+def test_loop(dataloader, model, loss_functions, loss_names, loss_weights, device):
     """ Generic testing / evaluation loop """
     model.eval()
     num_batches = len(dataloader)
@@ -1040,7 +1121,7 @@ def test_loop(dataloader, model, loss_functions, loss_names, device):
             data = [x.to(device) for x in data]
             y_pred = model(data)
             for i, loss_fn in enumerate(loss_functions):
-                loss[i] += loss_fn(data, y_pred).item()
+                loss[i] += loss_fn(data, y_pred, loss_weights).item()
 
     loss /= num_batches
 
@@ -1051,7 +1132,7 @@ def test_loop(dataloader, model, loss_functions, loss_names, device):
 
     return loss
 
-def test_loop_internals (dataloader, model, loss_functions, loss_names, device):
+def test_loop_internals (dataloader, model, loss_functions, loss_names, loss_weights, device):
     """ Generic testing / evaluation loop """
     model.eval()
     num_batches = len(dataloader)
@@ -1088,7 +1169,7 @@ def test_loop_internals (dataloader, model, loss_functions, loss_names, device):
             t_diffuse.append(internal_data[10])
             h2o.append(internal_data[11])
             for i, loss_fn in enumerate(loss_functions):
-                loss[i] += loss_fn(data, y_pred).item()
+                loss[i] += loss_fn(data, y_pred, loss_weights).item()
 
     loss /= num_batches
 
@@ -1158,7 +1239,7 @@ def train_full_dataloader():
     n_band = 16
     
 
-    filename_full_model = datadir + f"/Torch.LW.v11." # scattering_v2_efficient
+    filename_full_model = datadir + f"/Torch.LW.v12." # scattering_v2_efficient
 
     is_initial_condition = False
     if is_initial_condition:
@@ -1174,12 +1255,13 @@ def train_full_dataloader():
         
 
         if False:
+            # If several versions of the initial model are generated and the best is chosen
             #initial_model_n = 0   #v4
             initial_model_n = 0   #v6, v7
             t_start = 1
             filename_full_model_input = f'{filename_full_model}i' + str(initial_model_n).zfill(2)
         else:
-            t_start = 65 #0
+            t_start = 115
             filename_full_model_input = filename_full_model + str(t_start).zfill(3)
 
 
@@ -1202,7 +1284,7 @@ def train_full_dataloader():
         # Used for v11
         dropout_schedule = (0.0, 0.07, 0.15, 0.07, 0.0, 0.0) 
         # Used for v11
-        dropout_epochs =   (-1, 20, 23, 27, 35, epochs + 1)
+        dropout_epochs =   (-1, 40, 43, 49, 55, epochs + 1)
 
         # 400
         #dropout_epochs =   (-1, 200,   300, 350,  400, 450,  550, 650, 750, epochs + 1)
@@ -1290,6 +1372,21 @@ def train_full_dataloader():
         while t < epochs:
             t += 1
 
+            if t < 70:
+                loss_weights = [2.0, 1.0, 1.0, 0.5]
+            elif t <= 85:
+                loss_weights = [1.0, 1.0, 0.5, 0.5]
+            elif t <= 100:
+                loss_weights = [1.0, 1.0, 1.0, 1.0]
+            elif t <= 115:
+                loss_weights = [1.0, 1.0, 2.0, 2.0]
+            else:
+                loss_weights = [1.0, 1.0, 0.5, 0.5]
+
+            if t > 65 and t % 5 == 1:
+                print(f'Loss weights: {loss_weights}')
+
+
             dropout_index = next(i for i, x in enumerate(dropout_epochs) if t <= x) - 1
             if dropout_index != last_dropout_index:
                 last_dropout_index = dropout_index
@@ -1307,7 +1404,7 @@ def train_full_dataloader():
                 #) as prof:
                 #start.record() loss_flux_full_wrapper
                 train_loop(train_dataloader, model, optimizer, 
-                           loss_henry_wrapper, 
+                           loss_henry_wrapper, loss_weights,
                            device)
                 
                 if False:
@@ -1321,7 +1418,7 @@ def train_full_dataloader():
                     print(f"Time for scattering = {t_direct_scattering}")
                     print(f"Time for split = {t_direct_split}")
 
-                loss = test_loop(validation_dataloader, model, loss_functions, loss_names, device)
+                loss = test_loop(validation_dataloader, model, loss_functions, loss_names, loss_weights, device)
 
                 #if use_cuda: 
                     #torch.cuda.synchronize()
@@ -1411,9 +1508,23 @@ def write_internal_data(internal_data, output_file_name):
 
 def test_full_dataloader():
 
+    #print("Pytorch version:", torch.__version__)
+    #device = "cpu"
+    #print(f"Using {device} device")
+
     print("Pytorch version:", torch.__version__)
-    device = "cpu"
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using {device} device")
+
+    if torch.cuda.is_available():
+        print('__CUDNN VERSION:', torch.backends.cudnn.version())
+        print('__Number CUDA Devices:', torch.cuda.device_count())
+        print('__CUDA Device Name:',torch.cuda.get_device_name(0))
+        print('__CUDA Device Total Memory [GB]:',torch.cuda.get_device_properties(0).total_memory/1e9)
+        print(f'Device capability = {torch.cuda.get_device_capability()}')
+        use_cuda = True
+    else:
+        use_cuda = False
 
     datadir     = "/data-T1/hws/tmp/"
     batch_size = 1024
@@ -1421,6 +1532,7 @@ def test_full_dataloader():
     n_constituent = 9
     n_band = 16
     is_use_internals = False #True
+    loss_weights = [1.0, 1.0, 1.0, 1.0]
 
     if is_use_internals:
         model = FullNetInternals(n_channel,n_constituent,n_band,dropout_p=0,device=device)
@@ -1444,10 +1556,10 @@ def test_full_dataloader():
 
     model = model.to(device=device)
 
-    version_name = 'v11'
+    version_name = 'v12'
     filename_full_model = datadir + f"/Torch.LW.{version_name}." 
 
-    years = ("2009", "2015", "2020")
+    years = ("2020",  "2015","2009", )
     mode = "testing"
     #years = ("2020", )
 
@@ -1470,7 +1582,7 @@ def test_full_dataloader():
         loss_names = ("Loss", "Full Flux Loss", "Avg Flux Loss", "Avg Loss Energy","Clear Flux Loss","Full Heating Rate Loss","Clear Heating Rate Loss")
 
         print(f"Testing error, Year = {year}")
-        for t in range(40, 60,5):
+        for t in range(116, 142,2):
 
             checkpoint = torch.load(filename_full_model + str(t).zfill(3), map_location=torch.device(device))
             print(f"Loaded Model: epoch = {t}")
@@ -1480,10 +1592,10 @@ def test_full_dataloader():
             #print(f"Spectral decomposition weights = {model.spectral_net.weight}", flush=True)
 
             if is_use_internals:
-                loss, internal_data = test_loop_internals (test_dataloader, model, loss_functions, loss_names, device)
+                loss, internal_data = test_loop_internals (test_dataloader, model, loss_functions, loss_names, loss_weights, device)
                 write_internal_data(internal_data, output_file_name=test_input_dir + f"internal_output.sc_{version_name}_{t}.{year}.nc")
             else:
-                loss = test_loop (test_dataloader, model, loss_functions, loss_names, device)
+                loss = test_loop (test_dataloader, model, loss_functions, loss_names, loss_weights, device)
     
 
 if __name__ == "__main__":
