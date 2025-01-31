@@ -1203,6 +1203,43 @@ def loss_heating_rate_2(flux_down_true, flux_down_pred,
                                   dim=(0,1),keepdim=False))
     return loss
 
+def layered_rmse(reference, pred):
+    loss = torch.sqrt(torch.mean(torch.square(reference - pred),
+                                  dim=(0,),keepdim=False))
+    return loss
+
+def layered_bias(reference, pred):
+    loss = torch.mean(reference - pred,dim=(0,),keepdim=False)
+    return loss
+
+def layered_mae(reference, pred):
+    loss = torch.mean(torch.abs(reference - pred),
+                                  dim=(0,),keepdim=False)
+    return loss
+
+
+def loss_layered_heating_rate(flux_down_true, flux_up_true, flux_down_pred, flux_up_pred,
+                            delta_pressure, loss_metric_function):
+        
+    flux_absorbed_true = (flux_down_true[:,:-1] -
+                            flux_down_true[:,1:] + 
+                            flux_up_true[:,1:] -
+                            flux_up_true[:,:-1])
+
+    flux_absorbed_pred = (flux_down_pred[:,:-1] -
+                            flux_down_pred[:,1:] + 
+                            flux_up_pred[:,1:] -
+                            flux_up_pred[:,:-1])
+    heat_true = absorbed_flux_to_heating_rate(flux_absorbed_true, 
+                                            delta_pressure)
+    heat_pred = absorbed_flux_to_heating_rate(flux_absorbed_pred, 
+                                            delta_pressure)
+    loss = loss_metric_function(heat_true, heat_pred)
+    #loss = torch.sqrt(torch.mean(torch.square(heat_true - heat_pred),
+    #                            dim=(0,),keepdim=False))
+    return loss
+
+
 
 def loss_heating_rate(flux_down_true, flux_up_true, flux_down_pred, flux_up_pred,
                            delta_pressure):
@@ -1224,6 +1261,25 @@ def loss_heating_rate(flux_down_true, flux_up_true, flux_down_pred, flux_up_pred
                                   dim=(0,1),keepdim=False))
     return loss
 
+def bias_heating_rate(flux_down_true, flux_up_true, flux_down_pred, flux_up_pred,
+                           delta_pressure):
+    
+    flux_absorbed_true = (flux_down_true[:,:-1] -
+                             flux_down_true[:,1:] + 
+                             flux_up_true[:,1:] -
+                             flux_up_true[:,:-1])
+
+    flux_absorbed_pred = (flux_down_pred[:,:-1] -
+                             flux_down_pred[:,1:] + 
+                             flux_up_pred[:,1:] -
+                             flux_up_pred[:,:-1])
+    heat_true = absorbed_flux_to_heating_rate(flux_absorbed_true, 
+                                              delta_pressure)
+    heat_pred = absorbed_flux_to_heating_rate(flux_absorbed_pred, 
+                                              delta_pressure)
+    bias = torch.mean(heat_true - heat_pred,
+                                  dim=(0,1),keepdim=False)
+    return bias
 
 def loss_direct_heating_rate_wrapper(data, y_pred, loss_weights):
     _, _, delta_pressure, y_true = data
@@ -1271,6 +1327,44 @@ def loss_full_heating_rate_wrapper(data, y_pred, loss_weights):
     
     return hr_loss
 
+def loss_layered_heating_rate_maker(loss_metric_function):
+    def loss_layered_heating_rate_wrapper(data, y_pred, loss_weights):
+        _, _, delta_pressure, y_true = data
+        (flux_down_direct_pred, flux_down_diffuse_pred, flux_up_diffuse_pred, _) = y_pred
+        #(flux_down_direct_true, flux_down_diffuse_true, flux_up_diffuse_true, _, _, _) = y_true
+        flux_down_direct_true = y_true[:,:,0]
+        flux_down_diffuse_true = y_true[:,:,1]
+        flux_up_diffuse_true = y_true[:,:,2]
+
+        flux_down_true = flux_down_direct_true + flux_down_diffuse_true
+        flux_up_true = flux_up_diffuse_true
+
+        flux_down_pred = flux_down_direct_pred + flux_down_diffuse_pred
+        flux_up_pred = flux_up_diffuse_pred
+
+        hr_loss = loss_layered_heating_rate(flux_down_true, flux_up_true, flux_down_pred, flux_up_pred, delta_pressure, loss_metric_function)
+        
+        return hr_loss
+    return loss_layered_heating_rate_wrapper
+
+def bias_full_heating_rate_wrapper(data, y_pred, loss_weights):
+    _, _, delta_pressure, y_true = data
+    (flux_down_direct_pred, flux_down_diffuse_pred, flux_up_diffuse_pred, _) = y_pred
+    #(flux_down_direct_true, flux_down_diffuse_true, flux_up_diffuse_true, _, _, _) = y_true
+    flux_down_direct_true = y_true[:,:,0]
+    flux_down_diffuse_true = y_true[:,:,1]
+    flux_up_diffuse_true = y_true[:,:,2]
+
+    flux_down_true = flux_down_direct_true + flux_down_diffuse_true
+    flux_up_true = flux_up_diffuse_true
+
+    flux_down_pred = flux_down_direct_pred + flux_down_diffuse_pred
+    flux_up_pred = flux_up_diffuse_pred
+
+    hr_bias = bias_heating_rate(flux_down_true, flux_up_true, flux_down_pred, flux_up_pred, delta_pressure)
+    
+    return hr_bias
+
 def loss_flux_2(flux_true, flux_pred):  
 
     flux_loss = torch.sqrt(torch.mean(torch.square(flux_pred - flux_true), 
@@ -1287,6 +1381,17 @@ def loss_flux(flux_down_true, flux_up_true, flux_down_pred, flux_up_pred):
                        dim=(0,1), keepdim=False))
 
     return flux_loss
+
+
+def bias_flux(flux_down_true, flux_up_true, flux_down_pred, flux_up_pred):  
+
+    flux_pred = torch.concat((flux_down_pred,flux_up_pred),dim=1)
+    flux_true = torch.concat((flux_down_true,flux_up_true),dim=1)
+
+    flux_bias = torch.mean(flux_pred - flux_true, 
+                       dim=(0,1), keepdim=False)
+
+    return flux_bias
 
 
 def loss_direct_flux_wrapper(data, y_pred, loss_weights):
@@ -1324,6 +1429,23 @@ def loss_full_flux_wrapper(data, y_pred, loss_weights):
 
     loss = loss_flux(flux_down_true, flux_up_true, flux_down_pred, flux_up_pred)
     return loss
+
+def bias_full_flux_wrapper(data, y_pred, loss_weights):
+    _, _, _, y_true = data
+    (flux_down_direct_pred, flux_down_diffuse_pred, flux_up_diffuse_pred, _) = y_pred
+    #(flux_down_direct_true, flux_down_diffuse_true, flux_up_diffuse_true, _, _, _) = y_true
+    flux_down_direct_true = y_true[:,:,0]
+    flux_down_diffuse_true = y_true[:,:,1]
+    flux_up_diffuse_true = y_true[:,:,2]
+
+    flux_down_true = flux_down_direct_true + flux_down_diffuse_true
+    flux_up_true = flux_up_diffuse_true
+
+    flux_down_pred = flux_down_direct_pred + flux_down_diffuse_pred
+    flux_up_pred = flux_up_diffuse_pred
+
+    bias = bias_flux(flux_down_true, flux_up_true, flux_down_pred, flux_up_pred)
+    return bias
 
 def loss_henry_wrapper(data, y_pred, loss_weights):
 
@@ -1456,6 +1578,37 @@ def test_loop(dataloader, model, loss_functions, loss_names, loss_weights, devic
     print(f"Test Error: ")
     for i, value in enumerate(loss):
         print(f" {loss_names[i]}: {value:.8f}")
+    print("")
+
+    return loss
+
+# computes an error metric for each layer
+def test_layers_loop(dataloader, model, loss_functions, loss_names, loss_weights, device):
+    """ Generic testing / evaluation loop """
+    model.eval()
+    num_batches = len(dataloader)
+
+    # Determining number of layers
+    dataset = dataloader.dataset
+    sample, _, _, _ = dataset[0]
+    sample_shape = sample.shape
+
+    loss = np.zeros((len(loss_functions), sample_shape[0]), dtype=np.float32)
+
+    with torch.no_grad():
+        for data in dataloader:
+            data = [x.to(device) for x in data]
+            y_pred = model(data)
+            for i, loss_fn in enumerate(loss_functions):
+                loss[i,:] += loss_fn(data, y_pred, loss_weights).numpy()
+
+    loss /= num_batches
+
+    print(f"Test Error: ")
+    for i, values in enumerate(loss):
+        print(f" {loss_names[i]}:")
+        for j, value in enumerate(values):
+            print (f"   {j}. {value:.8f}")
     print("")
 
     return loss
@@ -1704,8 +1857,11 @@ def train_full_dataloader():
             #start = torch.cuda.Event(enable_timing=True)
             #end = torch.cuda.Event(enable_timing=True)
 
-            loss_functions = (loss_henry_wrapper_2, loss_full_flux_wrapper, loss_direct_flux_wrapper, loss_diffuse_flux_wrapper, loss_full_heating_rate_wrapper, loss_direct_heating_rate_wrapper, loss_diffuse_heating_rate_wrapper)
-            loss_names = ("Loss", "Full Flux Loss", "Direct Flux Loss","Diffuse Flux Loss","Full Heating Rate Loss","Direct Heating Rate Loss", "Diffuse Heating Rate Loss")
+            loss_functions = (loss_henry_wrapper, #loss_henry_wrapper_2, 
+                              loss_full_flux_wrapper, loss_direct_flux_wrapper, loss_diffuse_flux_wrapper, 
+                              bias_full_flux_wrapper,
+                              loss_full_heating_rate_wrapper, loss_direct_heating_rate_wrapper, loss_diffuse_heating_rate_wrapper)
+            loss_names = ("Loss", "Full Flux Loss", "Direct Flux Loss","Diffuse Flux Loss","Flux Bias", "Full Heating Rate Loss","Direct Heating Rate Loss", "Diffuse Heating Rate Loss")
             
             #loss_functions = (loss_flux_wrapper)
             #loss_names = ("Flux Loss")
@@ -1933,17 +2089,18 @@ def test_full_dataloader():
     n_channel = 42
     n_constituent = 8
 
-    is_use_internals = True
+    is_use_internals = False
 
     is_mcica = False #True
 
     if is_mcica:
         version_name = "v1.v2."
     else:
-        #version_name = "v1.v1."
-        version_name = "v1.v4."
+        version_name = "v1.v1."
+        #version_name = "v1.v4."
 
-    loss_weights = [1.0, 1.0]
+    #loss_weights = [1.0, 1.0]
+    loss_weights = [1.0, 1.0, 0.5, 0.5]
     if is_use_internals:
         model = FullNetInternals(n_channel,n_constituent,dropout_p=0,device=device)
     else:
@@ -1988,12 +2145,21 @@ def test_full_dataloader():
                                                     shuffle=False,
                                                             num_workers=1)
 
+        loss_layered_heating_rate_rmse = loss_layered_heating_rate_maker(layered_rmse)
+        loss_layered_heating_rate_bias = loss_layered_heating_rate_maker(layered_bias)
+        loss_layered_heating_rate_mae = loss_layered_heating_rate_maker(layered_mae)
+        layered_loss_functions = (loss_layered_heating_rate_rmse,loss_layered_heating_rate_bias, loss_layered_heating_rate_mae)
 
-        loss_functions = (loss_henry_wrapper_2, loss_full_flux_wrapper, loss_direct_flux_wrapper, loss_diffuse_flux_wrapper, loss_full_heating_rate_wrapper, loss_direct_heating_rate_wrapper, loss_diffuse_heating_rate_wrapper)
-        loss_names = ("Loss", "Full Flux Loss", "Direct Flux Loss","Diffuse Flux Loss","Full Heating Rate Loss","Direct Heating Rate Loss", "Diffuse Heating Rate Loss")
+        layered_loss_names = ("rmse","bias","mae")
+
+        loss_functions = (loss_henry_wrapper, #loss_henry_wrapper_2, 
+                          loss_full_flux_wrapper, loss_direct_flux_wrapper, loss_diffuse_flux_wrapper, 
+                          bias_full_flux_wrapper, loss_full_heating_rate_wrapper, loss_direct_heating_rate_wrapper, loss_diffuse_heating_rate_wrapper,
+                          bias_full_heating_rate_wrapper)
+        loss_names = ("Loss", "Full Flux Loss", "Direct Flux Loss","Diffuse Flux Loss","Flux Bias", "Full Heating Rate Loss","Direct Heating Rate Loss", "Diffuse Heating Rate Loss", "Heating Rate Bias")
 
         print(f"Testing error, Year = {year}")
-        for t in range(618, 623, 5):
+        for t in range(592, 597, 5): #range(618, 623, 5):
 
             checkpoint = torch.load(filename_full_model + str(t).zfill(3), map_location=torch.device(device))
             print(f"Loaded Model: epoch = {t}")
@@ -2001,6 +2167,19 @@ def test_full_dataloader():
 
             #print(f"Total number of parameters = {n_parameters}", flush=True)
             #print(f"Spectral decomposition weights = {model.spectral_net.weight}", flush=True)
+
+            num_batches = len(test_dataloader)
+
+            if False:
+                # Determining number of layers
+                dataset = test_dataloader.dataset
+                print(f"Number of Batches = {num_batches}")
+                sample, _, _, _ = dataset[0]
+                print(f'Dataset len = {len(dataset)}')
+                sample_shape = sample.shape
+                print(f'Sample Shape = {sample_shape}')
+
+            loss = test_layers_loop(test_dataloader, model, layered_loss_functions, layered_loss_names, loss_weights, device)
 
             if is_use_internals:
                 loss, internal_data = test_loop_internals (test_dataloader, model, loss_functions, loss_names, loss_weights, device)
