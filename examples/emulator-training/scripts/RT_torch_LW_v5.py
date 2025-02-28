@@ -773,7 +773,7 @@ class MultiReflection(nn.Module):
         #if diff > 10.0:
         #    print (f"loss of energy = {diff}")
 
-        return flux_down, flux_up
+        return flux_down, flux_up, F.softmax(self.bands_to_channels, dim=1)
 
 class FullNet(nn.Module):
     """ Computes full radiative transfer (direct and diffuse radiation)
@@ -822,8 +822,8 @@ class FullNet(nn.Module):
 
         flux_clear = self.multireflection_net([x_sources, [t_clear, e_split_clear, tau_clear], x_emissivity])
 
-        flux_down_full, flux_up_full = flux_full
-        flux_down_clear, flux_up_clear = flux_clear
+        flux_down_full, flux_up_full, _ = flux_full
+        flux_down_clear, flux_up_clear, _ = flux_clear
 
         flux_down_full = torch.sum(flux_down_full,dim=2)
         flux_up_full = torch.sum(flux_up_full,dim=2)
@@ -881,14 +881,24 @@ class FullNetInternals(nn.Module):
 
         s_full_channels = (1.0 - t_full) * (e_split_full[:,:,:,0] + e_split_full[:,:,:,1])
 
+
+
         s_clear_channels = (1.0 - t_clear) * (e_split_clear[:,:,:,0] + e_split_clear[:,:,:,1])
 
         flux_full = self.multireflection_net([x_sources, [t_full, e_split_full, tau_full], x_emissivity])
 
         flux_clear = self.multireflection_net([x_sources, [t_clear, e_split_clear, tau_clear], x_emissivity])
 
-        flux_down_full, flux_up_full = flux_full
-        flux_down_clear, flux_up_clear = flux_clear
+        flux_down_full, flux_up_full, bands_to_channels = flux_full
+        flux_down_clear, flux_up_clear, _ = flux_clear
+
+        s_full_bands = torch.matmul(s_full_channels,  bands_to_channels.t())
+
+        s_clear_bands = torch.matmul(s_clear_channels, bands_to_channels.t())
+
+        t_full_bands = torch.matmul(t_full, bands_to_channels.t())
+
+        t_clear_bands = torch.matmul(t_clear, bands_to_channels.t())
 
         flux_down_full = torch.sum(flux_down_full,dim=2)
         flux_up_full = torch.sum(flux_up_full,dim=2)
@@ -898,9 +908,9 @@ class FullNetInternals(nn.Module):
 
         flux = (flux_down_full, flux_up_full, flux_down_clear, flux_up_clear)
 
-        internal_data = [x_layers[:,:,2], x_layers[:,:,3], x_layers[:,:,5], #mu_diffuse_original,
-         s_direct, s_diffuse, r_toa, x_surface[:,1],
-                         mu_direct, t_direct_total, t_diffuse_total, x_layers[:,:,4]]
+        internal_data = [x_layers[:,:,2], x_layers[:,:,3], x_layers[:,:,4], x_layers[:,:,6], 
+        s_full_bands, s_clear_bands, 
+                          t_full_bands, t_clear_bands, ]
 
 
         return flux, internal_data
@@ -1139,35 +1149,34 @@ def test_loop_internals (dataloader, model, loss_functions, loss_names, loss_wei
 
     loss = np.zeros(len(loss_functions), dtype=np.float32)
 
-    lwp = []
-    iwp = []
-    o3 = []
-    mu_diffuse = []
-    s_direct   = []
-    s_diffuse   = []
-    r_toa = []
-    r_surface = []
-    mu_direct = []
-    t_direct = []
-    t_diffuse = []
-    h2o = []
+    lwp = [] #2
+    iwp = [] #3
+    h2o = [] #4
+    co2 = [] #6
+
+    s_full   = []
+    s_clear   = []
+
+    t_full = []
+    t_clear = []
+
 
     with torch.no_grad():
-        for data in dataloader:
+        rands = torch.rand((num_batches,))
+        for ii, data in enumerate(dataloader):
             data = [x.to(device) for x in data]
             y_pred, internal_data = model(data)
-            lwp.append(internal_data[0])
-            iwp.append(internal_data[1])
-            o3.append(internal_data[2])
-            mu_diffuse.append(internal_data[3])
-            s_direct.append(internal_data[4])
-            s_diffuse.append(internal_data[5])
-            r_toa.append(internal_data[6])
-            r_surface.append(internal_data[7])
-            mu_direct.append(internal_data[8])
-            t_direct.append(internal_data[9])
-            t_diffuse.append(internal_data[10])
-            h2o.append(internal_data[11])
+
+            if rands[ii] < 0.05:
+                lwp.append(internal_data[0])
+                iwp.append(internal_data[1])
+                h2o.append(internal_data[2])
+                co2.append(internal_data[3])
+                s_full.append(internal_data[4])
+                s_clear.append(internal_data[5])
+                t_full.append(internal_data[6])
+                t_clear.append(internal_data[7])
+
             for i, loss_fn in enumerate(loss_functions):
                 loss[i] += loss_fn(data, y_pred, loss_weights).item()
 
@@ -1180,18 +1189,16 @@ def test_loop_internals (dataloader, model, loss_functions, loss_names, loss_wei
 
     lwp = torch.cat(lwp, dim=0)
     iwp = torch.cat(iwp, dim=0)
-    o3 = torch.cat(o3, dim=0)
-    mu_diffuse = torch.cat(mu_diffuse, dim=0)
-    mu_direct = torch.cat(mu_direct, dim=0)
-    s_direct = torch.cat(s_direct, dim=0)
-    s_diffuse = torch.cat(s_diffuse, dim=0)
-    r_toa = torch.cat(r_toa, dim=0)
-    r_surface = torch.cat(r_surface, dim=0)
-    t_direct = torch.cat(t_direct, dim=0)
-    t_diffuse = torch.cat(t_diffuse, dim=0)
     h2o = torch.cat(h2o, dim=0)
+    co2 = torch.cat(co2, dim=0)
 
-    internal_data = [lwp, iwp, o3, mu_diffuse, s_direct, s_diffuse, r_toa, r_surface, mu_direct, t_direct, t_diffuse, h2o]
+    s_full = torch.cat(s_full, dim=0)
+    s_clear = torch.cat(s_clear, dim=0)
+    t_full = torch.cat(t_full, dim=0)
+    t_clear = torch.cat(t_clear, dim=0)
+
+
+    internal_data = [lwp, iwp, h2o, co2, s_full, s_clear, t_full, t_clear]
 
     return loss, internal_data
 
@@ -1454,13 +1461,14 @@ def count_parameters(model):
 
 def write_internal_data(internal_data, output_file_name):
     import xarray as xr
-    lwp, iwp, o3, mu_diffuse, s_direct, s_diffuse, r_toa, r_surface, mu_direct, t_direct, t_diffuse, h2o = internal_data
+    lwp, iwp, h2o, co2, s_full, s_clear, t_full, t_clear = internal_data
 
     shape = lwp.shape
-    shape2 = lwp.numpy().shape
+    #shape2 = lwp.numpy().shape
 
     example = np.arange(shape[0])
     layer = np.arange(shape[1])
+    band = np.arange(s_full.shape[2])
 
     #lwp = xr.DataArray(lwp, coords=[time,site,layer], dims=("time","site","layer"), name="lwp")
 
@@ -1468,37 +1476,32 @@ def write_internal_data(internal_data, output_file_name):
 
     #r = xr.DataArray(r, coords=[time,site,layer],dims=("time","site","layer"), name="r")
 
-    mu_diffuse = mu_diffuse.numpy().flatten()
-    mu_direct = mu_direct.numpy()
+
     #s1 = np.shape(mu_direct)
     #mu_direct = np.reshape(mu_direct, (s1[0], s1[1]*s1[2]))
 
-    rs_direct = s_direct.numpy()
-    rs_diffuse = s_diffuse.numpy()
-    rr_toa = r_toa.numpy()
-    rr_surface = r_surface.numpy()
+    rs_full = s_full.numpy()
+    rs_clear = s_clear.numpy()
 
-    is_bad = np.isnan(rs_direct).any() or np.isnan(rs_diffuse).any()
+    is_bad = np.isnan(rs_full).any() or np.isnan(rs_clear).any()
     print(f"is bad = {is_bad}")
 
     ds = xr.Dataset(
         data_vars = {
             "lwp": (["example","layer"], lwp.numpy()),
             "iwp": (["example","layer"], iwp.numpy()),
-            "o3": (["example","layer"], o3.numpy()),
-            "mu_diffuse"  : (["example"], mu_diffuse),
-            "mu_direct"  : (["example"], mu_direct[:,0,0]),
-            "s_direct": (["example","layer"], rs_direct),
-            "s_diffuse": (["example","layer"], rs_diffuse),
-            "r_toa" : (["example"], rr_toa),
-            "r_surface" : (["example"], rr_surface),
-            "t_direct": (["example","layer"], t_direct.numpy()),
-            "t_diffuse": (["example","layer"], t_diffuse.numpy()),
             "h2o": (["example","layer"], h2o.numpy()),
+            "co2": (["example","layer"], co2.numpy()),
+            "s_full": (["example","layer","band"], rs_full),
+            "s_clear": (["example","layer","band"], rs_clear),
+            "t_full": (["example","layer","band"], 
+            t_full.numpy()),
+            "t_clear": (["example","layer","band"], t_clear.numpy()),
             },
          coords = {
              "example" : example,
              "layer" : layer,
+             "band" : band,
          },
     )
 
@@ -1508,30 +1511,31 @@ def write_internal_data(internal_data, output_file_name):
 
 def test_full_dataloader():
 
-    #print("Pytorch version:", torch.__version__)
-    #device = "cpu"
-    #print(f"Using {device} device")
-
-    print("Pytorch version:", torch.__version__)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using {device} device")
-
-    if torch.cuda.is_available():
-        print('__CUDNN VERSION:', torch.backends.cudnn.version())
-        print('__Number CUDA Devices:', torch.cuda.device_count())
-        print('__CUDA Device Name:',torch.cuda.get_device_name(0))
-        print('__CUDA Device Total Memory [GB]:',torch.cuda.get_device_properties(0).total_memory/1e9)
-        print(f'Device capability = {torch.cuda.get_device_capability()}')
-        use_cuda = True
+    if True:
+        print("Pytorch version:", torch.__version__)
+        device = "cpu"
+        print(f"Using {device} device")
     else:
-        use_cuda = False
+        print("Pytorch version:", torch.__version__)
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print(f"Using {device} device")
+
+        if torch.cuda.is_available():
+            print('__CUDNN VERSION:', torch.backends.cudnn.version())
+            print('__Number CUDA Devices:', torch.cuda.device_count())
+            print('__CUDA Device Name:',torch.cuda.get_device_name(0))
+            print('__CUDA Device Total Memory [GB]:',torch.cuda.get_device_properties(0).total_memory/1e9)
+            print(f'Device capability = {torch.cuda.get_device_capability()}')
+            use_cuda = True
+        else:
+            use_cuda = False
 
     datadir     = "/data-T1/hws/tmp/"
     batch_size = 1024
     n_channel = 48
     n_constituent = 9
     n_band = 16
-    is_use_internals = False #True
+    is_use_internals = True
     loss_weights = [1.0, 1.0, 1.0, 1.0]
 
     if is_use_internals:
@@ -1561,7 +1565,8 @@ def test_full_dataloader():
 
     years = ("2020",  "2015","2009", )
     mode = "testing"
-    #years = ("2020", )
+    if is_use_internals:
+        years = ("2009", )
 
     for year in years:
         test_input_dir = f"/data-T1/hws/CAMS/processed_data/testing/{year}/"
@@ -1582,7 +1587,8 @@ def test_full_dataloader():
         loss_names = ("Loss", "Full Flux Loss", "Avg Flux Loss", "Avg Loss Energy","Clear Flux Loss","Full Heating Rate Loss","Clear Heating Rate Loss")
 
         print(f"Testing error, Year = {year}")
-        for t in range(116, 142,2):
+        for t in range(115, 120,5):
+        #for t in range(116, 142,2):
 
             checkpoint = torch.load(filename_full_model + str(t).zfill(3), map_location=torch.device(device))
             print(f"Loaded Model: epoch = {t}")
@@ -1593,7 +1599,7 @@ def test_full_dataloader():
 
             if is_use_internals:
                 loss, internal_data = test_loop_internals (test_dataloader, model, loss_functions, loss_names, loss_weights, device)
-                write_internal_data(internal_data, output_file_name=test_input_dir + f"internal_output.sc_{version_name}_{t}.{year}.nc")
+                write_internal_data(internal_data, output_file_name=test_input_dir + f"internal_output.lw_{version_name}_{t}.{year}.nc")
             else:
                 loss = test_loop (test_dataloader, model, loss_functions, loss_names, loss_weights, device)
     

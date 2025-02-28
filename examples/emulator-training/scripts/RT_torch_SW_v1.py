@@ -1261,6 +1261,26 @@ def loss_heating_rate(flux_down_true, flux_up_true, flux_down_pred, flux_up_pred
                                   dim=(0,1),keepdim=False))
     return loss
 
+
+def individual_squared_loss_heating_rate(flux_down_true, flux_up_true, flux_down_pred, flux_up_pred,
+                           delta_pressure):
+    
+    flux_absorbed_true = (flux_down_true[:,:-1] -
+                             flux_down_true[:,1:] + 
+                             flux_up_true[:,1:] -
+                             flux_up_true[:,:-1])
+
+    flux_absorbed_pred = (flux_down_pred[:,:-1] -
+                             flux_down_pred[:,1:] + 
+                             flux_up_pred[:,1:] -
+                             flux_up_pred[:,:-1])
+    heat_true = absorbed_flux_to_heating_rate(flux_absorbed_true, 
+                                              delta_pressure)
+    heat_pred = absorbed_flux_to_heating_rate(flux_absorbed_pred, 
+                                              delta_pressure)
+    loss = torch.square(heat_true - heat_pred)
+    return loss
+
 def bias_heating_rate(flux_down_true, flux_up_true, flux_down_pred, flux_up_pred,
                            delta_pressure):
     
@@ -1324,6 +1344,24 @@ def loss_full_heating_rate_wrapper(data, y_pred, loss_weights):
     flux_up_pred = flux_up_diffuse_pred
 
     hr_loss = loss_heating_rate(flux_down_true, flux_up_true, flux_down_pred, flux_up_pred, delta_pressure)
+    
+    return hr_loss
+
+def individual_squared_loss_heating_rate_wrapper(data, y_pred):
+    _, _, delta_pressure, y_true = data
+    (flux_down_direct_pred, flux_down_diffuse_pred, flux_up_diffuse_pred, _) = y_pred
+    #(flux_down_direct_true, flux_down_diffuse_true, flux_up_diffuse_true, _, _, _) = y_true
+    flux_down_direct_true = y_true[:,:,0]
+    flux_down_diffuse_true = y_true[:,:,1]
+    flux_up_diffuse_true = y_true[:,:,2]
+
+    flux_down_true = flux_down_direct_true + flux_down_diffuse_true
+    flux_up_true = flux_up_diffuse_true
+
+    flux_down_pred = flux_down_direct_pred + flux_down_diffuse_pred
+    flux_up_pred = flux_up_diffuse_pred
+
+    hr_loss = individual_squared_loss_heating_rate(flux_down_true, flux_up_true, flux_down_pred, flux_up_pred, delta_pressure)
     
     return hr_loss
 
@@ -1593,6 +1631,7 @@ def test_layers_loop(dataloader, model, loss_functions, loss_names, loss_weights
     sample, _, _, _ = dataset[0]
     sample_shape = sample.shape
 
+    # Loss for each atmospheric column
     loss = np.zeros((len(loss_functions), sample_shape[0]), dtype=np.float32)
 
     with torch.no_grad():
@@ -1632,6 +1671,7 @@ def test_loop_internals (dataloader, model, loss_functions, loss_names, loss_wei
     t_direct = []
     t_diffuse = []
     h2o = []
+    #squared_loss = []
 
     with torch.no_grad():
         for data in dataloader:
@@ -1649,6 +1689,7 @@ def test_loop_internals (dataloader, model, loss_functions, loss_names, loss_wei
             t_direct.append(internal_data[9])
             t_diffuse.append(internal_data[10])
             h2o.append(internal_data[11])
+            #squared_loss.append(individual_squared_loss_heating_rate_wrapper(data,y_pred))
             for i, loss_fn in enumerate(loss_functions):
                 loss[i] += loss_fn(data, y_pred, loss_weights).item()
 
@@ -1718,7 +1759,7 @@ def train_full_dataloader():
     n_constituent = 8
 
     best_loss_index = -1
-    best_loss = 1.0e+08
+    best_loss =  0.04511189 #1.0e+08
     windup_best_loss = 200
     best_initial_index = -1
     best_initial_loss = 1.0e+08
@@ -1731,8 +1772,9 @@ def train_full_dataloader():
     if is_mcica:
         version_name = "v1.v2."  # mcica version
     else:
-        #version_name = "v1.v3."  # Homogeneous version
-        version_name = "v1.v4."  # Homogeneous version
+        #version_name = "v1.v3."  # Homogeneous version (problem with heating rate)
+        #version_name = "v1.v4."  # Homogeneous version (simplified loss function)
+        version_name = "v1.v1."  
 
     if is_mcica:
         train_input_files = [f'{train_input_dir}nn_input_sw_mcica-{mode}-{year}-{month}.nc' for month in months]
@@ -1761,7 +1803,7 @@ def train_full_dataloader():
                 t_start = 1
                 filename_full_model_input = f'{filename_full_model}i' + str(initial_model_n).zfill(2)
             else:
-                t_start = 560 #250 #190 #515 #0
+                t_start = 610#560 #250 #190 #515 #0
                 filename_full_model_input = filename_full_model + str(t_start).zfill(3)
 
 
@@ -1774,7 +1816,7 @@ def train_full_dataloader():
 
             t_warmup = 1  # for profiling
             t = t_start
-            best_loss_index = t_start
+            best_loss_index = 596 #t_start
             dropout_p = 0.00
 
             dropout_schedule = (0.0, 0.07, 0.1, 0.15, 0.2, 0.15, 0.1, 0.07, 0.0, 0.0) 
@@ -1877,7 +1919,7 @@ def train_full_dataloader():
             while t < epochs:
                 t += 1
 
-                if False:
+                if True:
                     if t < 200:
                         loss_weights = [2.0, 1.0, 0.5, 0.25]
                     elif t < 255:
@@ -1904,6 +1946,7 @@ def train_full_dataloader():
                             print(f'New loss weights: {loss_weights}')
                             best_loss = 1.0e08
                             best_loss_index = 469
+
                 else:
                     if t < 200:
                         loss_weights = [2.0, 1.0]
@@ -1948,7 +1991,8 @@ def train_full_dataloader():
                     #) as prof:
                     #start.record() loss_flux_full_wrapper
                     train_loop(train_dataloader, model, optimizer, 
-                            loss_henry_wrapper_2, loss_weights,
+                            loss_henry_wrapper, loss_weights,
+                            #loss_henry_wrapper_2, loss_weights,
                             device)
                     
                     if False:
@@ -2080,9 +2124,23 @@ def write_internal_data(internal_data, output_file_name):
 
 def test_full_dataloader():
 
+    #print("Pytorch version:", torch.__version__)
+    #device = "cpu"
+    #print(f"Using {device} device")
+
     print("Pytorch version:", torch.__version__)
-    device = "cpu"
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using {device} device")
+
+    if torch.cuda.is_available():
+        print('__CUDNN VERSION:', torch.backends.cudnn.version())
+        print('__Number CUDA Devices:', torch.cuda.device_count())
+        print('__CUDA Device Name:',torch.cuda.get_device_name(0))
+        print('__CUDA Device Total Memory [GB]:',torch.cuda.get_device_properties(0).total_memory/1e9)
+        print(f'Device capability = {torch.cuda.get_device_capability()}')
+        use_cuda = True
+    else:
+        use_cuda = False
 
     datadir     = "/data-T1/hws/tmp/"
     batch_size = 1024
@@ -2092,6 +2150,8 @@ def test_full_dataloader():
     is_use_internals = False
 
     is_mcica = False #True
+
+    is_layered_loss = False
 
     if is_mcica:
         version_name = "v1.v2."
@@ -2125,12 +2185,19 @@ def test_full_dataloader():
 
     filename_full_model = datadir + f"/Torch.SW.{version_name}" # 
 
-    years = ("2009", "2015", "2020")
-    mode = "testing"
-    #years = ("2020", )
+
+    if False:
+        mode = "testing"
+        processed_data_dir = "/data-T1/hws/CAMS/processed_data/testing/"
+        years = ("2009", "2015", "2020")
+    else:
+        mode = "training"
+        processed_data_dir = "/data-T1/hws/CAMS/processed_data/training/"
+        years = ("2008", )
 
     for year in years:
-        test_input_dir = f"/data-T1/hws/CAMS/processed_data/testing/{year}/"
+        
+        test_input_dir = f"{processed_data_dir}{year}/"
         months = [str(m).zfill(2) for m in range(1,13)]
         if is_mcica:
             test_input_files = [f'{test_input_dir}nn_input_sw_mcica-{mode}-{year}-{month}.nc' for month in months]
@@ -2159,7 +2226,9 @@ def test_full_dataloader():
         loss_names = ("Loss", "Full Flux Loss", "Direct Flux Loss","Diffuse Flux Loss","Flux Bias", "Full Heating Rate Loss","Direct Heating Rate Loss", "Diffuse Heating Rate Loss", "Heating Rate Bias")
 
         print(f"Testing error, Year = {year}")
-        for t in range(592, 597, 5): #range(618, 623, 5):
+
+        #for t in range(596, 601, 5): #range(618, 623, 5):
+        for t in range(5, 650, 5): #range(618, 623, 5):
 
             checkpoint = torch.load(filename_full_model + str(t).zfill(3), map_location=torch.device(device))
             print(f"Loaded Model: epoch = {t}")
@@ -2179,7 +2248,8 @@ def test_full_dataloader():
                 sample_shape = sample.shape
                 print(f'Sample Shape = {sample_shape}')
 
-            loss = test_layers_loop(test_dataloader, model, layered_loss_functions, layered_loss_names, loss_weights, device)
+            if is_layered_loss:
+                loss = test_layers_loop(test_dataloader, model, layered_loss_functions, layered_loss_names, loss_weights, device)
 
             if is_use_internals:
                 loss, internal_data = test_loop_internals (test_dataloader, model, loss_functions, loss_names, loss_weights, device)

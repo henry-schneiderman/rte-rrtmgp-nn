@@ -104,8 +104,8 @@ def plot_flux_and_hr_error(rsu_true, rsd_true, rsu_pred, rsd_pred, pres):
 
 datadir     = "/data-T1/hws/tmp/"
 fpath       = datadir + "/RADSCHEME_data_g224_CAMS_2009-2018_sans_2014-2015.2.nc"
-fpath_val   = datadir + "/RADSCHEME_data_g224_CAMS_2014.2.nc"
-fpath_test  = datadir +  "/RADSCHEME_data_g224_CAMS_2015_true_solar_angles.nc"
+#fpath_val   = datadir + "/RADSCHEME_data_g224_CAMS_2014.2.nc"
+#fpath_test  = datadir +  "/RADSCHEME_data_g224_CAMS_2015_true_solar_angles.nc"
 # fpath_test  = datadir +  "/RADSCHEME_data_g224_NWPSAFtest.nc"
 
 # ----------- config ------------
@@ -116,8 +116,9 @@ scale_inputs    = True
 use_gpu = True
 
 
-model_name = 'MODEL.RNN_1_ecRad_Dataset.'
-is_train = False #True
+model_name = 'Ukkonen/MODEL.RNN_1_ecRad_Dataset.'
+#model_name = 'Ukkonen/MODEL.RNN_2_ecRad_Dataset.'
+is_train = True #False #True
 
 weight_prof = ml_loaddata_rnn.get_weight_profile (fpath)
 
@@ -201,7 +202,7 @@ if True:
     # activ_last   = 'linear'
     
     epochs      = 100000
-    patience    = 400 #25
+    patience    = 50 #400 #25
     lossfunc    = losses.mean_squared_error
     batch_size  = 1024
     #batch_size  = 2048
@@ -275,11 +276,11 @@ if True:
     
     model.summary()
 
-    callbacks = [EarlyStopping(monitor='rmse_hr',  patience=patience, verbose=1, \
+    callbacks = [EarlyStopping(monitor='val_loss',  patience=patience, verbose=1, \
                                  mode='min',restore_best_weights=True)]
     
     epoch_period = 25
-    n_epochs = 925 #0  
+    n_epochs = 0  
     #steps_per_epoch = 924
 
     train_input_dir = "/data-T1/hws/CAMS/processed_data/training/2008/"
@@ -328,16 +329,17 @@ if True:
         model = tf.keras.models.load_model(datadir + model_name + str(n_epochs))
 
     else:
-        for year in ['2015',]:
+        for year in ['2009','2015','2020',]:
             print(f'Year = {year}')
             testing_input_dir = f"/data-T1/hws/CAMS/processed_data/testing/{year}/"
             testing_input_files = [f'{testing_input_dir}Flux_Ukkonen-{year}-{month}.nc' for month in months]
-            n_epochs = 925 #800
+            n_epochs = [1725,]  #503, 1496] #800
             generator_testing = ml_data_generator.InputSequence(testing_input_files, batch_size)
-            while n_epochs < 2025: #epochs:
-                n_epochs = n_epochs + epoch_period
-                print(f"n_epochs = {n_epochs}")
-                model = tf.keras.models.load_model(datadir + model_name + str(n_epochs))
+            #while n_epochs < 2025: #epochs:
+            #n_epochs = n_epochs + epoch_period
+            for epochs in n_epochs:
+                print(f"n_epochs = {epochs}")
+                model = tf.keras.models.load_model(datadir + model_name + str(epochs))
                 model.evaluate(x=generator_testing)
             
     
