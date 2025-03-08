@@ -116,9 +116,9 @@ scale_inputs    = True
 use_gpu = True
 
 
-model_name = 'Ukkonen/MODEL.RNN_1_ecRad_Dataset.'
-#model_name = 'Ukkonen/MODEL.RNN_2_ecRad_Dataset.'
-is_train = True #False #True
+#model_name = 'Ukkonen/MODEL.RNN_1_ecRad_Dataset.'
+model_name = 'Ukkonen/MODEL.RNN_2_ecRad_Dataset.'
+is_train = False #True
 
 weight_prof = ml_loaddata_rnn.get_weight_profile (fpath)
 
@@ -179,6 +179,19 @@ def rmse_hr(y_true, y_pred, dp, rsd_top):
     # return tf.math.sqrt(tf.math.reduce_mean(tf.math.square(HR_true - HR_pred),axis=-1))
     return K.sqrt(K.mean(K.square(HR_true - HR_pred)))
 
+def bias_hr(y_true, y_pred, dp, rsd_top):
+    
+    rsd_true = tf.math.multiply(y_true[:,:,0], rsd_top)
+    rsd_pred = tf.math.multiply(y_pred[:,:,0], rsd_top)
+    rsu_true = tf.math.multiply(y_true[:,:,1], rsd_top)
+    rsu_pred = tf.math.multiply(y_pred[:,:,1], rsd_top)
+
+    HR_true = calc_heatingrates_tf_dp(rsd_true, rsu_true, dp)
+    HR_pred = calc_heatingrates_tf_dp(rsd_pred, rsu_pred, dp)
+
+    # return tf.math.sqrt(tf.math.reduce_mean(tf.math.square(HR_true - HR_pred),axis=-1))
+    return K.mean(HR_true - HR_pred)
+
 
 def rmse_flux(y_true, y_pred, dp, rsd_top):
 
@@ -187,6 +200,14 @@ def rmse_flux(y_true, y_pred, dp, rsd_top):
     y_pred_scaled = tf.math.multiply(y_pred, rsd_top_2)
 
     return K.sqrt(K.mean(K.square(y_true_scaled - y_pred_scaled)))
+
+def bias_flux(y_true, y_pred, dp, rsd_top):
+
+    rsd_top_2 = tf.expand_dims(rsd_top, axis=2)
+    y_true_scaled = tf.math.multiply(y_true, rsd_top_2)
+    y_pred_scaled = tf.math.multiply(y_pred, rsd_top_2)
+
+    return K.mean(y_true_scaled - y_pred_scaled)
 
 # MODEL TRAINING CODE
 if True:
@@ -266,6 +287,8 @@ if True:
     
     model.add_metric(rmse_flux(target,outputs,dpres,incflux),'rmse_flux')
     model.add_metric(rmse_hr(target,outputs,dpres,incflux),'rmse_hr')
+    #model.add_metric(bias_flux(target,outputs,dpres,incflux),'bias_flux')
+    #model.add_metric(bias_hr(target,outputs,dpres,incflux),'bias_hr')
 
     # model.add_metric(rmse_hr(target,outputs,inp_aux_albedo,dpres,incflux),'rmse_hr')
     # model.add_metric(rmse_flux(target,outputs,inp_aux,incflux),'rmse_flux')
@@ -279,8 +302,8 @@ if True:
     callbacks = [EarlyStopping(monitor='val_loss',  patience=patience, verbose=1, \
                                  mode='min',restore_best_weights=True)]
     
-    epoch_period = 25
-    n_epochs = 0  
+    epoch_period = 2000
+    n_epochs = 450 #0  
     #steps_per_epoch = 924
 
     train_input_dir = "/data-T1/hws/CAMS/processed_data/training/2008/"
@@ -333,13 +356,16 @@ if True:
             print(f'Year = {year}')
             testing_input_dir = f"/data-T1/hws/CAMS/processed_data/testing/{year}/"
             testing_input_files = [f'{testing_input_dir}Flux_Ukkonen-{year}-{month}.nc' for month in months]
-            n_epochs = [1725,]  #503, 1496] #800
+            n_epochs = [565,]  #503, 1496] #800
             generator_testing = ml_data_generator.InputSequence(testing_input_files, batch_size)
             #while n_epochs < 2025: #epochs:
             #n_epochs = n_epochs + epoch_period
             for epochs in n_epochs:
                 print(f"n_epochs = {epochs}")
                 model = tf.keras.models.load_model(datadir + model_name + str(epochs))
+                model.add_metric(bias_hr(target,outputs,dpres,incflux),'bias_hr')
+                #model.compile(optimizer=optim,loss='mse',metrics=[bias_hr,bias_flux])
+
                 model.evaluate(x=generator_testing)
             
     
