@@ -7,11 +7,14 @@ import torch
 #import sklearn
 from torch.utils.data import Dataset
 
-def tensorize(np_ndarray):
-    t = torch.from_numpy(np_ndarray).float()
+def tensorize(np_ndarray, is_integer=False):
+    if is_integer:
+        t = torch.from_numpy(np_ndarray).int()
+    else:
+        t = torch.from_numpy(np_ndarray).float()
     return t
 
-def load_data_full(file, file_index):
+def load_data_full(file, file_index, is_clear_sky):
     data = file
 
     temperature_pressure = data.variables['temp_pres_level'][:,:,:].data
@@ -111,6 +114,7 @@ def load_data_full(file, file_index):
             print(f"min, max {i} = {np.min(composition[:,:,i])}, {np.max(composition[:,:,i])}")
 
 
+
     x_layers = np.concatenate((temperature_pressure, composition), axis=2)
     shape = flux_down_direct.shape
 
@@ -121,14 +125,37 @@ def load_data_full(file, file_index):
     flux_down_diffuse_clear = flux_down_diffuse_clear.reshape((shape[0], shape[1], 1))
     flux_up_diffuse_clear = flux_up_diffuse_clear.reshape((shape[0], shape[1], 1))
 
-    y = np.concatenate((flux_down_direct, flux_down_diffuse, flux_up_diffuse, flux_down_direct_clear, flux_down_diffuse_clear, flux_up_diffuse_clear), axis=2)
-    y = y[selection,:,:]
+    if is_clear_sky:
+        # setting liquid water and ice water to zero
+        composition[:,:,0] = 0.0
+        composition[:,:,1] = 0.0
+
+    if is_clear_sky:
+        # Really bad hack to swap in clear
+        # sky data for outputs
+        y = np.concatenate((flux_down_direct_clear, flux_down_diffuse_clear, flux_up_diffuse_clear, flux_down_direct_clear, flux_down_diffuse_clear, flux_up_diffuse_clear), axis=2)
+        y = y[selection,:,:]
+    else:
+        y = np.concatenate((flux_down_direct, flux_down_diffuse, flux_up_diffuse, flux_down_direct_clear, flux_down_diffuse_clear, flux_up_diffuse_clear), axis=2)
+        y = y[selection,:,:]
+
+    # Bad hack to embed geographic information in data
+    n_sites = 5120
+    n_time = selection.shape[0] / n_sites
+    if selection.shape[0] % n_sites != 0:
+        raise Exception("Number of Samples is not a multiple of the number of sites")
+        os.abort()
+
+    t1 = np.arange(n_sites, dtype=np.int32)
+    t2 = [t1 for i in np.arange(n_time)]
+    sites = np.concatenate(t2)
+    sites = sites[selection]
 
     mu = mu.reshape((-1,1))
     surface_albedo = surface_albedo.reshape((-1,1))
     x_surface = np.concatenate((mu, surface_albedo), axis=1)
 
-    return tensorize(x_layers), tensorize(x_surface), tensorize(delta_pressure), tensorize(y)
+    return tensorize(x_layers), tensorize(x_surface), tensorize(delta_pressure), tensorize(y), tensorize(sites, is_integer=True)
 
 
 class RTDataSet(Dataset):
@@ -138,6 +165,7 @@ class RTDataSet(Dataset):
         del self.x_surface
         del self.delta_pressure
         del self.y
+        del self.sites
 
     def __reshuffle(self):
         # shuffle of months
@@ -155,13 +183,14 @@ class RTDataSet(Dataset):
             random.shuffle(a)
             self.e_shuf.append(a)
 
-    def __init__(self, input_files):
+    def __init__(self, input_files, is_clear_sky):
         self.dt = [xr.open_dataset(f) for f in input_files]
         self.n_data_accumulated = []
         self.n_data = []
         self.last_index = 0
         self.epoch_count = 0
         self.dumb_variable = 14
+        self.is_clear_sky = is_clear_sky
         acc = 0
         for d in self.dt:
             c = int(np.sum(d['is_valid_zenith_angle'].data))
@@ -199,9 +228,9 @@ class RTDataSet(Dataset):
             self.epoch_count += 1
             self.i_file = 0
             self.__reshuffle()
-            data = load_data_full(self.dt[self.m_shuf[self.i_file]], self.m_shuf[self.i_file])
+            data = load_data_full(self.dt[self.m_shuf[self.i_file]], self.m_shuf[self.i_file], is_clear_sky=self.is_clear_sky)
             #print(f"Loaded data. i_file = {self.i_file}", flush=True)
-            self.x_layers, self.x_surface, self.delta_pressure, self.y = data
+            self.x_layers, self.x_surface, self.delta_pressure, self.y, self.sites = data
             
 
         elif idx == self.n_data_accumulated[self.i_file]:
@@ -209,9 +238,9 @@ class RTDataSet(Dataset):
             self.dumb_variable += 2
             self.__free_memory()
             #print(f"Loading data. i_file = {self.i_file}", flush=True)
-            data = load_data_full(self.dt[self.m_shuf[self.i_file]], self.m_shuf[self.i_file])
+            data = load_data_full(self.dt[self.m_shuf[self.i_file]], self.m_shuf[self.i_file], is_clear_sky=self.is_clear_sky)
             #print(f"Loaded data. i_file = {self.i_file}", flush=True)
-            self.x_layers, self.x_surface, self.delta_pressure, self.y = data
+            self.x_layers, self.x_surface, self.delta_pressure, self.y, self.sites = data
 
         assert self.x_layers.shape[0] == self.e_shuf[self.i_file].shape[0], f"len of x_layers = {self.x_layers.shape[0]}, len of shuff = {self.e_shuf[self.i_file].shape[0]}"
 
@@ -231,7 +260,7 @@ class RTDataSet(Dataset):
 
                 self.i_file = 0
                 
-        return self.x_layers[ii], self.x_surface[ii], self.delta_pressure[ii], self.y[ii]
+        return self.x_layers[ii], self.x_surface[ii], self.delta_pressure[ii], self.y[ii], self.sites[ii]
 
     
 if __name__ == "__main__":
@@ -275,6 +304,6 @@ if __name__ == "__main__":
         months = [str(m).zfill(2) for m in range(1,13)]
         train_input_files = [f'{train_input_dir}nn_input_sw-training-{year}-{month}.nc' for month in months]
         dt = xr.open_dataset(train_input_files[0])
-        x = load_data_full(dt, 1)
+        x = load_data_full(dt, 1, is_clear_sky=False)
 
 

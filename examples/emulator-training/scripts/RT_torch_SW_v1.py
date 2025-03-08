@@ -6,6 +6,7 @@
 # Same as RT_torch_LW.v3.py except using adding-doubling algorithm
 # from radiation_adding_ica_lw.F90!
 
+from netCDF4 import Dataset
 import numpy as np
 import time
 from typing import List
@@ -433,10 +434,6 @@ class Extinction(nn.Module):
 
         return tau
 
-    
-def tensorize(np_ndarray):
-    t = torch.from_numpy(np_ndarray).float()
-    return t
 
 class Scattering_v2_tau_efficient(nn.Module):
     """ 
@@ -1002,7 +999,7 @@ class FullNet(nn.Module):
 
     def forward(self, x):
 
-        x_layers, x_surface, _, _, = x
+        x_layers, x_surface, _, _, _, = x
         torch.cuda.synchronize()
         t_0 = time.time()
         #print(f"x_layers.shape = {x_layers.shape}")
@@ -1098,11 +1095,11 @@ class FullNetInternals(nn.Module):
 
     def forward(self, x):
 
-        x_layers, x_surface, _, _, = x
+        x_layers, x_surface, _, _, _, = x
         torch.cuda.synchronize()
         t_0 = time.time()
         #print(f"x_layers.shape = {x_layers.shape}")
-        #9 constituents: lwc, ciw, h2o, o3, co2,  o2, n2o, ch4, co,  -no2?, 
+        #9 constituents: lwc, iwc, h2o, o3, co2,  o2, n2o, ch4, co,  -no2?, 
         (temperature_pressure, 
         constituents) = (x_layers[:,:,0:2], 
                         x_layers[:,:,2:10])
@@ -1217,6 +1214,31 @@ def layered_mae(reference, pred):
                                   dim=(0,),keepdim=False)
     return loss
 
+def geographic_rmse(reference, pred, sites, number_of_sites):
+    # mean over layers
+    loss = torch.mean(torch.square(reference - pred),
+                                  dim=(1,),keepdim=False)
+    sum = torch.zeros((number_of_sites,),dtype=torch.float32)
+    count = torch.zeros((number_of_sites,),dtype=torch.int32)
+
+    for i, site in enumerate(sites):
+        count[site] = count[site] + 1
+        sum[site] = sum[site] + loss[i]
+
+    return sum, count
+
+def geographic_bias(reference, pred, sites, number_of_sites):
+    loss = torch.mean(reference - pred,dim=(1,),keepdim=False)
+
+    sum = torch.zeros((number_of_sites,),dtype=torch.float32)
+    count = torch.zeros((number_of_sites,),dtype=torch.int32)
+
+    for i, site in enumerate(sites):
+        count[site] = count[site] + 1
+        sum[site] = sum[site] + loss[i]
+
+    return sum, count
+
 
 def loss_layered_heating_rate(flux_down_true, flux_up_true, flux_down_pred, flux_up_pred,
                             delta_pressure, loss_metric_function):
@@ -1225,11 +1247,13 @@ def loss_layered_heating_rate(flux_down_true, flux_up_true, flux_down_pred, flux
                             flux_down_true[:,1:] + 
                             flux_up_true[:,1:] -
                             flux_up_true[:,:-1])
+                            
 
     flux_absorbed_pred = (flux_down_pred[:,:-1] -
                             flux_down_pred[:,1:] + 
                             flux_up_pred[:,1:] -
                             flux_up_pred[:,:-1])
+    
     heat_true = absorbed_flux_to_heating_rate(flux_absorbed_true, 
                                             delta_pressure)
     heat_pred = absorbed_flux_to_heating_rate(flux_absorbed_pred, 
@@ -1239,7 +1263,29 @@ def loss_layered_heating_rate(flux_down_true, flux_up_true, flux_down_pred, flux
     #                            dim=(0,),keepdim=False))
     return loss
 
+def loss_geographic_heating_rate(flux_down_true, flux_up_true, flux_down_pred, flux_up_pred,
+                            delta_pressure, sites, number_of_sites, loss_metric_function):
+        
+    flux_absorbed_true = (flux_down_true[:,:-1] -
+                            flux_down_true[:,1:] + 
+                            flux_up_true[:,1:] -
+                            flux_up_true[:,:-1])
+                            
 
+    flux_absorbed_pred = (flux_down_pred[:,:-1] -
+                            flux_down_pred[:,1:] + 
+                            flux_up_pred[:,1:] -
+                            flux_up_pred[:,:-1])
+    
+    heat_true = absorbed_flux_to_heating_rate(flux_absorbed_true, 
+                                            delta_pressure)
+    heat_pred = absorbed_flux_to_heating_rate(flux_absorbed_pred, 
+                                            delta_pressure)
+
+    loss, count = loss_metric_function(heat_true, heat_pred, sites, number_of_sites)
+    #loss = torch.sqrt(torch.mean(torch.square(heat_true - heat_pred),
+    #                            dim=(0,),keepdim=False))
+    return loss, count
 
 def loss_heating_rate(flux_down_true, flux_up_true, flux_down_pred, flux_up_pred,
                            delta_pressure):
@@ -1302,7 +1348,7 @@ def bias_heating_rate(flux_down_true, flux_up_true, flux_down_pred, flux_up_pred
     return bias
 
 def loss_direct_heating_rate_wrapper(data, y_pred, loss_weights):
-    _, _, delta_pressure, y_true = data
+    _, _, delta_pressure, y_true, _, = data
     (flux_down_direct_pred, flux_down_diffuse_pred, flux_up_diffuse_pred, _) = y_pred
     #(flux_down_direct_true, flux_down_diffuse_true, flux_up_diffuse_true, _, _, _) = y_true
     flux_down_direct_true = y_true[:,:,0]
@@ -1312,7 +1358,7 @@ def loss_direct_heating_rate_wrapper(data, y_pred, loss_weights):
     return hr_loss
 
 def loss_diffuse_heating_rate_wrapper(data, y_pred, loss_weights):
-    _, _, delta_pressure, y_true = data
+    _, _, delta_pressure, y_true, _, = data
     (flux_down_direct_pred, flux_down_diffuse_pred, flux_up_diffuse_pred, _) = y_pred
     #(_, flux_down_diffuse_true, flux_up_diffuse_true, _, _, _) = y_true
 
@@ -1330,7 +1376,7 @@ def loss_diffuse_heating_rate_wrapper(data, y_pred, loss_weights):
     return hr_loss
 
 def loss_full_heating_rate_wrapper(data, y_pred, loss_weights):
-    _, _, delta_pressure, y_true = data
+    _, _, delta_pressure, y_true, _ = data
     (flux_down_direct_pred, flux_down_diffuse_pred, flux_up_diffuse_pred, _) = y_pred
     #(flux_down_direct_true, flux_down_diffuse_true, flux_up_diffuse_true, _, _, _) = y_true
     flux_down_direct_true = y_true[:,:,0]
@@ -1348,7 +1394,7 @@ def loss_full_heating_rate_wrapper(data, y_pred, loss_weights):
     return hr_loss
 
 def individual_squared_loss_heating_rate_wrapper(data, y_pred):
-    _, _, delta_pressure, y_true = data
+    _, _, delta_pressure, y_true, _ = data
     (flux_down_direct_pred, flux_down_diffuse_pred, flux_up_diffuse_pred, _) = y_pred
     #(flux_down_direct_true, flux_down_diffuse_true, flux_up_diffuse_true, _, _, _) = y_true
     flux_down_direct_true = y_true[:,:,0]
@@ -1365,9 +1411,29 @@ def individual_squared_loss_heating_rate_wrapper(data, y_pred):
     
     return hr_loss
 
+def loss_geographic_heating_rate_maker(loss_metric_function, number_of_sites):
+    def loss_geographic_heating_rate_wrapper(data, y_pred, loss_weights):
+        _, _, delta_pressure, y_true, sites = data
+        (flux_down_direct_pred, flux_down_diffuse_pred, flux_up_diffuse_pred, _) = y_pred
+        #(flux_down_direct_true, flux_down_diffuse_true, flux_up_diffuse_true, _, _, _) = y_true
+        flux_down_direct_true = y_true[:,:,0]
+        flux_down_diffuse_true = y_true[:,:,1]
+        flux_up_diffuse_true = y_true[:,:,2]
+
+        flux_down_true = flux_down_direct_true + flux_down_diffuse_true
+        flux_up_true = flux_up_diffuse_true
+
+        flux_down_pred = flux_down_direct_pred + flux_down_diffuse_pred
+        flux_up_pred = flux_up_diffuse_pred
+
+        hr_loss, hr_count = loss_geographic_heating_rate(flux_down_true, flux_up_true, flux_down_pred, flux_up_pred, delta_pressure, sites, number_of_sites, loss_metric_function)
+        
+        return hr_loss, hr_count
+    return loss_geographic_heating_rate_wrapper
+
 def loss_layered_heating_rate_maker(loss_metric_function):
     def loss_layered_heating_rate_wrapper(data, y_pred, loss_weights):
-        _, _, delta_pressure, y_true = data
+        _, _, delta_pressure, y_true, _ = data
         (flux_down_direct_pred, flux_down_diffuse_pred, flux_up_diffuse_pred, _) = y_pred
         #(flux_down_direct_true, flux_down_diffuse_true, flux_up_diffuse_true, _, _, _) = y_true
         flux_down_direct_true = y_true[:,:,0]
@@ -1385,8 +1451,54 @@ def loss_layered_heating_rate_maker(loss_metric_function):
         return hr_loss
     return loss_layered_heating_rate_wrapper
 
+def loss_layered_flux_maker(loss_metric_function, is_down):
+    def loss_layered_flux_wrapper(data, y_pred, loss_weights):
+        _, _, delta_pressure, y_true, _ = data
+        (flux_down_direct_pred, flux_down_diffuse_pred, flux_up_diffuse_pred, _) = y_pred
+        #(flux_down_direct_true, flux_down_diffuse_true, flux_up_diffuse_true, _, _, _) = y_true
+        flux_down_direct_true = y_true[:,:,0]
+        flux_down_diffuse_true = y_true[:,:,1]
+        flux_up_diffuse_true = y_true[:,:,2]
+
+        flux_down_true = flux_down_direct_true + flux_down_diffuse_true
+        flux_up_true = flux_up_diffuse_true
+
+        flux_down_pred = flux_down_direct_pred + flux_down_diffuse_pred
+        flux_up_pred = flux_up_diffuse_pred
+
+        if is_down:
+            flux_error = loss_metric_function(flux_down_true, flux_down_pred)
+        else:
+            flux_error = loss_metric_function(flux_up_true, flux_up_pred)
+        
+        return flux_error
+    return loss_layered_flux_wrapper
+
+def loss_geographic_flux_maker(loss_metric_function, number_of_sites, is_down):
+    def loss_geographic_flux_wrapper(data, y_pred, loss_weights):
+        _, _, _, y_true, sites = data
+        (flux_down_direct_pred, flux_down_diffuse_pred, flux_up_diffuse_pred, _) = y_pred
+        #(flux_down_direct_true, flux_down_diffuse_true, flux_up_diffuse_true, _, _, _) = y_true
+        flux_down_direct_true = y_true[:,:,0]
+        flux_down_diffuse_true = y_true[:,:,1]
+        flux_up_diffuse_true = y_true[:,:,2]
+
+        flux_down_true = flux_down_direct_true + flux_down_diffuse_true
+        flux_up_true = flux_up_diffuse_true
+
+        flux_down_pred = flux_down_direct_pred + flux_down_diffuse_pred
+        flux_up_pred = flux_up_diffuse_pred
+
+        if is_down:
+            flux_error, flux_count = loss_metric_function(flux_down_true, flux_down_pred, sites, number_of_sites)
+        else:
+            flux_error, flux_count = loss_metric_function(flux_up_true, flux_up_pred, sites, number_of_sites)
+        
+        return flux_error, flux_count
+    return loss_geographic_flux_wrapper
+
 def bias_full_heating_rate_wrapper(data, y_pred, loss_weights):
-    _, _, delta_pressure, y_true = data
+    _, _, delta_pressure, y_true, _ = data
     (flux_down_direct_pred, flux_down_diffuse_pred, flux_up_diffuse_pred, _) = y_pred
     #(flux_down_direct_true, flux_down_diffuse_true, flux_up_diffuse_true, _, _, _) = y_true
     flux_down_direct_true = y_true[:,:,0]
@@ -1433,7 +1545,7 @@ def bias_flux(flux_down_true, flux_up_true, flux_down_pred, flux_up_pred):
 
 
 def loss_direct_flux_wrapper(data, y_pred, loss_weights):
-    _, _, _, y_true = data
+    _, _, _, y_true, _ = data
     (flux_down_direct_pred, _, _, _) = y_pred
     flux_down_direct_true = y_true[:,:,0]
     #(flux_down_direct_true, _, _, _, _, _) = y_true
@@ -1442,7 +1554,7 @@ def loss_direct_flux_wrapper(data, y_pred, loss_weights):
     return loss
 
 def loss_diffuse_flux_wrapper(data, y_pred, loss_weights):
-    _, _, _, y_true = data
+    _, _, _, y_true, _ = data
     (_, flux_down_diffuse_pred, flux_up_diffuse_pred, _) = y_pred
     #(_, flux_down_diffuse_true, flux_up_diffuse_true, _, _, _) = y_true
     flux_down_diffuse_true = y_true[:,:,1]
@@ -1452,7 +1564,7 @@ def loss_diffuse_flux_wrapper(data, y_pred, loss_weights):
     return loss
 
 def loss_full_flux_wrapper(data, y_pred, loss_weights):
-    _, _, _, y_true = data
+    _, _, _, y_true, _ = data
     (flux_down_direct_pred, flux_down_diffuse_pred, flux_up_diffuse_pred, _) = y_pred
     #(flux_down_direct_true, flux_down_diffuse_true, flux_up_diffuse_true, _, _, _) = y_true
     flux_down_direct_true = y_true[:,:,0]
@@ -1469,7 +1581,7 @@ def loss_full_flux_wrapper(data, y_pred, loss_weights):
     return loss
 
 def bias_full_flux_wrapper(data, y_pred, loss_weights):
-    _, _, _, y_true = data
+    _, _, _, y_true, _ = data
     (flux_down_direct_pred, flux_down_diffuse_pred, flux_up_diffuse_pred, _) = y_pred
     #(flux_down_direct_true, flux_down_diffuse_true, flux_up_diffuse_true, _, _, _) = y_true
     flux_down_direct_true = y_true[:,:,0]
@@ -1621,19 +1733,21 @@ def test_loop(dataloader, model, loss_functions, loss_names, loss_weights, devic
     return loss
 
 # computes an error metric for each layer
-def test_layers_loop(dataloader, model, loss_functions, loss_names, loss_weights, device):
+def test_layers_loop(dataloader, model, loss_functions, loss_names, loss_weights, is_flux, device):
     """ Generic testing / evaluation loop """
     model.eval()
     num_batches = len(dataloader)
 
     # Determining number of layers
     dataset = dataloader.dataset
-    sample, _, _, _ = dataset[0]
+    sample, _, _, _, _ = dataset[0]
     sample_shape = sample.shape
 
     # Loss for each atmospheric column
-    loss = np.zeros((len(loss_functions), sample_shape[0]), dtype=np.float32)
-
+    if is_flux:
+        loss = np.zeros((len(loss_functions), sample_shape[0] + 1), dtype=np.float32)
+    else:
+        loss = np.zeros((len(loss_functions), sample_shape[0]), dtype=np.float32)
     with torch.no_grad():
         for data in dataloader:
             data = [x.to(device) for x in data]
@@ -1650,6 +1764,44 @@ def test_layers_loop(dataloader, model, loss_functions, loss_names, loss_weights
             print (f"   {j}. {value:.8f}")
     print("")
 
+    return loss
+
+# computes an error metric for each geographic location
+def test_geographic_loop(dataloader, model, loss_functions, loss_names, loss_weights, number_of_sites, loss_file_name, device):
+    """ Generic testing / evaluation loop """
+    model.eval()
+    num_batches = len(dataloader)
+
+
+    # Loss for each geographic location
+    loss = np.zeros((len(loss_functions), number_of_sites), dtype=np.float32)
+
+    count = np.zeros((len(loss_functions), number_of_sites), dtype=np.int32)
+
+    with torch.no_grad():
+        for data in dataloader:
+            data = [x.to(device) for x in data]
+            y_pred = model(data)
+            for i, loss_fn in enumerate(loss_functions):
+                tmp_loss, tmp_count = loss_fn(data, y_pred,loss_weights)
+                loss[i,:] += tmp_loss.numpy()
+                count[i,:] += tmp_count.numpy()
+
+    for i, name in enumerate(loss_names):
+        loss[i,:] = loss[i,:] / np.float32(count[i,:])
+        if name.find("rmse") > 0:
+            print(f"Computing RMSE for {name}")
+            loss[i,:] = np.sqrt(loss[i,:])
+        else:
+            print(f"Computing bias for {name}")
+
+    dt = Dataset(loss_file_name, "w")
+    dim1 = dt.createDimension("sites",number_of_sites)
+    for i, name in enumerate(loss_names):
+        var = dt.createVariable(name,"f4",("sites",))
+        var[:] = loss[i,:]
+
+    dt.close()
     return loss
 
 def test_loop_internals (dataloader, model, loss_functions, loss_names, loss_weights,device):
@@ -1717,10 +1869,6 @@ def test_loop_internals (dataloader, model, loss_functions, loss_names, loss_wei
 
     return loss, internal_data
 
-def tensorize(np_ndarray):
-    t = torch.from_numpy(np_ndarray).float()
-    return t
-
 
 def train_full_dataloader():
 
@@ -1774,7 +1922,9 @@ def train_full_dataloader():
     else:
         #version_name = "v1.v3."  # Homogeneous version (problem with heating rate)
         #version_name = "v1.v4."  # Homogeneous version (simplified loss function)
-        version_name = "v1.v1."  
+        #version_name = "v1.v1."  
+        #version_name = "v1.v1a."  # Same as v1.v1 except starts at epoch 360 with weight d3 = 6.0
+        version_name = "v1.v1b."  # Same as v1.v1 except starts at epoch 360 with weight d3 = 1.0
 
     if is_mcica:
         train_input_files = [f'{train_input_dir}nn_input_sw_mcica-{mode}-{year}-{month}.nc' for month in months]
@@ -1803,7 +1953,7 @@ def train_full_dataloader():
                 t_start = 1
                 filename_full_model_input = f'{filename_full_model}i' + str(initial_model_n).zfill(2)
             else:
-                t_start = 610#560 #250 #190 #515 #0
+                t_start = 419 #360 # 610#560 #250 #190 #515 #0
                 filename_full_model_input = filename_full_model + str(t_start).zfill(3)
 
 
@@ -1816,7 +1966,7 @@ def train_full_dataloader():
 
             t_warmup = 1  # for profiling
             t = t_start
-            best_loss_index = 596 #t_start
+            best_loss_index = t_start #596
             dropout_p = 0.00
 
             dropout_schedule = (0.0, 0.07, 0.1, 0.15, 0.2, 0.15, 0.1, 0.07, 0.0, 0.0) 
@@ -1884,13 +2034,13 @@ def train_full_dataloader():
 
             optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
-            train_dataset = RT_sw_data.RTDataSet(train_input_files)
+            train_dataset = RT_sw_data.RTDataSet(train_input_files, is_clear_sky=False)
 
             train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size, 
                                                         shuffle=False,
                                                                 num_workers=1)
             
-            validation_dataset = RT_sw_data.RTDataSet(cross_input_files)
+            validation_dataset = RT_sw_data.RTDataSet(cross_input_files, is_clear_sky=False)
 
             validation_dataloader = torch.utils.data.DataLoader(validation_dataset, batch_size, 
                                                         shuffle=False,
@@ -1920,6 +2070,35 @@ def train_full_dataloader():
                 t += 1
 
                 if True:
+                    if t <= 200:
+                        loss_weights = [2.0, 1.0, 0.5, 0.25]
+                    elif t <= 285:
+                        loss_weights = [1.0, 1.0, 0.5, 0.5]
+                        if t == 201:
+                            print(f'New loss weights: {loss_weights}')
+                            best_loss = 1.0e08
+                            best_loss_index = 200
+
+                    elif t <= 360:
+                        loss_weights = [1.0, 1.0, 1.0, 1.0]
+                        if t == 286:
+                            print(f'New loss weights: {loss_weights}')
+                            best_loss = 1.0e08
+                            best_loss_index = 285
+                    elif t <= 515:
+                        #loss_weights = [1.0, 1.0, 2.0, 2.0]
+                        loss_weights = [1.0, 1.0, 1.0, 1.0]
+                        if t == 361:
+                            print(f'New loss weights: {loss_weights}')
+                            best_loss = 1.0e08
+                            best_loss_index = 360
+                    else:
+                        loss_weights = [1.0, 1.0, 0.5, 0.5]
+                        if t == 516:
+                            print(f'New loss weights: {loss_weights}')
+                            best_loss = 1.0e08
+                            best_loss_index = 515
+                elif True:
                     if t < 200:
                         loss_weights = [2.0, 1.0, 0.5, 0.25]
                     elif t < 255:
@@ -2124,23 +2303,25 @@ def write_internal_data(internal_data, output_file_name):
 
 def test_full_dataloader():
 
-    #print("Pytorch version:", torch.__version__)
-    #device = "cpu"
-    #print(f"Using {device} device")
+    if True:
+        print("Pytorch version:", torch.__version__)
+        device = "cpu"
+        print(f"Using {device} device")
 
-    print("Pytorch version:", torch.__version__)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using {device} device")
-
-    if torch.cuda.is_available():
-        print('__CUDNN VERSION:', torch.backends.cudnn.version())
-        print('__Number CUDA Devices:', torch.cuda.device_count())
-        print('__CUDA Device Name:',torch.cuda.get_device_name(0))
-        print('__CUDA Device Total Memory [GB]:',torch.cuda.get_device_properties(0).total_memory/1e9)
-        print(f'Device capability = {torch.cuda.get_device_capability()}')
-        use_cuda = True
     else:
-        use_cuda = False
+        print("Pytorch version:", torch.__version__)
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print(f"Using {device} device")
+
+        if torch.cuda.is_available():
+            print('__CUDNN VERSION:', torch.backends.cudnn.version())
+            print('__Number CUDA Devices:', torch.cuda.device_count())
+            print('__CUDA Device Name:',torch.cuda.get_device_name(0))
+            print('__CUDA Device Total Memory [GB]:',torch.cuda.get_device_properties(0).total_memory/1e9)
+            print(f'Device capability = {torch.cuda.get_device_capability()}')
+            use_cuda = True
+        else:
+            use_cuda = False
 
     datadir     = "/data-T1/hws/tmp/"
     batch_size = 1024
@@ -2151,16 +2332,22 @@ def test_full_dataloader():
 
     is_mcica = False #True
 
+    is_geographic_loss = True
+    number_of_sites = 5120 #THIS SHOULD NOT BE HARDCODED!!!
+
     is_layered_loss = False
+    is_flux = True  # only matters when is_layered_loss = True or is_geographic_loss
+    is_down = False # only matters when is_layered_loss = True or is_geographic_loss
+
+    is_clear_sky = False
 
     if is_mcica:
         version_name = "v1.v2."
     else:
-        version_name = "v1.v1."
-        #version_name = "v1.v4."
+        version_name = "v1.v1."  # expanded error
+        #version_name = "v1.v4." # standard error
 
-    #loss_weights = [1.0, 1.0]
-    loss_weights = [1.0, 1.0, 0.5, 0.5]
+
     if is_use_internals:
         model = FullNetInternals(n_channel,n_constituent,dropout_p=0,device=device)
     else:
@@ -2185,8 +2372,8 @@ def test_full_dataloader():
 
     filename_full_model = datadir + f"/Torch.SW.{version_name}" # 
 
-
-    if False:
+    loss_file_name =  datadir + f"/Loss_Torch.SW.{version_name}"
+    if True:
         mode = "testing"
         processed_data_dir = "/data-T1/hws/CAMS/processed_data/testing/"
         years = ("2009", "2015", "2020")
@@ -2206,20 +2393,51 @@ def test_full_dataloader():
         #test_input_files = ["/data-T1/hws/tmp/RADSCHEME_data_g224_CAMS_2015_true_solar_angles.2.nc"]
 
 
-        test_dataset = RT_sw_data.RTDataSet(test_input_files)
+        test_dataset = RT_sw_data.RTDataSet(test_input_files, is_clear_sky=is_clear_sky)
 
         test_dataloader = torch.utils.data.DataLoader(test_dataset, batch_size, 
                                                     shuffle=False,
                                                             num_workers=1)
 
-        loss_layered_heating_rate_rmse = loss_layered_heating_rate_maker(layered_rmse)
-        loss_layered_heating_rate_bias = loss_layered_heating_rate_maker(layered_bias)
-        loss_layered_heating_rate_mae = loss_layered_heating_rate_maker(layered_mae)
-        layered_loss_functions = (loss_layered_heating_rate_rmse,loss_layered_heating_rate_bias, loss_layered_heating_rate_mae)
+        if not is_flux:
+            loss_layered_heating_rate_rmse = loss_layered_heating_rate_maker(layered_rmse)
+            loss_layered_heating_rate_bias = loss_layered_heating_rate_maker(layered_bias)
+            loss_layered_heating_rate_mae = loss_layered_heating_rate_maker(layered_mae)
+            layered_loss_functions = (loss_layered_heating_rate_rmse,loss_layered_heating_rate_bias, loss_layered_heating_rate_mae)
 
-        layered_loss_names = ("rmse","bias","mae")
 
-        loss_functions = (loss_henry_wrapper, #loss_henry_wrapper_2, 
+        else:
+            loss_layered_flux_rmse = loss_layered_flux_maker(layered_rmse, is_down)
+            loss_layered_flux_bias = loss_layered_flux_maker(layered_bias, is_down)
+            loss_layered_flux_mae = loss_layered_flux_maker(layered_mae, is_down)
+            layered_loss_functions = (loss_layered_flux_rmse,loss_layered_flux_bias, loss_layered_flux_mae)
+
+
+        if is_flux:
+            if is_down:
+                layered_loss_names = ("downwelling flux rmse","downwelling flux bias", "downwelling flux mae")
+            else:
+                layered_loss_names = ("upwelling flux rmse","upwelling flux bias", "upwelling flux mae")
+        else:
+                layered_loss_names = ("heating rate rmse","heating rate bias", "heating rate mae")
+
+        loss_geographic_heating_rate_rmse = loss_geographic_heating_rate_maker(geographic_rmse, number_of_sites)
+        loss_geographic_heating_rate_bias = loss_geographic_heating_rate_maker(geographic_bias, number_of_sites)
+
+        loss_geographic_down_flux_rmse = loss_geographic_flux_maker(geographic_rmse, number_of_sites, is_down=True)
+        loss_geographic_down_flux_bias = loss_geographic_flux_maker(geographic_bias, number_of_sites, is_down=True)
+
+        loss_geographic_up_flux_rmse = loss_geographic_flux_maker(geographic_rmse, number_of_sites, is_down=False)
+        loss_geographic_up_flux_bias = loss_geographic_flux_maker(geographic_bias, number_of_sites, is_down=False)
+
+        geographic_loss_functions = (loss_geographic_heating_rate_rmse,loss_geographic_heating_rate_bias,
+        loss_geographic_down_flux_rmse,loss_geographic_down_flux_bias,
+        loss_geographic_up_flux_rmse,loss_geographic_up_flux_bias)
+
+        geographic_loss_names = ("heating_rate_rmse","heating_rate_bias", "downwelling_flux_rmse","downwelling_flux_bias","upwelling_flux_rmse","upwelling_flux_bias")
+
+        loss_functions = (loss_henry_wrapper, #
+                          #loss_henry_wrapper_2, 
                           loss_full_flux_wrapper, loss_direct_flux_wrapper, loss_diffuse_flux_wrapper, 
                           bias_full_flux_wrapper, loss_full_heating_rate_wrapper, loss_direct_heating_rate_wrapper, loss_diffuse_heating_rate_wrapper,
                           bias_full_heating_rate_wrapper)
@@ -2227,8 +2445,27 @@ def test_full_dataloader():
 
         print(f"Testing error, Year = {year}")
 
-        #for t in range(596, 601, 5): #range(618, 623, 5):
-        for t in range(5, 650, 5): #range(618, 623, 5):
+        for t in range(596, 601, 5): #.v1.v1 expanded loss
+        # #range(618, 623, 5): #v1.v4 standard loss
+        #for t in range(285, 650, 5): #range(618, 623, 5):
+        #for t in range(140, 650, 5): #range(618, 623, 5):
+        #for t in range(140, 285, 5): #range(618, 623, 5):
+        #for t in range(618, 623, 5):
+
+            if True:
+                if t <= 200:
+                    loss_weights = [2.0, 1.0, 0.5, 0.25]
+                elif t <= 285:
+                    #loss_weights = [1.0, 1.0]
+                    loss_weights = [1.0, 1.0, 0.5, 0.5]
+                elif t <= 360:
+                    loss_weights = [1.0, 1.0, 1.0, 1.0]
+                elif t <= 515:
+                    loss_weights = [1.0, 1.0, 2.0, 2.0]
+                else:
+                    loss_weights = [1.0, 1.0, 0.5, 0.5]
+            else:
+                loss_weights = [1.0, 1.0]
 
             checkpoint = torch.load(filename_full_model + str(t).zfill(3), map_location=torch.device(device))
             print(f"Loaded Model: epoch = {t}")
@@ -2248,13 +2485,18 @@ def test_full_dataloader():
                 sample_shape = sample.shape
                 print(f'Sample Shape = {sample_shape}')
 
+            if is_geographic_loss:
+                loss = test_geographic_loop(test_dataloader, model, geographic_loss_functions, geographic_loss_names, loss_weights, number_of_sites, loss_file_name  + str(t).zfill(3) + f".{year}.nc", device)
+
+                #write loss to file
+
             if is_layered_loss:
-                loss = test_layers_loop(test_dataloader, model, layered_loss_functions, layered_loss_names, loss_weights, device)
+                loss = test_layers_loop(test_dataloader, model, layered_loss_functions, layered_loss_names, loss_weights, is_flux, device)
 
             if is_use_internals:
                 loss, internal_data = test_loop_internals (test_dataloader, model, loss_functions, loss_names, loss_weights, device)
                 write_internal_data(internal_data, output_file_name=test_input_dir + f"internal_output.sc_{version_name}_{t}.{year}.nc")
-            else:
+            elif not is_layered_loss and not is_geographic_loss:
                 loss = test_loop (test_dataloader, model, loss_functions, loss_names, loss_weights, device)
     
 
