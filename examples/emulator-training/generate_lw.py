@@ -1,21 +1,22 @@
 import os
-#ex = './allsky_lw_gendata'
-ex = '/home/hws/ecrad/bin/ecrad /home/hws/ecrad/practical/config.2.nam'
+ex = './allsky_lw_gendata'
+#ex = '/home/hws/ecrad/bin/ecrad /home/hws/ecrad/practical/config.2.nam'
 
-#blocksize = '8'
+blocksize = '8'
 
 #mode = 'testing'
 #input_dir = f'/data-T1/hws/CAMS/processed_data/{mode}/'
 
 #year = '2015'
 months = [str(m).zfill(2) for m in range(1,13)]
-#lw_kdist = '../../rrtmgp/data/rrtmgp-data-lw-g256-2018-12-04.nc'
-#lw_clouds = '../../extensions/cloud_optics/rrtmgp-cloud-optics-coeffs-lw.nc'
+months = [str(m).zfill(2) for m in range(1,2)]
+lw_kdist = '../../rrtmgp/data/rrtmgp-data-lw-g256-2018-12-04.nc'
+lw_clouds = '../../extensions/cloud_optics/rrtmgp-cloud-optics-coeffs-lw.nc'
 
 combo = [('training','2008'),('cross_validation','2008'),('testing','2009'),('testing','2015'),('testing','2020')]
 
 
-#combo = [('training','2008'),('cross_validation','2008'),('testing','2009'),('testing','2015')]
+combo = [('testing','2015')]
 
 
 for c in combo:
@@ -25,10 +26,11 @@ for c in combo:
     print(f'Processing {mode} {year}')
     for month in months[:]:
         print(f'{month}')
-        input_file = f'{input_dir}{year}/{month}/lw_input-{mode}-{year}-{month}.nc'
-        output_file = f'{input_dir}{year}/Flux_lw-{mode}-{year}-{month}.nc'
-        #cmd = f'{ex} {blocksize} {input_file} {lw_kdist} {lw_clouds} {output_file}'
-        cmd = f'{ex} {input_file} {output_file}'
+        #input_file = f'{input_dir}{year}/{month}/lw_input-{mode}-{year}-{month}.nc'
+        input_file = f'{input_dir}{year}/{month}/CAMS_{year}-{month}.final.2.nc'
+        output_file = f'{input_dir}{year}/Flux_lw-{mode}-{year}-{month}.tmp.nc'
+        cmd = f'{ex} {blocksize} {input_file} {lw_kdist} {lw_clouds} {output_file}'
+        #cmd = f'{ex} {input_file} {output_file}'
         print (cmd)
         os.system(cmd)
 

@@ -8,10 +8,15 @@ input_dir = f'/data-T1/hws/CAMS/processed_data/{mode}/'
 
 year = '2015'
 months = [str(m).zfill(2) for m in range(1,13)]
+
 sw_kdist = '../../rrtmgp/data/rrtmgp-data-sw-g224-2018-12-04.nc'
 sw_clouds = '../../extensions/cloud_optics/rrtmgp-cloud-optics-coeffs-sw.nc'
 
 combo = [('training','2008'),('cross_validation','2008'),('testing','2009'),('testing','2015'),('testing','2020')]
+
+
+combo = [('testing','2009'),]
+months = [str(m).zfill(2) for m in range(5,6)]
 
 for c in combo:
     mode = c[0]
@@ -19,8 +24,8 @@ for c in combo:
     input_dir = f'/data-T1/hws/CAMS/processed_data/{mode}/'
     for month in months[:]:
 
-        input_file = f'{input_dir}{year}/{month}/CAMS_{year}-{month}.final.2.nc'
-        output_file = f'{input_dir}{year}/Flux_sw-{year}-{month}.2.nc'
+        input_file = f'{input_dir}{year}/{month}/CAMS_{year}-{month}.final.2.tmp.nc'
+        output_file = f'{input_dir}{year}/Flux_sw-{year}-{month}.3.tmp.nc'
         cmd = f'{ex} {blocksize} {input_file} {sw_kdist} {sw_clouds} {output_file}'
         print (cmd)
         os.system(cmd)

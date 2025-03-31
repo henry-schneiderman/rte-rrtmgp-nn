@@ -127,7 +127,7 @@ from tensorflow.keras import losses, optimizers, layers, Input, Model
 from tensorflow.keras.callbacks import EarlyStopping
 import tensorflow.keras.backend as K
 from tensorflow.keras.layers import Dense,TimeDistributed
-
+import time
 mymetrics   = ['mean_absolute_error']
 valfunc     = 'val_mean_absolute_error'
 
@@ -303,7 +303,7 @@ if True:
                                  mode='min',restore_best_weights=True)]
     
     epoch_period = 2000
-    n_epochs = 450 #0  
+    n_epochs = 565 #0  
     #steps_per_epoch = 924
 
     train_input_dir = "/data-T1/hws/CAMS/processed_data/training/2008/"
@@ -352,7 +352,23 @@ if True:
         model = tf.keras.models.load_model(datadir + model_name + str(n_epochs))
 
     else:
+        start_time = 0
+
+        class MyCallback(tf.keras.callbacks.Callback):
+            def on_test_batch_begin(self, batch, logs=None):
+                global start_time
+                global count
+
+                #start_time = time.process_time_ns()
+                start_time = time.perf_counter_ns()
+            def on_test_batch_end(self, batch, logs=None):
+                global start_time
+                global total_elapsed_time_ns
+                #end_time = time.process_time_ns()
+                end_time = time.perf_counter_ns()
+                total_elapsed_time_ns += end_time - start_time
         for year in ['2009','2015','2020',]:
+            total_elapsed_time_ns = 0
             print(f'Year = {year}')
             testing_input_dir = f"/data-T1/hws/CAMS/processed_data/testing/{year}/"
             testing_input_files = [f'{testing_input_dir}Flux_Ukkonen-{year}-{month}.nc' for month in months]
@@ -363,9 +379,12 @@ if True:
             for epochs in n_epochs:
                 print(f"n_epochs = {epochs}")
                 model = tf.keras.models.load_model(datadir + model_name + str(epochs))
-                model.add_metric(bias_hr(target,outputs,dpres,incflux),'bias_hr')
+                #model.add_metric(bias_hr(target,outputs,dpres,incflux),'bias_hr')
                 #model.compile(optimizer=optim,loss='mse',metrics=[bias_hr,bias_flux])
 
-                model.evaluate(x=generator_testing)
-            
+                model.evaluate(x=generator_testing,
+                               callbacks=[MyCallback()])
+                print(f'Elapsed time in seconds = {float(total_elapsed_time_ns) / float(10e9)}')
+                print(f'Elapsed time in ns = {total_elapsed_time_ns}')
+
     

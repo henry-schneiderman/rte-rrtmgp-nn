@@ -94,7 +94,7 @@ print("ciwp 60,900,0:10 = " + str(ciwp[60,900,0:10].data))
 print (" ")
 
 print("mu  = " + str(mu[0:7,200].data))
-print("412.0 * mu  = " + str(1412.0 * mu[0:7,200].data))
+print("1412.0 * mu  = " + str(1412.0 * mu[0:7,200].data))
 print("rsd = " + str(rsd[0:7,200,0].data))
 print("rsd_direct = " + str(rsd_direct[0:7,200,0].data))
 print (" ")

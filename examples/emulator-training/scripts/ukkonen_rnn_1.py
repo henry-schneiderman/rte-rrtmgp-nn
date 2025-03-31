@@ -139,8 +139,8 @@ is_mass_weighted = False
 #is_mass_weighted = True
 #model_name = 'MODEL.RNN_2.'
 
-model_name = 'MODEL.RNN_4.'
-is_train = True
+model_name = 'MODEL.RNN_1.'
+is_train = False
 
 # ----------- config ------------
 

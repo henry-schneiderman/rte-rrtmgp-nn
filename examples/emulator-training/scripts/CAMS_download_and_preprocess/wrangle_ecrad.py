@@ -1305,12 +1305,117 @@ def replace_cloud_fraction(mode,month,year, base_directory):
             print(f'C[99%] = {sorted_C[n * 99 // 100]}')
             print(f'C[99.9%] = {sorted_C[n * 999 // 1000]}')
             print(f'C[100%] = {sorted_C[-1]}')
+            
+def wrangle_zenodo():
+    radiation = 'shortwave'
+    abbv = 'sw'
+    if False:
+        mode = 'cross_validation'
+        new_mode = 'validation'
+        year = '2008'
+        
+    elif False:
+        mode = 'testing'
+        new_mode = 'testing'
+        year = '2020'
+        
+    else:
+        mode = 'training'
+        new_mode = 'training'
+        year = '2008'
+        
+    base_directory = f'/data-T1/hws/CAMS/processed_data/{mode}/{year}/'
+    months = [str(m).zfill(2) for m in range(1,13)]
+    input_prefix = f'nn_input_{abbv}-{mode}-{year}-' #06.nc
+    output_prefix = f'{radiation}-{new_mode}-{year}-' #06.nc
+    
+    for month in months:
+        file_name_input = f'{base_directory}{input_prefix}{month}.nc'
+        file_name_output = f'{base_directory}{output_prefix}{month}.nc'
+        cmd = f'cp {file_name_input} {file_name_output}'
+        os.system(cmd)
+        
+    cmd = f'tar cvf {base_directory}{radiation}-{new_mode}-{year}.tar {base_directory}{output_prefix}*'
+    os.system(cmd)
+    
+    cmd = f'zip {base_directory}{radiation}-{new_mode}-{year}.tar.zip {base_directory}{radiation}-{new_mode}-{year}.tar' 
+    os.system(cmd)
+    
+def wrangle_zenodo_ukkonen():
+    radiation = 'shortwave'
+    abbv = 'sw'
+    if False:
+        mode = 'cross_validation'
+        new_mode = 'validation'
+        year = '2008'
+        
+    elif True:
+        mode = 'testing'
+        new_mode = 'testing'
+        year = '2009'
+        
+    else:
+        mode = 'training'
+        new_mode = 'training'
+        year = '2008'
+        
+    base_directory = f'/data-T1/hws/CAMS/processed_data/{mode}/{year}/'
+    months = [str(m).zfill(2) for m in range(1,13)]
+    input_prefix = f'Flux_Ukkonen-{year}-' #06.nc
+    output_prefix = f'{radiation}-{new_mode}-{year}-' #06.nc
+    
+    for month in months:
+        file_name_input = f'{base_directory}{input_prefix}{month}.nc'
+        file_name_output = f'{base_directory}{output_prefix}{month}-ukkonen_format.nc'
+        cmd = f'cp {file_name_input} {file_name_output}'
+        os.system(cmd)
+        
+    cmd = f'tar cvf {base_directory}{radiation}-{new_mode}-{year}-ukkonen_format.nc.tar {base_directory}{output_prefix}*-ukkonen_format.nc'
+    os.system(cmd)
+    
+    cmd = f'zip {base_directory}{radiation}-{new_mode}-{year}-ukkonen_format.nc.tar.zip {base_directory}{radiation}-{new_mode}-{year}-ukkonen_format.nc.tar' 
+    os.system(cmd)
+    
+def examine_flux():
+    mode = 'testing'
+    new_mode = 'testing'
+    year = '2009'
+    month = '02'
+    
+    base_directory = f'/data-T1/hws/CAMS/processed_data/{mode}/{year}/'
+    
+    file_name_openbox = f'{base_directory}shortwave-{mode}-{year}-{month}.nc'
+    dt_openbox = Dataset(file_name_openbox, "r")
+    print (f"Opening: {file_name_openbox}")
+    flux_down_direct = dt_openbox.variables['flux_down_direct'][:,:].data
+    
+    file_name_ukk = f'{base_directory}Flux_Ukkonen-{year}-{month}.nc'
+    dt_ukk = Dataset(file_name_ukk, "r")
+    rsd_ukk = dt_ukk.variables['rsd_dir'][:,:,:].data
+    shape = rsd_ukk.shape
+    rsd = rsd_ukk.reshape((shape[0] * shape[1], shape[2]))
+    
+    dt_openbox.close()
+    dt_ukk.close()
+    
+    print(f'max rsd = {np.max(rsd)}')
+    print(f'max flux down direct = {np.max(flux_down_direct)}')
+    
+    print(f'sum of difference = {np.sum(rsd - flux_down_direct)}')
+    print(f'max of difference = {np.max(rsd - flux_down_direct)}')
+    
+    
+    
 
 if __name__ == "__main__":
 
 
     base_directory = f'/data-T1/hws/CAMS/processed_data/'
 
+    if True:
+        wrangle_zenodo_ukkonen()
+        #wrangle_zenodo()
+        #examine_flux()
 
     if False:
         mode = 'training'
@@ -1322,7 +1427,7 @@ if __name__ == "__main__":
 
         examine_nn_input_data(mode,month,year, base_directory)
 
-    if True:
+    if False:
         months = [str(m).zfill(2) for m in range(1,13)]
         combo = [('training','2008'),('cross_validation','2008'),('testing','2009'),('testing','2015'),('testing','2020'),]
 

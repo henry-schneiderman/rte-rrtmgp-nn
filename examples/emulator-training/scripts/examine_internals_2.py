@@ -5,14 +5,22 @@ from matplotlib import pyplot as plt
 data_dir       = "/data-T1/hws/tmp/"
 
 #file_name_2009 = data_dir + '../CAMS/processed_data/testing/2009/internal_output.sc_v1_tau_4_460.nc'
-t = "505" #"480"
+
 year = "2009"
 #version = "v5_e19"
-version = "v5_28"
+#version = "v5_29"
+is_decomposed = True
+
+if is_decomposed:
+    t = 596 #"370" #"505" #"480"
+    version = "v1.v1."
+else:
+    t = 618 #596 #"370" #"505" #"480"
+    version = "v1.v4."
 file_name_2009 = data_dir + f'../CAMS/processed_data/testing/{year}/internal_output.sc_{version}_{t}.{year}.nc'
 dt_2009 = xr.open_dataset(file_name_2009)
-is_direct = False
-is_scattering = False
+is_direct = True #True #True # False -> diffuse
+is_scattering = False #True  # False -> transmission
 
 s_direct = dt_2009['s_direct'].data
 s_diffuse = dt_2009['s_diffuse'].data
@@ -29,8 +37,8 @@ r_surface = dt_2009['r_surface'].data
 
 wp = lwp + iwp
 
-print(f"mean r_direct = {np.mean(s_direct)}")
-print(f"mean r_diffuse = {np.mean(s_diffuse)}")
+print(f"mean s_direct = {np.mean(s_direct)}")
+print(f"mean s_diffuse = {np.mean(s_diffuse)}")
 print(f"mean mu_diffuse = {np.mean(mu_diffuse)}")
 print(f"std mu_diffuse = {np.std(mu_diffuse)}")
 
@@ -62,6 +70,7 @@ if is_direct:
     h2o = h2o / (mu_direct + eps)
     o3 = o3 / (mu_direct + eps)
 
+# Collapsing examples and layers
 wp = wp.reshape((shape[0] * shape[1]))
 h2o = h2o.reshape((shape[0] * shape[1]))
 o3 = o3.reshape((shape[0] * shape[1]))
@@ -112,11 +121,11 @@ if is_direct:
             c='#ff7f0e', marker=".", s=1.0)
         plt.xlabel("Cloud Content (ranked)")
         plt.ylabel("Fraction Scattered")
-        plt.title(f"Direct Radiation")# sigma={sigma}")# train_r={train_radius} test_r={test_radius}")
+        plt.title(f"Direct Radiation: Scattering vs. Cloud Content")# sigma={sigma}")# train_r={train_radius} test_r={test_radius}")
     else:
         plt.scatter(0.5 * (h2o_rank_fraction[:sample_size] + wp_rank_fraction[:sample_size]), t_direct[:sample_size], # 
             c='#ff7f0e', marker=".", s=1.0)
-        plt.title ("Direct Radiation")
+        plt.title ("Direct Radiation: Transmissivity vs. H2O")
         plt.ylabel("Fraction Transmitted")
         plt.xlabel("Cloud and H2O Content (ranked)")
 
@@ -127,13 +136,13 @@ else:
             c='#ff7f0e', marker=".", s=1.0)
         plt.xlabel("Cloud Content (ranked)")
         plt.ylabel("Fraction Scattered")
-        plt.title(f"Diffuse Radiation")
+        plt.title(f"Diffuse Radiation: Scattering vs. Cloud Content")
     else:
         plt.scatter(0.5 * (h2o_rank_fraction[:sample_size] + wp_rank_fraction[:sample_size]), t_diffuse[:sample_size], 
                 # + o3_rank_fraction[:sample_size],
             c='#ff7f0e', marker=".", s=1.0) #c='#ff7f0e' c='#1f77b4'
         #plt.title(f"s_diffuse vs. wp (rank fraction)")# sigma={sigma}")# train_r={train_radius} test_r={test_radius}")
-        plt.title ("Diffuse Radiation")
+        plt.title ("Diffuse Radiation: Transmissivity vs. H2O")
         #plt.ylabel("Fraction Scattered")
         plt.ylabel("Fraction Transmitted")
         plt.xlabel("Cloud and H2O Content (ranked)")

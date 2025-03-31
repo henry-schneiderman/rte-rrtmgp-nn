@@ -18,6 +18,8 @@ import torch.nn.functional as F
 from RT_data_hws import absorbed_flux_to_heating_rate
 import RT_sw_data
 
+start_event = torch.cuda.Event(enable_timing=True)
+end_event = torch.cuda.Event(enable_timing=True)
 # all versions up to and including v19, v24
 eps_1 = 0.0000001
 #v22
@@ -283,6 +285,8 @@ class Extinction(nn.Module):
 
         n_weights = 8 * n_channel
 
+        print(f'number of possible weights gas channel decomposition = {n_weights}')
+
         lower = -0.9 # exp(-0.9) = .406
         upper = 0.5  # exp(0.5) = 1.64
         torch.nn.init.uniform_(self.net_lw.weight, a=lower, b=upper)
@@ -317,8 +321,11 @@ class Extinction(nn.Module):
         #self.net_ke_co = MLP(n_input=2,n_hidden=(6,4,4),n_output=1,
         #                      dropout_p=dropout_p,device=device)
 
-        n_weights += 7 * (12 + 24 + 16 + 4 + 6 + 4 + 4 + 1)
-        print(f"Extinction n weights = {n_weights}")
+        n_weights_ext = 6 * (12 + 24 + 16 + 4 + 6 + 4 + 4 + 1)
+        print(f"Extinction n weights = {n_weights_ext} with 6 atmospheric constituents")
+
+        n_weights_ext = 8 * (12 + 24 + 16 + 4 + 6 + 4 + 4 + 1)
+        print(f"Extinction n weights = {n_weights_ext} with 8 atmospheric constituents")
 
 
         # Filters select which channels each constituent contributes to
@@ -362,12 +369,16 @@ class Extinction(nn.Module):
         self.filter_ch4 = torch.cat([filter_ch4, filter_ch4, filter_ch4])
 
 
-        n_weights = (n_weights - 7 * n_channel + torch.sum(self.filter_ch4)
+        n_weights_decomposition = (- 7 * n_channel + torch.sum(self.filter_ch4)
+                     + torch.sum(self.filter_o3) + torch.sum(self.filter_co2)
+                     + torch.sum(self.filter_o2) + torch.sum(self.filter_n2o)
+                     + torch.sum(self.filter_h2o)) # + torch.sum(self.filter_co))
+        n_weights_decomposition = (2 * n_channel + torch.sum(self.filter_ch4)
                      + torch.sum(self.filter_o3) + torch.sum(self.filter_co2)
                      + torch.sum(self.filter_o2) + torch.sum(self.filter_n2o)
                      + torch.sum(self.filter_h2o)) # + torch.sum(self.filter_co))
 
-        print(f"Extinction trainable weights = {n_weights}")
+        print(f"Gas decomposition actual trainable weights = {n_weights_decomposition}")
 
     def reset_dropout(self,dropout_p):
         self.dropout_p = dropout_p
@@ -500,16 +511,22 @@ class Scattering_v2_tau_efficient(nn.Module):
         n_weights = n_input * n_hidden[0] + n_hidden[0]*n_hidden[1]
         n_weights += n_hidden[1]*n_hidden[2] + n_hidden[2]*3*self.n_scattering_nets
         n_weights += n_hidden[0] + n_hidden[1] + n_hidden[2] + 3*self.n_scattering_nets
+        print (f"Number of potential shared weights diffuse scattering = {n_weights}")
+        print (f"Number of potential shared weights direct scattering = {n_weights + n_hidden[0]}")
         n_weights = n_weights * 2 + n_hidden[0]
-        n_weights += self.n_scattering_nets * self.n_channel * 2
-        print(f"Scattering_tau_2_efficient number of weights = {n_weights}")
+        n_weights_2 = self.n_scattering_nets * self.n_channel * 2
+        print(f"Number of channel specific weights scattering  = {n_weights_2}")
+        n_weights += n_weights_2
+        print(f"Total number of potential scattering weights = {n_weights}")
 
         n_weights = n_input * n_hidden[0] + 64 * 4 + 64 * 4 
         n_weights += 12 * 8 
         n_weights += n_hidden[0] + n_hidden[1] + n_hidden[2] + 3*self.n_scattering_nets
+        print (f"Number of actual shared weights diffuse scattering = {n_weights}")
+        print (f"Number of actual shared weights direct scattering = {n_weights + n_hidden[0]}")
         n_weights = n_weights * 2 + n_hidden[0]
         n_weights += self.n_scattering_nets * self.n_channel * 2
-        print(f"Scattering_tau_2_efficient number of learned weights = {n_weights}")
+        print(f"Total number of actual learned weights = {n_weights}")
 
     def reset_dropout(self,dropout_p):
         self.direct_scattering.reset_dropout(dropout_p)
@@ -1543,6 +1560,13 @@ def bias_flux(flux_down_true, flux_up_true, flux_down_pred, flux_up_pred):
 
     return flux_bias
 
+def bias_flux_2(flux_true, flux_pred):  
+
+    flux_bias = torch.mean(flux_pred - flux_true, 
+                       dim=(0,1), keepdim=False)
+
+    return flux_bias
+
 
 def loss_direct_flux_wrapper(data, y_pred, loss_weights):
     _, _, _, y_true, _ = data
@@ -1580,6 +1604,64 @@ def loss_full_flux_wrapper(data, y_pred, loss_weights):
     loss = loss_flux(flux_down_true, flux_up_true, flux_down_pred, flux_up_pred)
     return loss
 
+def mu_selector_maker_loss_full_flux(mu_threshold):
+    def loss_function(data, y_pred, loss_weights):
+        _, x_surface, _, y_true, _ = data
+        mu = x_surface[:,0]
+        selection = mu < mu_threshold
+        (flux_down_direct_pred, flux_down_diffuse_pred, flux_up_diffuse_pred, _) = y_pred
+        flux_down_direct_pred = flux_down_direct_pred[selection]
+        flux_down_diffuse_pred = flux_down_diffuse_pred[selection]
+        flux_up_diffuse_pred = flux_up_diffuse_pred[selection]
+        #(flux_down_direct_true, flux_down_diffuse_true, flux_up_diffuse_true, _, _, _) = y_true
+        flux_down_direct_true = y_true[selection,:,0]
+        flux_down_diffuse_true = y_true[selection,:,1]
+        flux_up_diffuse_true = y_true[selection,:,2]
+
+        flux_down_true = flux_down_direct_true + flux_down_diffuse_true
+        flux_up_true = flux_up_diffuse_true
+
+        flux_down_pred = flux_down_direct_pred + flux_down_diffuse_pred
+        flux_up_pred = flux_up_diffuse_pred
+
+        loss = loss_flux(flux_down_true, flux_up_true, flux_down_pred, flux_up_pred)
+        return loss
+    return loss_function
+
+def loss_down_flux_wrapper(data, y_pred, loss_weights):
+    _, _, _, y_true, _ = data
+    (flux_down_direct_pred, flux_down_diffuse_pred, flux_up_diffuse_pred, _) = y_pred
+    #(flux_down_direct_true, flux_down_diffuse_true, flux_up_diffuse_true, _, _, _) = y_true
+    flux_down_direct_true = y_true[:,:,0]
+    flux_down_diffuse_true = y_true[:,:,1]
+    flux_up_diffuse_true = y_true[:,:,2]
+
+    flux_down_true = flux_down_direct_true + flux_down_diffuse_true
+    flux_up_true = flux_up_diffuse_true
+
+    flux_down_pred = flux_down_direct_pred + flux_down_diffuse_pred
+    flux_up_pred = flux_up_diffuse_pred
+
+    loss = loss_flux_2(flux_down_true, flux_down_pred)
+    return loss
+
+def loss_up_flux_wrapper(data, y_pred, loss_weights):
+    _, _, _, y_true, _ = data
+    (flux_down_direct_pred, flux_down_diffuse_pred, flux_up_diffuse_pred, _) = y_pred
+    #(flux_down_direct_true, flux_down_diffuse_true, flux_up_diffuse_true, _, _, _) = y_true
+    flux_down_direct_true = y_true[:,:,0]
+    flux_down_diffuse_true = y_true[:,:,1]
+    flux_up_diffuse_true = y_true[:,:,2]
+
+    flux_down_true = flux_down_direct_true + flux_down_diffuse_true
+    flux_up_true = flux_up_diffuse_true
+
+    flux_down_pred = flux_down_direct_pred + flux_down_diffuse_pred
+    flux_up_pred = flux_up_diffuse_pred
+
+    loss = loss_flux_2(flux_up_true, flux_up_pred)
+    return loss
+
 def bias_full_flux_wrapper(data, y_pred, loss_weights):
     _, _, _, y_true, _ = data
     (flux_down_direct_pred, flux_down_diffuse_pred, flux_up_diffuse_pred, _) = y_pred
@@ -1595,6 +1677,40 @@ def bias_full_flux_wrapper(data, y_pred, loss_weights):
     flux_up_pred = flux_up_diffuse_pred
 
     bias = bias_flux(flux_down_true, flux_up_true, flux_down_pred, flux_up_pred)
+    return bias
+
+def bias_down_flux_wrapper(data, y_pred, loss_weights):
+    _, _, _, y_true, _ = data
+    (flux_down_direct_pred, flux_down_diffuse_pred, flux_up_diffuse_pred, _) = y_pred
+    #(flux_down_direct_true, flux_down_diffuse_true, flux_up_diffuse_true, _, _, _) = y_true
+    flux_down_direct_true = y_true[:,:,0]
+    flux_down_diffuse_true = y_true[:,:,1]
+    flux_up_diffuse_true = y_true[:,:,2]
+
+    flux_down_true = flux_down_direct_true + flux_down_diffuse_true
+    flux_up_true = flux_up_diffuse_true
+
+    flux_down_pred = flux_down_direct_pred + flux_down_diffuse_pred
+    flux_up_pred = flux_up_diffuse_pred
+
+    bias = bias_flux_2(flux_down_true, flux_down_pred)
+    return bias
+
+def bias_up_flux_wrapper(data, y_pred, loss_weights):
+    _, _, _, y_true, _ = data
+    (flux_down_direct_pred, flux_down_diffuse_pred, flux_up_diffuse_pred, _) = y_pred
+    #(flux_down_direct_true, flux_down_diffuse_true, flux_up_diffuse_true, _, _, _) = y_true
+    flux_down_direct_true = y_true[:,:,0]
+    flux_down_diffuse_true = y_true[:,:,1]
+    flux_up_diffuse_true = y_true[:,:,2]
+
+    flux_down_true = flux_down_direct_true + flux_down_diffuse_true
+    flux_up_true = flux_up_diffuse_true
+
+    flux_down_pred = flux_down_direct_pred + flux_down_diffuse_pred
+    flux_up_pred = flux_up_diffuse_pred
+
+    bias = bias_flux_2(flux_up_true, flux_up_pred)
     return bias
 
 def loss_henry_wrapper(data, y_pred, loss_weights):
@@ -1715,15 +1831,23 @@ def test_loop(dataloader, model, loss_functions, loss_names, loss_weights, devic
     num_batches = len(dataloader)
 
     loss = np.zeros(len(loss_functions), dtype=np.float32)
+    elapsed_time_ms = 0.0
 
     with torch.no_grad():
         for data in dataloader:
             data = [x.to(device) for x in data]
+            start_event.record()
             y_pred = model(data)
+            end_event.record()
+            torch.cuda.synchronize()
+            elapsed_time_ms += start_event.elapsed_time(end_event)
+
             for i, loss_fn in enumerate(loss_functions):
                 loss[i] += loss_fn(data, y_pred, loss_weights).item()
 
     loss /= num_batches
+
+    print(f"Elapsed time: {elapsed_time_ms:.2f} ms")
 
     print(f"Test Error: ")
     for i, value in enumerate(loss):
@@ -1924,7 +2048,8 @@ def train_full_dataloader():
         #version_name = "v1.v4."  # Homogeneous version (simplified loss function)
         #version_name = "v1.v1."  
         #version_name = "v1.v1a."  # Same as v1.v1 except starts at epoch 360 with weight d3 = 6.0
-        version_name = "v1.v1b."  # Same as v1.v1 except starts at epoch 360 with weight d3 = 1.0
+        #version_name = "v1.v1b."  # Same as v1.v1 except starts at epoch 360 with weight d3 = 1.0
+        version_name = "v1.v1c."  # Same as v1.v1 except starts at epoch 600 with weight change at 601
 
     if is_mcica:
         train_input_files = [f'{train_input_dir}nn_input_sw_mcica-{mode}-{year}-{month}.nc' for month in months]
@@ -1953,7 +2078,7 @@ def train_full_dataloader():
                 t_start = 1
                 filename_full_model_input = f'{filename_full_model}i' + str(initial_model_n).zfill(2)
             else:
-                t_start = 419 #360 # 610#560 #250 #190 #515 #0
+                t_start = 600 #496 #445 #419 #360 # 610#560 #250 #190 #515 #0
                 filename_full_model_input = filename_full_model + str(t_start).zfill(3)
 
 
@@ -2092,12 +2217,19 @@ def train_full_dataloader():
                             print(f'New loss weights: {loss_weights}')
                             best_loss = 1.0e08
                             best_loss_index = 360
-                    else:
+
+                    elif t <= 600:
                         loss_weights = [1.0, 1.0, 0.5, 0.5]
                         if t == 516:
                             print(f'New loss weights: {loss_weights}')
                             best_loss = 1.0e08
                             best_loss_index = 515
+                    else:
+                        loss_weights = [0.5, 2.0, 1.0, 1.0]
+                        if t == 601:
+                            print(f'New loss weights: {loss_weights}')
+                            best_loss = 1.0e08
+                            best_loss_index = 600
                 elif True:
                     if t < 200:
                         loss_weights = [2.0, 1.0, 0.5, 0.25]
@@ -2303,7 +2435,7 @@ def write_internal_data(internal_data, output_file_name):
 
 def test_full_dataloader():
 
-    if True:
+    if False:
         print("Pytorch version:", torch.__version__)
         device = "cpu"
         print(f"Using {device} device")
@@ -2332,7 +2464,7 @@ def test_full_dataloader():
 
     is_mcica = False #True
 
-    is_geographic_loss = True
+    is_geographic_loss = False
     number_of_sites = 5120 #THIS SHOULD NOT BE HARDCODED!!!
 
     is_layered_loss = False
@@ -2436,12 +2568,22 @@ def test_full_dataloader():
 
         geographic_loss_names = ("heating_rate_rmse","heating_rate_bias", "downwelling_flux_rmse","downwelling_flux_bias","upwelling_flux_rmse","upwelling_flux_bias")
 
+        loss_flux_0_0025 = mu_selector_maker_loss_full_flux(0.0025)
+        loss_flux_0_01 = mu_selector_maker_loss_full_flux(0.01)
+        loss_flux_0_05 = mu_selector_maker_loss_full_flux(0.05)
+        loss_flux_0_10 = mu_selector_maker_loss_full_flux(0.10)
+
         loss_functions = (loss_henry_wrapper, #
                           #loss_henry_wrapper_2, 
                           loss_full_flux_wrapper, loss_direct_flux_wrapper, loss_diffuse_flux_wrapper, 
-                          bias_full_flux_wrapper, loss_full_heating_rate_wrapper, loss_direct_heating_rate_wrapper, loss_diffuse_heating_rate_wrapper,
-                          bias_full_heating_rate_wrapper)
-        loss_names = ("Loss", "Full Flux Loss", "Direct Flux Loss","Diffuse Flux Loss","Flux Bias", "Full Heating Rate Loss","Direct Heating Rate Loss", "Diffuse Heating Rate Loss", "Heating Rate Bias")
+                          bias_full_flux_wrapper, loss_down_flux_wrapper, loss_up_flux_wrapper, bias_down_flux_wrapper, bias_up_flux_wrapper, 
+                          loss_full_heating_rate_wrapper, loss_direct_heating_rate_wrapper, loss_diffuse_heating_rate_wrapper,
+                          bias_full_heating_rate_wrapper,
+                          loss_flux_0_0025,
+                          loss_flux_0_01,
+                          loss_flux_0_05,
+                          loss_flux_0_10)
+        loss_names = ("Loss", "Full Flux Loss", "Direct Flux Loss","Diffuse Flux Loss","Flux Bias", "Flux Down", "Flux up", "Flux Down Bias", "Flux up Bias ", "Full Heating Rate Loss","Direct Heating Rate Loss", "Diffuse Heating Rate Loss", "Heating Rate Bias","loss_flux_0_0025", "loss_flux_0_01",  "loss_flux_0_05", "loss_flux_0_10")
 
         print(f"Testing error, Year = {year}")
 
@@ -2499,6 +2641,41 @@ def test_full_dataloader():
             elif not is_layered_loss and not is_geographic_loss:
                 loss = test_loop (test_dataloader, model, loss_functions, loss_names, loss_weights, device)
     
+    
+def update_state_dict():
+    model_dir = "/data-T1/hws/models/"
+    old_model_id = "v2.1."
+    n_epoch = 90 #596
+    new_model_id = "v2.2."
+    n_channel = 42
+    n_constituent = 8
+    old_model_filename = model_dir + \
+        f"/Torch.SW.{old_model_id}" + str(n_epoch).zfill(3)
+    new_model_filename = model_dir + \
+        f"/Torch.SW.{new_model_id}" + str(n_epoch).zfill(3)
+
+    state_dict = torch.load(old_model_filename)
+    model_state_dict = state_dict['model_state_dict']
+
+    # Create a new dictionary to store the modified state_dict
+    new_model_state_dict = {}
+
+    # Iterate through the original state_dict and modify keys as needed
+    for key, value in model_state_dict.items():
+
+        new_key = key.replace('extinction_net.module.',
+                              'optical_depth_net.module.')
+
+        new_model_state_dict[new_key] = value
+
+    torch.save({
+        'epoch': n_epoch,
+        'model_state_dict': new_model_state_dict,
+        'optimizer_state_dict': state_dict['optimizer_state_dict'],
+        'loss': state_dict['loss']
+    },
+        new_model_filename)
+
 
 if __name__ == "__main__":
     #train_direct_only()

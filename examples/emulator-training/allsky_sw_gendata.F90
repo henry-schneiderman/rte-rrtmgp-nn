@@ -370,7 +370,9 @@ program rrtmgp_rfmip_sw
   !
   ! Load cloud optics coefficients
   !
+  print *, "Entering cloud computation"
   if (include_clouds) then
+    print *, "Entering cloud computation 2"
     ! Initialize and allocate derived type
     call stop_on_err(clouds%init(k_dist%get_band_lims_wavenumber()))
     call stop_on_err(clouds%alloc_2str(block_size, nlay))
@@ -396,6 +398,9 @@ program rrtmgp_rfmip_sw
     ! Particle effective size/radius
     rel_val = 0.5_wp * (cloud_optics%get_min_radius_liq() + cloud_optics%get_max_radius_liq())
     rei_val = 0.5_wp * (cloud_optics%get_min_radius_ice() + cloud_optics%get_max_radius_ice())
+    print *, "rel_val ", rel_val
+    print *, "rei_val ", rei_val
+    
     rel = 0.0_wp
     rei = 0.0_wp
     ! Compute ice and liquid water paths from mixing ratios (from ecRAD)
