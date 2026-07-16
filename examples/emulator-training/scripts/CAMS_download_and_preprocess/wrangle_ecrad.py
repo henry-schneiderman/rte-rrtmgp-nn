@@ -475,6 +475,7 @@ def wrangle_ecrad_input_data(mode,month,year, base_directory):
     # organize for processing
 
 # changing rel and rei to match RTE-RRTMGP
+# trying to reconcile ecrad scheme with RTE-RRTMGP
 def transform_ecrad_input_data(mode,month,year, base_directory, is_just_o2=True, is_mcica=True):
 
     d = base_directory + f'{mode}/{year}/'  
@@ -517,7 +518,7 @@ def transform_ecrad_input_data(mode,month,year, base_directory, is_just_o2=True,
 
     dt_ecrad.close()
 
-
+# Adds fields for O2 and N2 to *.tmp.nc
 def transform_rte_rrtmgp_input_data(mode,month,year, base_directory):
 
     d = base_directory + f'{mode}/{year}/'  
@@ -718,8 +719,29 @@ def wrangle_lw_nn_input_data(mode,month,year, base_directory):
     dt_source.close()
     dt_flux.close()
 
-
-   
+def compute_delta_height_hypsometric(temp_level, pres_level, water_vapor_mmr):
+    # Using Grant W. Petty - A First Course in Atmospheric Thermodynamics
+    # Section 4.1.3. The hypsometric equation
+    m_dry = 28.970  # ZAMD
+    m_h2o = 18.0154 # ZAMW
+    epsilon = m_h2o / m_dry
+    g = 9.80665
+    Rd = 287.058 # J kg^-1 K^-1
+    
+    virtual_temperature = temp_level * (
+        (1.0 + water_vapor_mmr / epsilon) /
+        (1.0 + water_vapor_mmr)
+    )
+    
+    denominator = np.log(pres_level[:,1:]) - np.log(pres_level[:,:-1])
+    numerator = temp_level[:,1:] * np.log(pres_level[:,1:]) - temp_level[:,:-1] * np.log(pres_level[:,:-1])
+    mean_virtual_temperature = numerator / denominator
+    delta_height = np.log(pres_level[:,1:]/pres_level[:,:-1]) * \
+        mean_virtual_temperature  * Rd / g
+        
+    return delta_height
+    
+    
 def wrangle_sw_nn_input_data(mode,month,year, base_directory, is_mcica=False):
     # Using values from rrtm_prepare_gases.F90
     g = 9.80665 #
@@ -737,7 +759,7 @@ def wrangle_sw_nn_input_data(mode,month,year, base_directory, is_mcica=False):
 
     if is_mcica:
         file_name_flux_input = d + f'Flux_lw_mcica-{mode}-{year}-{month}.nc'
-        file_name_nn_input = d + f'nn_input_sw_mcica-{mode}-{year}-{month}.nc'
+        file_name_nn_input = d + f'nn_input_sw_mcica-{mode}-{year}-{month}.2.nc'
     else:
         file_name_flux_input = d + f'Flux_lw-{mode}-{year}-{month}.nc'
         file_name_nn_input = d + f'nn_input_sw-{mode}-{year}-{month}.nc'
@@ -800,12 +822,42 @@ def wrangle_sw_nn_input_data(mode,month,year, base_directory, is_mcica=False):
 
     # even though 'q' is variable name, this is the mass ratio
     water_vapor_mmr = dt_ecrad.variables["q"][:,:].data
-
+    
     # Normally, dry mass would just be the following
     dry_mass = total_mass / (1.0 + water_vapor_mmr)
     # Does not for factor from line 188 in rrtmp_prepare_gases.F90
     q = water_vapor_mmr / (1.0 + water_vapor_mmr)
     water_vapor = q * total_mass
+    
+    if is_mcica:
+        var_wv = dt_nn.createVariable("wv","f4",("col","level"))
+        var_wv[:] = water_vapor_mmr[:]
+        var_wv.setncattr("description","water vapor mass-mixing ratio (mmr) per dry air")
+        
+        var_wl = dt_nn.createVariable("wl","f4",("col","level"))
+        var_wl[:] = clwc[:] * total_mass / dry_mass
+        var_wl.setncattr("description","cloud liquid water mass-mixing ratio (mmr) per dry air")
+        
+        var_wi = dt_nn.createVariable("wi","f4",("col","level"))
+        var_wi[:] = ciwc[:] * total_mass[:] / dry_mass[:]
+        var_wi.setncattr("description","cloud ice water mass-mixing ratio (mmr) per dry air")
+        
+        # Bolton (1980) Formula
+        t_celsius = temp_level - 273.15
+        e_sat = 611.2 * np.exp(17.67 * t_celsius / (t_celsius + 243.5))  # Pa
+        epsilon = m_h2o / m_dry
+        var_wsat = dt_nn.createVariable("wsat","f4",("col","level"))
+        var_wsat[:] = epsilon * e_sat / (pres_level - e_sat)
+        var_wsat.setncattr("description","saturaton mass-mixing ratio (mmr) per dry air")
+        
+        var_dry_mass = dt_nn.createVariable("dry_mass","f4",("col","level"))
+        var_dry_mass[:] = dry_mass[:]
+        var_dry_mass.setncattr("description","Dry Mass (kg)")
+        
+        dim_level_differences = dt_nn.createDimension("level_differences",level - 1)
+        var_delta_height = dt_nn.createVariable("delta_height","f4",("col","level_differences"))
+        var_delta_height[:] = compute_delta_height_hypsometric(temp_level, pres_level, water_vapor_mmr)
+        var_delta_height.setncattr("description","Geometric distance between layers")
 
     o3_mmr = dt_ecrad.variables["o3_mmr"][:,:].data
     o3 = o3_mmr * dry_mass
@@ -942,6 +994,7 @@ def wrangle_sw_ukkonen_input_data(mode,month,year, base_directory):
 
     o1 = d + "tmp1.nc"
 
+    # Removes these variables
     cmd = f'ncks -x -v rsu,rsd,rsd_dir {file_name_ukkonen_input} {o1}'
     os.system(cmd)
 
@@ -979,7 +1032,270 @@ def wrangle_sw_ukkonen_input_data(mode,month,year, base_directory):
         dt_nn.close()
         dt_flux.close()
 
+def wrangle_openbox_to_ukkonen_input_data(mode,month,year, base_directory):
+    g = 9.80665 #
+    m_co2 = 44.011 #
+    m_dry = 28.970  # ZAMD
+    m_h2o = 18.0154 # ZAMW
+    m_o2 = 31.999
+    m_o3 = 47.9985
+    m_n2o = 44.013 #
+    m_ch4 = 16.043 #
+    m_co = 28.010
+    n_sites = 5120
+    
+    d = base_directory + f'{mode}/{year}/'  
+    file_name_openbox = d + f'shortwave-{mode}-{year}-{month}.nc'
+    file_name_ukkonen = d + f'shortwave-{mode}-ukkonen-format-{year}-{month}.nc'
 
+    dt_openbox = Dataset(file_name_openbox,"r")
+    dt_ukkonen = Dataset(file_name_ukkonen,"w")
+    
+    constituents = dt_openbox.variables['constituents'][:,:,:].data
+    n_features = constituents.shape[2]
+    
+    rsu = dt_openbox.variables['flux_up_diffuse'][:,:].data
+    shape = rsu.shape
+    expt = np.int32(shape[0]/n_sites)
+    
+    dt_ukkonen.createDimension("site", n_sites)
+    dt_ukkonen.createDimension("expt", expt)
+    dt_ukkonen.createDimension("layer", shape[1]-1)
+    dt_ukkonen.createDimension("level", shape[1])
+    dt_ukkonen.createDimension("feature", n_features-1)
+
+    delta_pressure = dt_openbox.variables["delta_pressure"][:,:].data
+    delta_pressure = delta_pressure.reshape((expt, n_sites, shape[1]-1))
+    var_delta_pressure = dt_ukkonen.createVariable("delta_pressure","f4",("expt","site","layer"))
+    var_delta_pressure[:] = delta_pressure[:]
+    
+    total_mass = (delta_pressure / g) 
+    total_mass = np.expand_dims(total_mass,axis=3)
+
+    rsu = rsu.reshape((expt, n_sites, shape[1]))
+    var_rsu = dt_ukkonen.createVariable("rsu","f4",("expt","site","level"))
+    var_rsu.setncattr("long_name","upwelling shortwave flux")
+    var_rsu[:]= rsu[:]
+
+    rsd_direct = dt_openbox.variables['flux_down_direct'][:,:].data
+    rsd_diffuse = dt_openbox.variables['flux_down_diffuse'][:,:].data
+    rsd = rsd_direct + rsd_diffuse
+    rsd = rsd.reshape((expt, n_sites, shape[1]))
+    var_rsd = dt_ukkonen.createVariable("rsd","f4",("expt","site","level"))
+    var_rsd.setncattr("long_name","downwelling shortwave flux")
+    var_rsd[:]= rsd[:]
+
+    rsd_direct = rsd_direct.reshape((expt, n_sites, shape[1]))
+    var_rsd_dir = dt_ukkonen.createVariable("rsd_dir","f4",("expt","site","level"))
+    var_rsd_dir.setncattr("long_name","downwelling direct shortwave flux")
+    var_rsd_dir[:]= rsd_direct[:]
+    
+    # Masses of the constituents
+    constituents = constituents.reshape((expt, n_sites, shape[1]-1,n_features))
+
+    lwp = constituents[:,:,:,0]
+    iwp = constituents[:,:,:,1]
+    
+    var_lwp = dt_ukkonen.createVariable("cloud_lwp","f4",("expt","site","layer"))
+    var_lwp.setncattr("long_name","cloud liquid water path")
+    var_lwp.setncattr("units","g/kg")
+    var_lwp[:] = lwp[:]
+
+    var_iwp = dt_ukkonen.createVariable("cloud_iwp","f4",("expt","site","layer"))
+    var_iwp.setncattr("long_name","cloud liquid water path")
+    var_iwp.setncattr("units","g/kg")
+    var_iwp[:] = iwp[:]
+    
+    is_valid_zenith_angle = dt_openbox.variables['is_valid_zenith_angle'][:].data
+    is_valid_zenith_angle = is_valid_zenith_angle.reshape((expt,n_sites))
+    var_is_valid_zenith_angle = dt_ukkonen.createVariable("is_valid_zenith_angle","f4",("expt","site"))
+    var_is_valid_zenith_angle.setncattr("long_name","True if zenith angle is less than 90 degrees")
+    var_is_valid_zenith_angle[:] = is_valid_zenith_angle[:]
+    
+    mu0 = dt_openbox.variables['mu0'][:].data
+    mu0 = mu0.reshape((expt,n_sites))
+    var_mu0 = dt_ukkonen.createVariable("mu0","f4",("expt","site"))
+    var_mu0.setncattr("long_name","cosine of solar zenith angle")
+    var_mu0[:] = mu0[:]
+    
+    temp_pressure = dt_openbox.variables['temp_pres_level'][:,:,:].data
+    temp_pressure = temp_pressure.reshape((expt,n_sites,shape[1]-1,2))
+    
+    # Compute mass ratios: mass_of_constituent / mass_of_dry_air
+    r = constituents[:,:,:,2:] / (total_mass - constituents[:,:,:,2:])
+        
+    # Transform to volume ratios
+    m_mass = [m_h2o/m_dry, m_o3/m_dry, m_co2/m_dry, m_o2/m_dry, m_n2o/m_dry, m_ch4/m_dry] 
+    r = r / m_mass
+    
+    rrtmgp_sw_input = np.concatenate((temp_pressure,r[:,:,:,0:3], r[:,:,:,4:6]), axis=3)
+    
+    var_rrtmgp_sw_input = dt_ukkonen.createVariable("rrtmgp_sw_input","f4",("expt","site","layer","feature"))
+    var_rrtmgp_sw_input.setncattr("long_name","inputs for RRTMGP shortwave gas optics")
+    var_rrtmgp_sw_input.setncattr("comments","Features: tlay play h2o o3 co2 n2o ch4")
+    var_rrtmgp_sw_input[:] = rrtmgp_sw_input[:]
+    
+    surface_albedo = dt_openbox.variables['surface_albedo'][:].data
+    surface_albedo = surface_albedo.reshape((expt,n_sites))
+    var_surface_albedo = dt_ukkonen.createVariable("sfc_alb","f4",("expt","site"))
+    var_surface_albedo.setncattr("long_name","surface albedo")
+    var_surface_albedo[:] = surface_albedo[:]
+    
+    dt_openbox.close()
+    dt_ukkonen.close()
+    
+def compare_ukkonen_input_data(mode,month,year, base_directory):
+    g = 9.80665 #
+    m_co2 = 44.011 #
+    m_dry = 28.970  # ZAMD
+    m_h2o = 18.0154 # ZAMW
+    m_o2 = 31.999
+    m_n2o = 44.013 #
+    m_ch4 = 16.043 #
+    m_co = 28.010
+    
+    d = base_directory + f'{mode}/{year}/'  
+    file_name_ukkonen_1 = d + f'shortwave-{mode}-{year}-{month}-ukkonen_format.nc'
+    dt_1 = Dataset(file_name_ukkonen_1,"r")
+    file_name_ukkonen_2 = d + f'shortwave-ukkonen-format-{mode}-{year}-{month}.nc'
+    dt_2 = Dataset(file_name_ukkonen_2,"r")
+    
+    file_name_ecrad_input = d + f'{month}/lw_input-{mode}-{year}-{month}.nc'
+    
+    dt_3 = Dataset(file_name_ecrad_input,"r")
+    
+    c_1 = dt_1.variables['rrtmgp_sw_input'][:,:,:,:].data
+    
+    c_2 = dt_2.variables['rrtmgp_sw_input'][:,:,:,:].data
+
+    diff = c_1[:,:,:,0] - c_2[:,:,:,0]
+    
+    print(f'temp min = {np.min(diff)}')
+    print(f'temp max = {np.max(diff)}')
+    
+    diff = c_1[:,:,:,1] - c_2[:,:,:,1]
+    
+    print(f'pres min = {np.min(diff)}')
+    print(f'pres max = {np.max(diff)}')
+    
+    diff = c_1[:,:,1:,2] - c_2[:,:,1:,2]
+    sum = c_1[:,:,1:,2] + c_2[:,:,1:,2]
+    
+    print(f'h2o min = {np.min(diff)}')
+    print(f'h2o max = {np.max(diff)}')
+    
+
+    print(f'h2o norm max = {np.max(diff / sum)}')
+    
+    eps = 0.000000000000001
+    #diff = c_1[:,:,1:,2] - c_2[:,:,1:,2]
+    diff = c_1[:,:,:,2] / (c_2[:,:,:,2] + eps)
+    
+    print(f'h2o min = {np.min(diff)}')
+    print(f'h2o max = {np.max(diff)}')
+    
+
+    diff = c_1[:,:,1:,3] / (c_2[:,:,1:,3] + eps)
+    
+    print(f'o3 min = {np.min(diff)}')
+    print(f'o3 max = {np.max(diff)}')
+    
+    eps1 = np.max(c_2[:,:,1:,4]) * 0.00000000001
+    
+    diff = c_1[:,:,:,4] - c_2[:,:,:,4]
+    
+    print(f'co2 min = {np.min(diff)}')
+    print(f'co2 max = {np.max(diff)}')
+    
+    diff = c_1[:,:,1:,4] / (c_2[:,:,1:,4] + eps1)
+    
+    print(f'co2 ratio min = {np.min(diff)}')
+    print(f'co2 ratio max = {np.max(diff)}')
+    
+    diff = c_1[:,:,:,5] - c_2[:,:,:,5]
+    
+    print(f'n2o min = {np.min(diff)}')
+    print(f'n2o max = {np.max(diff)}')
+    eps1 = np.max(c_2[:,:,1:,5]) * 0.00000000001
+    diff = c_1[:,:,1:,5] / (c_2[:,:,1:,5] + eps1)
+    
+    print(f'n2o ratio min = {np.min(diff)}')
+    print(f'n2o ratio max = {np.max(diff)}')
+    
+    diff = c_1[:,:,:,6] - c_2[:,:,:,6]
+    
+    print(f'ch4 min = {np.min(diff)}')
+    print(f'ch4 max = {np.max(diff)}')
+    eps1 = np.max(c_2[:,:,1:,6]) * 0.00000000001
+    diff = c_1[:,:,1:,6] / (c_2[:,:,1:,6] + eps1)
+    
+    print(f'ch4 ratio min = {np.min(diff)}')
+    print(f'ch4 ratio max = {np.max(diff)}')
+    
+    c_1 = dt_1.variables['cloud_lwp'][:,:,:].data
+    
+    c_2 = dt_2.variables['cloud_lwp'][:,:,:].data
+    
+    diff = c_1[:,:,:] - c_2[:,:,:]
+    print(f'lwp min = {np.min(diff)}')
+    print(f'lwp max = {np.max(diff)}')
+    
+    c_1 = dt_1.variables['cloud_iwp'][:,:,:].data
+    
+    c_2 = dt_2.variables['cloud_iwp'][:,:,:].data
+    
+    diff = c_1[:,:,:] - c_2[:,:,:]
+    print(f'iwp min = {np.min(diff)}')
+    print(f'iwp max = {np.max(diff)}')
+    
+    c_1 = dt_1.variables['pres_level'][:,:,:].data
+    
+    print(f'Min pres_level = {np.min(c_1[:,:,:])}')
+    print(f'Max pres_level = {np.max(c_1[:,:,:])}')
+    
+    print(f'Min pres_level 0 = {np.min(c_1[:,:,0])}')
+    print(f'Max pres_level 0  = {np.max(c_1[:,:,0])}')
+    
+    print(f'Min pres_level 1 = {np.min(c_1[:,:,1])}')
+    print(f'Mean pres_level 1 = {np.mean(c_1[:,:,1])}')
+    print(f'Max pres_level 1  = {np.max(c_1[:,:,1])}')
+    
+    c_1 = c_1[:,:,1:] - c_1[:,:,:-1]
+    #c_1 = c_1[:,:,:-1] - c_1[:,:,1:]
+    
+    c_2 = dt_2.variables['delta_pressure'][:,:,:].data
+    
+    c_3 = dt_3.variables['pressure_hl'][:,:].data
+    
+    print(f'Min pressure_hl = {np.min(c_3[:,0])}')
+    print(f'Max pressure_hl = {np.max(c_3[:,0])}')
+    
+    shape = c_1.shape
+    
+    c_3 = c_3.reshape((shape[0],shape[1],shape[2] + 1))
+    
+    c_3 = c_3[:,:,1:] - c_3[:,:,:-1]
+    
+    diff = c_1[:,:,:] - c_2[:,:,:]
+    print(f'dp min = {np.min(diff)}')
+    print(f'dp max = {np.max(diff)}')
+    
+    diff = c_1[:,:,1:] - c_2[:,:,1:]
+    print(f'dp all levels except 0 min = {np.min(diff)}')
+    print(f'dp all levels except 0 max = {np.max(diff)}')
+    
+    diff = c_1[:,:,-1] - c_2[:,:,-1]
+    print(f'dp min = {np.min(diff)}')
+    print(f'dp max = {np.max(diff)}')
+    
+    diff = c_1[:,:,:] - c_3[:,:,:]
+    print(f'c3 dp min = {np.min(diff)}')
+    print(f'c3 dp max = {np.max(diff)}')
+    
+    diff = c_1[:,:,0] - c_3[:,:,0]
+    print(f'dp min = {np.min(diff)}')
+    print(f'dp max = {np.max(diff)}')
+    
 def examine_nn_input_data(mode,month,year, base_directory):
     d = base_directory + f'{mode}/{year}/'  
     file_name_nn_input = d + f'nn_input-{mode}-{year}-{month}.nc'
@@ -999,6 +1315,9 @@ def compute_ecrad_output_data(mode,month,year, base_directory, is_mcica=False, i
     d = base_directory + f'{mode}/{year}/'  
     # .tmp.nc contains the updated liquid and ice radii
     if is_mcica:
+        # Note that lw_input-{mode} and lw_input_mcica-{mode} only differ
+        # in the cloud_fraction field. The mcica version has credible values
+        # for this field
         if is_tmp:
             file_name_input = d + f'{month}/lw_input_mcica-{mode}-{year}-{month}.tmp.nc'
             file_name_output = d + f'Flux_lw_mcica-{mode}-{year}-{month}.tmp.nc'
@@ -1409,23 +1728,44 @@ def examine_flux():
 
 if __name__ == "__main__":
 
-
     base_directory = f'/data-T1/hws/CAMS/processed_data/'
 
-    if True:
+    if False:
+
+        months = [str(m).zfill(2) for m in range(1,13)]
+        mode = 'testing'
+        mode = 'training'
+        mode = 'validation'
+        #for year in ['2009','2015','2020',]:
+        for year in ['2008',]:
+            for month in months:
+                wrangle_openbox_to_ukkonen_input_data(
+                    mode = mode,
+                    month = month,
+                    year = year,
+                    base_directory = '/data-T1/hws/CAMS/processed_data/')
+    
+    if False:
+        compare_ukkonen_input_data(
+            mode = 'testing',
+            month = '01',
+            year = '2009',
+            base_directory = '/data-T1/hws/CAMS/processed_data/')
+        
+    if False:
         wrangle_zenodo_ukkonen()
         #wrangle_zenodo()
         #examine_flux()
 
-    if False:
+    if True:
         mode = 'training'
         month = '02'
         year = '2008'
 
         #wrapper_raw_sources (mode,month,year, base_directory)
         #wrangle_lw_nn_input_data(mode,month,year, base_directory)
-
-        examine_nn_input_data(mode,month,year, base_directory)
+        wrangle_sw_nn_input_data(mode, month, year, base_directory, is_mcica=True)  
+        #examine_nn_input_data(mode,month,year, base_directory)
 
     if False:
         months = [str(m).zfill(2) for m in range(1,13)]
