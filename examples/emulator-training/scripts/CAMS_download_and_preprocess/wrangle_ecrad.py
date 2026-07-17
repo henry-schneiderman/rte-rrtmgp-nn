@@ -754,12 +754,18 @@ def wrangle_sw_nn_input_data(mode,month,year, base_directory, is_mcica=False):
     m_co = 28.010
 
     d = base_directory + f'{mode}/{year}/'  
-    file_name_ecrad_input = d + f'{month}/lw_input-{mode}-{year}-{month}.nc'
+    if mode == "validation":
+        file_name_ecrad_input = d + f'{month}/lw_input-cross_{mode}-{year}-{month}.nc'
+    else:
+        file_name_ecrad_input = d + f'{month}/lw_input-{mode}-{year}-{month}.nc'
     file_name_old_input = d + f'Flux_sw-{year}-{month}.2.nc'
 
     if is_mcica:
-        file_name_flux_input = d + f'Flux_lw_mcica-{mode}-{year}-{month}.nc'
-        file_name_nn_input = d + f'nn_input_sw_mcica-{mode}-{year}-{month}.2.nc'
+        if mode == "validation":
+            file_name_flux_input = d + f'Flux_lw_mcica-cross_{mode}-{year}-{month}.nc'
+        else:
+            file_name_flux_input = d + f'Flux_lw_mcica-{mode}-{year}-{month}.nc'
+        file_name_nn_input = d + f'nn_input_sw_mcica-{mode}-{year}-{month}.nc'
     else:
         file_name_flux_input = d + f'Flux_lw-{mode}-{year}-{month}.nc'
         file_name_nn_input = d + f'nn_input_sw-{mode}-{year}-{month}.nc'
@@ -1730,20 +1736,24 @@ if __name__ == "__main__":
 
     base_directory = f'/data-T1/hws/CAMS/processed_data/'
 
-    if False:
+    if True:
 
         months = [str(m).zfill(2) for m in range(1,13)]
         mode = 'testing'
-        mode = 'training'
-        mode = 'validation'
-        #for year in ['2009','2015','2020',]:
-        for year in ['2008',]:
+        #mode = 'training'
+        #mode = 'validation'
+        for year in ['2009','2015','2020',]:
+            #for year in ['2008',]:
             for month in months:
-                wrangle_openbox_to_ukkonen_input_data(
-                    mode = mode,
-                    month = month,
-                    year = year,
-                    base_directory = '/data-T1/hws/CAMS/processed_data/')
+                
+                wrangle_sw_nn_input_data(mode, month, year, base_directory, is_mcica=True)  
+                print(f"Completed {year} {month} {mode}", flush=True)
+                if False:
+                    wrangle_openbox_to_ukkonen_input_data(
+                        mode = mode,
+                        month = month,
+                        year = year,
+                        base_directory = '/data-T1/hws/CAMS/processed_data/')
     
     if False:
         compare_ukkonen_input_data(
@@ -1757,7 +1767,7 @@ if __name__ == "__main__":
         #wrangle_zenodo()
         #examine_flux()
 
-    if True:
+    if False:
         mode = 'training'
         month = '02'
         year = '2008'
