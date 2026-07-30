@@ -742,7 +742,7 @@ def compute_delta_height_hypsometric(temp_level, pres_level, water_vapor_mmr):
     return delta_height
     
     
-def wrangle_sw_nn_input_data(mode,month,year, base_directory, is_mcica=False):
+def wrangle_sw_nn_input_data(mode,month,year, base_directory, is_mcica=False, is_tripleclouds=False):
     # Using values from rrtm_prepare_gases.F90
     g = 9.80665 #
     m_co2 = 44.011 #
@@ -755,9 +755,9 @@ def wrangle_sw_nn_input_data(mode,month,year, base_directory, is_mcica=False):
 
     d = base_directory + f'{mode}/{year}/'  
     if mode == "validation":
-        file_name_ecrad_input = d + f'{month}/lw_input-cross_{mode}-{year}-{month}.nc'
+        file_name_ecrad_input = d + f'{month}/lw_input_mcica-cross_{mode}-{year}-{month}.nc'
     else:
-        file_name_ecrad_input = d + f'{month}/lw_input-{mode}-{year}-{month}.nc'
+        file_name_ecrad_input = d + f'{month}/lw_input_mcica-{mode}-{year}-{month}.nc'
     file_name_old_input = d + f'Flux_sw-{year}-{month}.2.nc'
 
     if is_mcica:
@@ -766,6 +766,11 @@ def wrangle_sw_nn_input_data(mode,month,year, base_directory, is_mcica=False):
         else:
             file_name_flux_input = d + f'Flux_lw_mcica-{mode}-{year}-{month}.nc'
         file_name_nn_input = d + f'nn_input_sw_mcica-{mode}-{year}-{month}.nc'
+        
+    elif is_tripleclouds:
+
+        file_name_flux_input = d + f'Flux_lw_tripleclouds-{mode}-{year}-{month}.2.nc'
+        file_name_nn_input = d + f'nn_input_sw_tripleclouds-{mode}-{year}-{month}.nc'
     else:
         file_name_flux_input = d + f'Flux_lw-{mode}-{year}-{month}.nc'
         file_name_nn_input = d + f'nn_input_sw-{mode}-{year}-{month}.nc'
@@ -777,6 +782,8 @@ def wrangle_sw_nn_input_data(mode,month,year, base_directory, is_mcica=False):
 
     temp_level = dt_ecrad.variables["temp_layer"][:,:,:].data
     pres_level = dt_ecrad.variables["pres_layer"][:,:,:].data
+    
+    cloud_fraction = dt_ecrad.variables["cloud_fraction"][:,:].data
 
     shape = temp_level.shape
     col = shape[0] * shape[1]
@@ -835,7 +842,11 @@ def wrangle_sw_nn_input_data(mode,month,year, base_directory, is_mcica=False):
     q = water_vapor_mmr / (1.0 + water_vapor_mmr)
     water_vapor = q * total_mass
     
-    if is_mcica:
+    if is_mcica or is_tripleclouds:
+        var_cf = dt_nn.createVariable("cloud_fraction","f4",("col","level"))
+        var_cf[:] = cloud_fraction[:]
+        var_cf.setncattr("description","cloud fraction: 0.0 <= cloud_fraction <= 1.0")
+        
         var_wv = dt_nn.createVariable("wv","f4",("col","level"))
         var_wv[:] = water_vapor_mmr[:]
         var_wv.setncattr("description","water vapor mass-mixing ratio (mmr) per dry air")
@@ -1316,6 +1327,27 @@ def examine_nn_input_data(mode,month,year, base_directory):
     print(f"min = {min}")
     print(f"mean = {mean}")
     print(f"max = {max}")
+    
+def add_random_seed (mode,month,year, base_directory):
+    d = base_directory + f'{mode}/{year}/'  
+    file_name_input = d + f'{month}/lw_input_mcica-{mode}-{year}-{month}.nc'
+    
+    file_name_output = d + f'{month}/lw_input_mcica-{mode}-{year}-{month}.2.nc'
+    
+    ds_output = Dataset(file_name_output, "a")
+    sw_albedo = ds_output.variables["sw_albedo"][:].data
+    random_seed =np.ones((sw_albedo.shape[0],))
+    
+    var_random_seed = ds_output.createVariable("iseed","f4",("col",))
+    var_random_seed[:] = random_seed[:]
+    
+    ds_output.close()
+    
+    
+    
+    
+    
+    
 
 def compute_ecrad_output_data(mode,month,year, base_directory, is_mcica=False, is_tmp=False, is_tripleclouds=False):
     d = base_directory + f'{mode}/{year}/'  
@@ -1328,12 +1360,16 @@ def compute_ecrad_output_data(mode,month,year, base_directory, is_mcica=False, i
             file_name_input = d + f'{month}/lw_input_mcica-{mode}-{year}-{month}.tmp.nc'
             file_name_output = d + f'Flux_lw_mcica-{mode}-{year}-{month}.tmp.nc'
         else:
-            file_name_input = d + f'{month}/lw_input_mcica-{mode}-{year}-{month}.nc'
+            if mode == "validation":
+                file_name_input = d + f'{month}/lw_input_mcica-cross_{mode}-{year}-{month}.nc'
+            else:
+                file_name_input = d + f'{month}/lw_input_mcica-{mode}-{year}-{month}.nc'
+            #file_name_input = d + f'{month}/lw_input_mcica-{mode}-{year}-{month}.2.nc' # Uses a different random seed
             if is_tripleclouds:
-                file_name_output = d + f'Flux_lw_tripleclouds-{mode}-{year}-{month}.nc'
+                file_name_output = d + f'Flux_lw_tripleclouds-{mode}-{year}-{month}.2.nc'
                 ex = '/home/hws/ecrad/bin/ecrad_working /home/hws/ecrad/practical/config.4.nam'
             else:
-                file_name_output = d + f'Flux_lw_mcica-{mode}-{year}-{month}.nc'
+                file_name_output = d + f'Flux_lw_mcica-{mode}-{year}-{month}.2.nc'
                 ex = '/home/hws/ecrad/bin/ecrad_working /home/hws/ecrad/practical/config.3.nam'
 
     else:
@@ -1735,25 +1771,31 @@ def examine_flux():
 if __name__ == "__main__":
 
     base_directory = f'/data-T1/hws/CAMS/processed_data/'
-
+    #add_random_seed("testing", "06", "2009", base_directory)
+    #compute_ecrad_output_data("testing", "06", "2009", base_directory, is_mcica=True, is_tmp=False, is_tripleclouds=False)
+    
     if True:
 
         months = [str(m).zfill(2) for m in range(1,13)]
-        mode = 'testing'
-        #mode = 'training'
-        #mode = 'validation'
-        for year in ['2009','2015','2020',]:
-            #for year in ['2008',]:
-            for month in months:
-                
-                wrangle_sw_nn_input_data(mode, month, year, base_directory, is_mcica=True)  
-                print(f"Completed {year} {month} {mode}", flush=True)
-                if False:
-                    wrangle_openbox_to_ukkonen_input_data(
-                        mode = mode,
-                        month = month,
-                        year = year,
-                        base_directory = '/data-T1/hws/CAMS/processed_data/')
+        
+        modes = ('testing','validation','training')
+        for mode in modes:
+            if mode == 'testing':
+                years = ['2009','2015','2020',]
+            else:
+                years = ['2008',]
+            for year in years:
+
+                for month in months:
+                    
+                    wrangle_sw_nn_input_data(mode, month, year, base_directory, is_mcica=False, is_tripleclouds=True)  
+                    print(f"Completed {year} {month} {mode}", flush=True)
+                    if False:
+                        wrangle_openbox_to_ukkonen_input_data(
+                            mode = mode,
+                            month = month,
+                            year = year,
+                            base_directory = '/data-T1/hws/CAMS/processed_data/')
     
     if False:
         compare_ukkonen_input_data(
@@ -1781,8 +1823,8 @@ if __name__ == "__main__":
         months = [str(m).zfill(2) for m in range(1,13)]
         combo = [('training','2008'),('cross_validation','2008'),('testing','2009'),('testing','2015'),('testing','2020'),]
 
-        combo = [('testing','2009'),]
-        months = [str(m).zfill(2) for m in range(6,7)]
+        combo = [('validation','2008'),]
+        #months = [str(m).zfill(2) for m in range(6,7)]
 
         for c in combo:
             mode = c[0]
@@ -1792,7 +1834,7 @@ if __name__ == "__main__":
                 print(f'{year} {month}')
                 #wrangle_ecrad_input_data(mode, month, year, base_directory)
                 #transform_ecrad_input_data(mode, month, year, base_directory,is_just_o2=True, is_mcica=True)
-                #compute_ecrad_output_data(mode, month, year, base_directory, is_mcica=True, is_tmp=False, is_tripleclouds=True)
+                compute_ecrad_output_data(mode, month, year, base_directory, is_mcica=True, is_tmp=False, is_tripleclouds=True)
                 #wrangle_lw_nn_input_data(mode, month, year, base_directory)
                 #wrangle_sw_nn_input_data(mode, month, year, base_directory, is_mcica=True)
 
@@ -1803,7 +1845,7 @@ if __name__ == "__main__":
                 #wrapper_raw_sources (mode,month,year, base_directory)
 
                 #compare_ecrad_with_rte_rrtmgp(mode,month,year, base_directory)
-                compare_ecrad_with_new_radiation(mode,month,year, base_directory, is_tmp=True)
+                #compare_ecrad_with_new_radiation(mode,month,year, base_directory, is_tmp=True)
 
                 #compare_rte_rrtmgp_with_new_radiation(mode,month,year, base_directory)
                      
